@@ -1,0 +1,25 @@
+# Ambiente virtual
+venv/
+.env/
+
+# Arquivos do Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Logs e outros arquivos temporários
+*.log
+*.tmp
+
+# VSCode e IDEs
+.vscode/
+.idea/
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos gerados por GitHub Actions
+*.coverage
+coverage.xml
+htmlcov/
