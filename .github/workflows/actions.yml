@@ -1,4 +1,4 @@
-name: Executar Scripts Diariamente
+name: Executar Scripts :)
 
 on:
   schedule:
