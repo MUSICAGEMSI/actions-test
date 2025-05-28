@@ -28,7 +28,7 @@ jobs:
         pip install -r requirements.txt || echo "Nenhuma dependência"
 
     - name: Instalar navegadores do Playwright
-      run: playwright install
+      run: python -m playwright install
 
     - name: Executar script_det.py
       run: python script_det.py
