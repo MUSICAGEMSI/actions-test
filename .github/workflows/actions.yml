@@ -1,4 +1,4 @@
-name: Executar Scripts :)
+name: Executar Scripts Diariamente
 
 on:
   schedule:
@@ -26,6 +26,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt || echo "Nenhuma dependência"
+
+    - name: Instalar navegadores do Playwright
+      run: playwright install
 
     - name: Executar script_det.py
       run: python script_det.py
