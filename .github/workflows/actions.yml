@@ -2,8 +2,11 @@ name: Executar Scripts Diariamente
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # Executa a cada 2 horas
-  workflow_dispatch:        # Permite execução manual
+    - cron: '0 13 * * 0'  # Todo domingo às 13:00 UTC (10h Brasília)
+  workflow_dispatch:     # Permite disparo manual
+
+
+
 
 jobs:
   run-scripts:
