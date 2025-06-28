@@ -1,10 +1,10 @@
 name: Executar Scripts Diariamente
 
 on:
-    schedule:
-    - cron: '0 13 * * 0'  # Todo domingo às 13:00 UTC (10h Brasília)
+  schedule:
+    - cron: '0 13 * * *'  # Todos os dias às 13:00 UTC (10h Brasília)
   workflow_dispatch:     # Permite disparo manual
-
+  
 jobs:
   run-scripts:
     runs-on: ubuntu-latest
