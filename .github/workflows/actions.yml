@@ -2,7 +2,7 @@ name: Executar Scripts Diariamente
 
 on:
   schedule:
-    - cron: '0 12 * * *'  # Todos os dias às 12:00 UTC (09h Brasília)
+    - cron: '0 12 * * 0'  # Todos os dias às 12:00 UTC (09h Brasília)
   workflow_dispatch:     # Permite disparo manual
   
 jobs:
