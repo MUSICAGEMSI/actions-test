@@ -14,7 +14,7 @@ import re
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT_P_AULA = 'https://script.google.com/macros/s/AKfycbxjuEpLALSZcJQTgsL8TNzDu3JHWXLGDnOViP1K_hjO3PPXORctieJI2XScF4C3ZQIK-A/exec'
+URL_APPS_SCRIPT_P_AULA = 'https://script.google.com/macros/s/AKfycbymujoeW367s9M6HiBV2JfUGTrB8tUg9sIUU-XarShD20Axmrq5Y9iTBRKQFz4geFlmQw/exec'
 
 
 if not EMAIL or not SENHA:
