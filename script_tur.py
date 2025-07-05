@@ -1,5 +1,3 @@
-# script_tur.py
-
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -17,7 +15,6 @@ if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-
 def main():
     tempo_inicio = time.time()
     resultado = []
@@ -25,7 +22,7 @@ def main():
     json_recebido = None  # vai guardar o JSON da resposta
 
     with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)  # troquei false por true aqui
+        navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
         pagina.goto(URL_INICIAL)
 
@@ -42,34 +39,6 @@ def main():
             navegador.close()
             return
 
-        # Abrir menu G.E.M
-        try:
-            gem_selector = 'span:has-text("G.E.M")'
-            pagina.wait_for_selector(gem_selector, timeout=15000)
-            gem_element = pagina.locator(gem_selector).first
-
-            gem_element.hover()
-            pagina.wait_for_timeout(1000)  # esperar o submenu abrir
-            if gem_element.is_visible() and gem_element.is_enabled():
-                gem_element.click()
-            else:
-                print("❌ Elemento G.E.M não estava clicável.")
-                navegador.close()
-                return
-        except PlaywrightTimeoutError:
-            print("❌ Menu 'G.E.M' não apareceu a tempo.")
-            navegador.close()
-            return
-
-        # Acessar página turmas
-        try:
-            pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
-            pagina.click('a[href="turmas"]')
-        except PlaywrightTimeoutError:
-            print("❌ Link 'turmas' não encontrado.")
-            navegador.close()
-            return
-
         # Interceptar a resposta JSON da requisição que carrega os dados
         def captura_resposta(response):
             nonlocal json_recebido
@@ -82,17 +51,62 @@ def main():
 
         pagina.on("response", captura_resposta)
 
-        # Ajustar para mostrar 2000 entradas para garantir que o servidor envie muitos dados
+        # Abrir menu G.E.M
         try:
-            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            pagina.select_option('select[name="listagem_length"]', '2000')
-            pagina.wait_for_timeout(3000)  # esperar tabela atualizar com 2000 linhas
-            print("✅ Ajustado para mostrar 2000 entradas.")
+            gem_selector = 'span:has-text("G.E.M")'
+            pagina.wait_for_selector(gem_selector, timeout=15000)
+            gem_element = pagina.locator(gem_selector).first
+
+            gem_element.hover()
+            pagina.wait_for_timeout(1000)
+            if gem_element.is_visible() and gem_element.is_enabled():
+                gem_element.click()
+            else:
+                print("❌ Elemento G.E.M não estava clicável.")
+                navegador.close()
+                return
+        except PlaywrightTimeoutError:
+            print("❌ Menu 'G.E.M' não apareceu a tempo.")
+            navegador.close()
+            return
+
+        # Acessar página "Turmas"
+        try:
+            pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
+            pagina.click('a[href="turmas"]')
+        except PlaywrightTimeoutError:
+            print("❌ Link 'turmas' não encontrado.")
+            navegador.close()
+            return
+
+        # Esperar a tabela aparecer
+        try:
+            pagina.wait_for_selector('table#listagem', timeout=15000)
+            pagina.wait_for_timeout(1000)
+        except PlaywrightTimeoutError:
+            print("❌ Tabela de listagem não carregada a tempo.")
+            navegador.close()
+            return
+
+        # Tentar ajustar para mostrar 2000 entradas
+        try:
+            seletor_paginacao = pagina.locator('select[name="listagem_length"]')
+            seletor_paginacao.wait_for(timeout=10000)
+            if seletor_paginacao.is_visible():
+                seletor_paginacao.select_option('2000')
+                print("✅ Ajustado para mostrar 2000 entradas.")
+                pagina.wait_for_timeout(3000)
+            else:
+                print("⚠️ Seletor de paginação visível mas não interativo.")
         except Exception as e:
             print("⚠️ Não foi possível ajustar paginação para 2000:", e)
 
-        # Dar um tempo para que a resposta JSON seja capturada
-        pagina.wait_for_timeout(5000)
+        # Esperar o JSON ser interceptado
+        tentativas = 20
+        for _ in range(tentativas):
+            if json_recebido:
+                break
+            pagina.wait_for_timeout(500)  # aguarda meio segundo por tentativa
 
         # Verificar se conseguimos o JSON com os dados
         if not json_recebido:
@@ -108,14 +122,9 @@ def main():
             return
 
         for linha in data:
-            # A linha é uma lista, onde a primeira coluna normalmente é o id
             id_val = linha[0]
             if id_val not in ids_coletados:
                 ids_coletados.add(id_val)
-                # De acordo com seu exemplo, as colunas correspondem a:
-                # [0]id, [1]bairro, [2]curso, [3]nome_turma, [4]vagas, [5]inicio,
-                # [6]termino, [7]horario, [8]status, [9]id_repetido (usado na checkbox)
-                # vamos extrair até o índice 8 para ficar igual à sua estrutura original
                 dados_linha = linha[:9]
                 resultado.append(dados_linha)
 
@@ -124,7 +133,7 @@ def main():
             navegador.close()
             return
 
-        # Montar payload com cabeçalho igual ao bookmarklet
+        # Montar payload
         headers = ["id", "bairro", "curso", "nome_turma", "vagas", "inicio", "termino", "horario", "status"]
         dados = [headers] + resultado
 
@@ -133,7 +142,6 @@ def main():
             "dados": dados
         }
 
-        # Enviar dados para Apps Script
         try:
             resposta_post = requests.post(URL_APPS_SCRIPT_TUR, json=payload)
             print("✅ Dados enviados!")
