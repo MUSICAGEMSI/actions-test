@@ -17,7 +17,8 @@ def avaliar_html(html):
         return "✅ OK"
     elif "fa-remove" in html:
         return "❌ Fantasma"
-    return "⚠️ Indefinido"
+    else:
+        return "⚠️ Indefinido"
 
 def main():
     tempo_inicio = time.time()
@@ -28,14 +29,20 @@ def main():
         pagina = navegador.new_page()
         pagina.goto(URL_BASE)
 
-        # Login
+        # LOGIN
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
-        pagina.wait_for_selector("nav", timeout=15000)
-        print("✅ Login realizado com sucesso!")
 
-        # Abrir menu G.E.M com hover e esperar submenu aparecer
+        try:
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login.")
+            navegador.close()
+            return
+
+        # ABRIR MENU G.E.M COM HOVER
         try:
             gem_selector = 'span:has-text("G.E.M")'
             pagina.wait_for_selector(gem_selector, timeout=10000)
@@ -43,40 +50,40 @@ def main():
             gem_element.hover()
             pagina.wait_for_timeout(1000)
         except Exception as e:
-            print("❌ Menu G.E.M não disponível:", e)
+            print("❌ Menu G.E.M não apareceu:", e)
             navegador.close()
             return
 
-        # Clicar no link aulas_abertas
+        # CLICAR NO SUBMENU aulas_abertas
         try:
             pagina.wait_for_selector('a[href="aulas_abertas"]', timeout=10000)
             pagina.click('a[href="aulas_abertas"]')
-        except Exception as e:
-            print("❌ Falha ao acessar aulas_abertas:", e)
+        except PlaywrightTimeoutError:
+            print("❌ Link 'aulas_abertas' não foi visível a tempo.")
             navegador.close()
             return
 
-        # Esperar tabela
+        # AGUARDAR A TABELA CARREGAR
         try:
-            pagina.wait_for_selector('table#listagem', timeout=10000)
+            pagina.wait_for_selector('table#listagem', timeout=15000)
             print("✅ Tabela de listagem carregada.")
-        except Exception as e:
-            print("❌ Tabela não carregou:", e)
+        except:
+            print("❌ Falha ao carregar a tabela.")
             navegador.close()
             return
 
-        # Selecionar 2000 itens
+        # SELECIONAR 2000 LINHAS
         try:
             pagina.select_option('select[name="listagem_length"]', '2000')
             pagina.wait_for_timeout(2000)
-            print("✅ Ajustado para mostrar 2000 entradas.")
-        except Exception as e:
-            print("⚠️ Falha ao ajustar paginação:", e)
+        except:
+            print("⚠️ Não foi possível selecionar 2000 entradas.")
 
+        # PEGAR TODAS AS LINHAS
         linhas = pagina.query_selector_all('table#listagem tbody tr')
-        print(f"🔢 Linhas encontradas: {len(linhas)}")
+        print(f"🔎 {len(linhas)} linhas localizadas.")
 
-        # Pegar cookies da sessão para requests autenticados
+        # PEGAR COOKIES PARA USAR NO REQUESTS
         cookies = pagina.context.cookies()
         sessao = requests.Session()
         for cookie in cookies:
@@ -87,6 +94,7 @@ def main():
             "User-Agent": "Mozilla/5.0",
         }
 
+        # PROCESSAR CADA LINHA
         for linha in linhas:
             colunas = linha.query_selector_all('td')
             textos = [c.inner_text().strip().replace('\n', ' ') for c in colunas]
@@ -113,6 +121,7 @@ def main():
 
             resultado.append(textos)
 
+    # ENVIAR DADOS
     body = {
         "tipo": "frequencias",
         "dados": resultado
