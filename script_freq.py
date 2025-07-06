@@ -13,14 +13,11 @@ URL_BASE = "https://musical.congregacao.org.br"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJozNuKoYBLe1IWCUtRGQ1q-sWcXV62NDXVpBMzYM_T0aUgJ1Vzq92l6n9sGJmhEnbwA/exec'
 
 def avaliar_html(html):
-    tem_check = "fa-check" in html
-    tem_remove = "fa-remove" in html
-    if tem_check:
+    if "fa-check" in html:
         return "✅ OK"
-    elif tem_remove:
+    elif "fa-remove" in html:
         return "❌ Fantasma"
-    else:
-        return "⚠️ Indefinido"
+    return "⚠️ Indefinido"
 
 def main():
     tempo_inicio = time.time()
@@ -38,19 +35,48 @@ def main():
         pagina.wait_for_selector("nav", timeout=15000)
         print("✅ Login realizado com sucesso!")
 
-        # Navegar até a tabela
-        pagina.click('text=G.E.M')
-        pagina.wait_for_timeout(1000)
-        pagina.click('a[href="aulas_abertas"]')
-        pagina.wait_for_selector('table#listagem', timeout=10000)
-        print("✅ Tabela de listagem carregada.")
+        # Abrir menu G.E.M com hover e esperar submenu aparecer
+        try:
+            gem_selector = 'span:has-text("G.E.M")'
+            pagina.wait_for_selector(gem_selector, timeout=10000)
+            gem_element = pagina.locator(gem_selector).first
+            gem_element.hover()
+            pagina.wait_for_timeout(1000)
+        except Exception as e:
+            print("❌ Menu G.E.M não disponível:", e)
+            navegador.close()
+            return
 
-        pagina.select_option('select[name="listagem_length"]', '2000')
-        pagina.wait_for_timeout(1000)
+        # Clicar no link aulas_abertas
+        try:
+            pagina.wait_for_selector('a[href="aulas_abertas"]', timeout=10000)
+            pagina.click('a[href="aulas_abertas"]')
+        except Exception as e:
+            print("❌ Falha ao acessar aulas_abertas:", e)
+            navegador.close()
+            return
+
+        # Esperar tabela
+        try:
+            pagina.wait_for_selector('table#listagem', timeout=10000)
+            print("✅ Tabela de listagem carregada.")
+        except Exception as e:
+            print("❌ Tabela não carregou:", e)
+            navegador.close()
+            return
+
+        # Selecionar 2000 itens
+        try:
+            pagina.select_option('select[name="listagem_length"]', '2000')
+            pagina.wait_for_timeout(2000)
+            print("✅ Ajustado para mostrar 2000 entradas.")
+        except Exception as e:
+            print("⚠️ Falha ao ajustar paginação:", e)
 
         linhas = pagina.query_selector_all('table#listagem tbody tr')
+        print(f"🔢 Linhas encontradas: {len(linhas)}")
 
-        # Coletar cookies da sessão para usar no requests
+        # Pegar cookies da sessão para requests autenticados
         cookies = pagina.context.cookies()
         sessao = requests.Session()
         for cookie in cookies:
@@ -78,11 +104,11 @@ def main():
             url_frequencia = f"{URL_BASE}/aulas_abertas/frequencia/{id_aula}/{id_turma}"
 
             try:
-                resposta = sessao.get(url_frequencia, headers=headers, timeout=15)
+                resposta = sessao.get(url_frequencia, headers=headers, timeout=10)
                 status = avaliar_html(resposta.text)
                 textos.append(status)
             except Exception as e:
-                print(f"Erro ao acessar frequência {id_aula}/{id_turma}: {e}")
+                print(f"⚠️ Erro ao acessar frequência {id_aula}/{id_turma}: {e}")
                 textos.append("⚠️ Erro")
 
             resultado.append(textos)
