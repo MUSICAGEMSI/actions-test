@@ -29,7 +29,7 @@ def main():
         pagina = navegador.new_page()
         pagina.goto(URL_BASE)
 
-        # LOGIN
+        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
@@ -42,48 +42,40 @@ def main():
             navegador.close()
             return
 
-        # ABRIR MENU G.E.M COM HOVER
+        # Abrir menu G.E.M e acessar aulas_abertas
         try:
             gem_selector = 'span:has-text("G.E.M")'
-            pagina.wait_for_selector(gem_selector, timeout=10000)
-            gem_element = pagina.locator(gem_selector).first
-            gem_element.hover()
-            pagina.wait_for_timeout(1000)
+            pagina.wait_for_selector(gem_selector, timeout=15000)
+            pagina.locator(gem_selector).hover()
+            pagina.wait_for_timeout(2000)
+
+            submenu_selector = 'a[href="aulas_abertas"]'
+            pagina.wait_for_selector(submenu_selector, timeout=10000)
+            pagina.click(submenu_selector, force=True)
+            print("✅ Acessou 'aulas_abertas' com sucesso.")
         except Exception as e:
-            print("❌ Menu G.E.M não apareceu:", e)
+            print("❌ Não conseguiu acessar 'aulas_abertas':", e)
             navegador.close()
             return
 
-        # CLICAR NO SUBMENU aulas_abertas
         try:
-            pagina.wait_for_selector('a[href="aulas_abertas"]', timeout=10000)
-            pagina.click('a[href="aulas_abertas"]')
-        except PlaywrightTimeoutError:
-            print("❌ Link 'aulas_abertas' não foi visível a tempo.")
-            navegador.close()
-            return
-
-        # AGUARDAR A TABELA CARREGAR
-        try:
-            pagina.wait_for_selector('table#listagem', timeout=15000)
+            pagina.wait_for_selector('table#listagem', timeout=10000)
             print("✅ Tabela de listagem carregada.")
         except:
-            print("❌ Falha ao carregar a tabela.")
+            print("❌ Tabela de listagem não carregou.")
             navegador.close()
             return
 
-        # SELECIONAR 2000 LINHAS
+        # Mostrar 2000 entradas
         try:
             pagina.select_option('select[name="listagem_length"]', '2000')
             pagina.wait_for_timeout(2000)
         except:
             print("⚠️ Não foi possível selecionar 2000 entradas.")
 
-        # PEGAR TODAS AS LINHAS
         linhas = pagina.query_selector_all('table#listagem tbody tr')
-        print(f"🔎 {len(linhas)} linhas localizadas.")
 
-        # PEGAR COOKIES PARA USAR NO REQUESTS
+        # Coletar cookies para uso no requests
         cookies = pagina.context.cookies()
         sessao = requests.Session()
         for cookie in cookies:
@@ -94,7 +86,6 @@ def main():
             "User-Agent": "Mozilla/5.0",
         }
 
-        # PROCESSAR CADA LINHA
         for linha in linhas:
             colunas = linha.query_selector_all('td')
             textos = [c.inner_text().strip().replace('\n', ' ') for c in colunas]
@@ -112,7 +103,7 @@ def main():
             url_frequencia = f"{URL_BASE}/aulas_abertas/frequencia/{id_aula}/{id_turma}"
 
             try:
-                resposta = sessao.get(url_frequencia, headers=headers, timeout=10)
+                resposta = sessao.get(url_frequencia, headers=headers, timeout=15)
                 status = avaliar_html(resposta.text)
                 textos.append(status)
             except Exception as e:
@@ -121,7 +112,7 @@ def main():
 
             resultado.append(textos)
 
-    # ENVIAR DADOS
+    # Enviar ao Apps Script
     body = {
         "tipo": "frequencias",
         "dados": resultado
