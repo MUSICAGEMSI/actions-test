@@ -46,8 +46,15 @@ def main():
         try:
             gem_selector = 'span:has-text("G.E.M")'
             pagina.wait_for_selector(gem_selector, timeout=15000)
-            pagina.locator(gem_selector).hover()
-            pagina.wait_for_timeout(2000)
+            gem = pagina.locator(gem_selector).first
+
+            try:
+                gem.hover()
+                pagina.wait_for_timeout(2000)
+            except:
+                print("⚠️ Hover falhou, tentando clicar com força.")
+                gem.click(force=True)
+                pagina.wait_for_timeout(1000)
 
             submenu_selector = 'a[href="aulas_abertas"]'
             pagina.wait_for_selector(submenu_selector, timeout=10000)
