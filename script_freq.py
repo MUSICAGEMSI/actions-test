@@ -14,7 +14,7 @@ import re
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT_P_AULA = 'https://script.google.com/macros/s/AKfycbymujoeW367s9M6HiBV2JfUGTrB8tUg9sIUU-XarShD20Axmrq5Y9iTBRKQFz4geFlmQw/exec'
+URL_APPS_SCRIPT_FREQ = 'https://script.google.com/macros/s/AKfycbymujoeW367s9M6HiBV2JfUGTrB8tUg9sIUU-XarShD20Axmrq5Y9iTBRKQFz4geFlmQw/exec'
 
 
 if not EMAIL or not SENHA:
@@ -212,12 +212,12 @@ def main():
             dados_envio = [headers] + list(turmas_primeira_aula.values())
 
             payload = {
-                "tipo": "p_aula",
+                "tipo": "frequencias",
                 "dados": dados_envio
             }
 
             try:
-                resposta_post = requests.post(URL_APPS_SCRIPT_P_AULA, json=payload)
+                resposta_post = requests.post(URL_APPS_SCRIPT_FREQ, json=payload)
                 print("✅ Dados enviados!")
                 print("Status code:", resposta_post.status_code)
                 print("Resposta:", resposta_post.text)
