@@ -32,9 +32,3 @@ jobs:
 
       - name: Executar script_freq.py
         run: python script_freq.py
-
-      - name: Executar script_p_aula.py
-        run: python script_p_aula.py
-
-      - name: Executar script_tur.py
-        run: python script_tur.py
