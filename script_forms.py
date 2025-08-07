@@ -4,27 +4,10 @@ import os
 import requests
 import time
 
-# Não usar load_dotenv porque vamos usar variáveis do ambiente diretamente
-# from dotenv import load_dotenv
-# load_dotenv(dotenv_path="credencial.env")
-
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_MATRICULADOS = "https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/"
-URL_APPS_SCRIPT_TUR = 'https://script.google.com/macros/s/AKfycbzZ07sISeDxyHWaRJZFAE2sJxe3L00gmVi2_YiU2puxTQ8HgYUJr27x8pxUiwjxGChjaA/exec'
-
-def extrair_qtd_matriculados(sessao, id_turma):
-    try:
-        url = f"{URL_MATRICULADOS}{id_turma}"
-        resposta = sessao.get(url)
-        if resposta.status_code == 200:
-            match = re.search(r"de um total de (\d+) registro", resposta.text)
-            if match:
-                return int(match.group(1))
-    except Exception as e:
-        print(f"⚠️ Erro ao extrair quantidade de matriculados para turma {id_turma}: {e}")
-    return 0
+URL_APPS_SCRIPT_TUR = "https://script.google.com/macros/s/AKfycbzZ07sISeDxyHWaRJZFAE2sJxe3L00gmVi2_YiU2puxTQ8HgYUJr27x8pxUiwjxGChjaA/exec"
 
 def main():
     if not EMAIL or not SENHA:
@@ -33,8 +16,6 @@ def main():
 
     tempo_inicio = time.time()
     resultado = []
-    ids_coletados = set()
-    json_recebido = None
 
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
@@ -54,24 +35,13 @@ def main():
             navegador.close()
             return
 
-        def captura_resposta(response):
-            nonlocal json_recebido
-            if "listagem" in response.url and response.request.method == "POST":
-                try:
-                    json_recebido = response.json()
-                    print("✅ JSON da resposta interceptado com sucesso.")
-                except Exception as e:
-                    print("⚠️ Erro ao tentar ler JSON da resposta:", e)
-
-        pagina.on("response", captura_resposta)
-
         # Acessar "G.E.M" > Turmas
         try:
             gem_selector = 'span:has-text("G.E.M")'
             pagina.wait_for_selector(gem_selector, timeout=15000)
             gem_element = pagina.locator(gem_selector).first
             gem_element.hover()
-            pagina.wait_for_timeout(1000)
+            pagina.wait_for_timeout(500)
             gem_element.click()
         except:
             print("❌ Menu G.E.M não clicável.")
@@ -86,59 +56,64 @@ def main():
             navegador.close()
             return
 
+        # Esperar tabela principal
         try:
-            pagina.wait_for_selector('table#listagem', timeout=15000)
-            pagina.wait_for_timeout(1000)
+            pagina.wait_for_selector('table#listagem tbody tr', timeout=15000)
+            print("✅ Tabela de listagem carregada.")
         except:
             print("❌ Tabela de listagem não carregada.")
             navegador.close()
             return
 
+        # Ajustar paginação (opcional)
         try:
             seletor_paginacao = pagina.locator('select[name="listagem_length"]')
             seletor_paginacao.select_option('2000')
             print("✅ Paginação ajustada para 2000.")
-            pagina.wait_for_timeout(3000)
+            pagina.wait_for_timeout(2000)
         except:
             print("⚠️ Falha ao ajustar paginação.")
 
-        for _ in range(20):
-            if json_recebido:
-                break
-            pagina.wait_for_timeout(500)
+        radios = pagina.locator('input[name="item[]"]')
+        total_turmas = radios.count()
 
-        if not json_recebido:
-            print("❌ JSON não capturado.")
-            navegador.close()
-            return
+        for i in range(total_turmas):
+            try:
+                linha = pagina.locator('table#listagem tbody tr').nth(i)
+                igreja = linha.locator('td').nth(1).inner_text().strip()
+                curso = linha.locator('td').nth(2).inner_text().strip()
+                turma_nome = linha.locator('td').nth(3).inner_text().strip()
 
-        data = json_recebido.get("data", [])
-        if not data:
-            print("⚠️ Nenhum dado nas turmas.")
-            navegador.close()
-            return
+                radio = radios.nth(i)
+                radio.click()
+                pagina.click('#adicionarLicoes')
 
-        # Criar sessão para requisições GET com cookies
-        cookies = pagina.context.cookies()
-        sessao = requests.Session()
-        for cookie in cookies:
-            sessao.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', ''))
+                # Esperar tabela de matriculados
+                pagina.wait_for_selector('#listagem_info', timeout=10000)
+                info_text = pagina.inner_text('#listagem_info')
+                match = re.search(r"de um total de (\d+)", info_text)
+                matriculados = int(match.group(1)) if match else 0
 
-        for linha in data:
-            id_val = linha[0]
-            if id_val not in ids_coletados:
-                ids_coletados.add(id_val)
-                dados_linha = linha[:9]
-                qtd_matriculados = extrair_qtd_matriculados(sessao, id_val)
-                dados_linha.append(str(qtd_matriculados))
-                resultado.append(dados_linha)
+                # Fechar modal
+                try:
+                    pagina.click('button:has-text("Fechar")')
+                except:
+                    print(f"⚠️ Botão Fechar não encontrado para turma {turma_nome}")
+
+                resultado.append([igreja, curso, turma_nome, matriculados])
+                print(f"✅ {igreja} | {curso} | {turma_nome} -> {matriculados}")
+
+                pagina.wait_for_timeout(500)
+
+            except Exception as e:
+                print(f"⚠️ Erro ao processar turma {i+1}: {e}")
 
         if not resultado:
             print("⚠️ Nenhum dado coletado.")
             navegador.close()
             return
 
-        headers = ["id", "bairro", "curso", "nome_turma", "vagas", "inicio", "termino", "horario", "status", "matriculados"]
+        headers = ["IGREJA", "CURSO", "TURMA", "MATRICULADOS"]
         dados = [headers] + resultado
 
         payload = {
@@ -155,6 +130,7 @@ def main():
             print("❌ Erro ao enviar para Google Apps Script:", e)
 
         navegador.close()
+        print(f"⏱️ Tempo total: {time.time() - tempo_inicio:.2f}s")
 
 if __name__ == "__main__":
     main()
