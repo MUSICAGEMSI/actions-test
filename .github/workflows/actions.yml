@@ -23,5 +23,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Instalar navegadores do Playwright
+        run: python -m playwright install
+
       - name: Executar script_forms.py
         run: python script_forms.py
