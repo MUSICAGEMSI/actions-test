@@ -4,7 +4,9 @@ import os
 import requests
 import time
 
-load_dotenv(dotenv_path="credencial.env")
+# Não usar load_dotenv porque vamos usar variáveis do ambiente diretamente
+# from dotenv import load_dotenv
+# load_dotenv(dotenv_path="credencial.env")
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -25,6 +27,10 @@ def extrair_qtd_matriculados(sessao, id_turma):
     return 0
 
 def main():
+    if not EMAIL or not SENHA:
+        print("❌ Variáveis de ambiente LOGIN_MUSICAL e SENHA_MUSICAL não estão definidas!")
+        return
+
     tempo_inicio = time.time()
     resultado = []
     ids_coletados = set()
