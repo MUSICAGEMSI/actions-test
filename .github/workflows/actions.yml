@@ -3,7 +3,7 @@ name: Executar Scripts Diariamente
 on:
   schedule:
     - cron: '35 16 * * *'  # Todos os dias às 13h35 de Brasília (16h35 UTC)
-  workflow_dispatch:        # Permite disparo manual
+  workflow_dispatch:
 
 jobs:
   run-scripts:
@@ -22,5 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executar script_forms.py
+      - name: Instalar navegadores do Playwright
+        run: |
+          python -m playwright install --with-deps
+
+      - name: Executar script
         run: python script_forms.py
