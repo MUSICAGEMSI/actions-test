@@ -2,29 +2,28 @@ name: Executar Scripts Diariamente
 
 on:
   schedule:
-    - cron: '35 16 * * *'  # Todos os dias às 13h35 de Brasília (16h35 UTC)
+    - cron: '35 16 * * *'  # todos os dias às 13:35 horário de Brasília (16:35 UTC)
   workflow_dispatch:
 
 jobs:
   run-scripts:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do código
-        uses: actions/checkout@v3
-
-      - name: Configurar Python
+      - uses: actions/checkout@v3
+      
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Instalar dependências
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install
 
-      - name: Instalar navegadores do Playwright
-        run: |
-          python -m playwright install --with-deps
-
-      - name: Executar script
+      - name: Run script_forms.py
+        env:
+          LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
+          SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
         run: python script_forms.py
