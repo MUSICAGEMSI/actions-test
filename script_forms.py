@@ -36,7 +36,7 @@ def main():
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
 
-        # Captura da resposta com lista de turmas
+        # Captura do JSON da listagem de turmas
         def captura_resposta(response):
             nonlocal json_recebido
             if "turmas/listagem" in response.url and response.request.method == "POST":
@@ -62,12 +62,10 @@ def main():
             navegador.close()
             return
 
-        # Acessar G.E.M → Turmas
-        pagina.hover('span:has-text("G.E.M")')
-        pagina.wait_for_timeout(300)
-        pagina.click('a[href="turmas"]')
+        # Ir direto para página de turmas
+        pagina.goto(URL_TURMAS)
 
-        # Espera até receber JSON
+        # Esperar o JSON chegar
         for _ in range(20):
             if json_recebido:
                 break
@@ -84,13 +82,13 @@ def main():
             navegador.close()
             return
 
-        # Criar sessão com cookies da página
+        # Criar sessão com cookies autenticados
         cookies = pagina.context.cookies()
         sessao = requests.Session()
         for cookie in cookies:
             sessao.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain", ""))
 
-        # Processar cada turma
+        # Processar turmas
         for linha in data:
             try:
                 id_turma = linha[0]
@@ -107,15 +105,11 @@ def main():
 
         navegador.close()
 
-    # Enviar para Google Apps Script
+    # Enviar resultado para o Google Apps Script
     if resultado:
         headers = ["IGREJA", "CURSO", "TURMA", "MATRICULADOS"]
         dados = [headers] + resultado
-
-        payload = {
-            "tipo": "forms",
-            "dados": dados
-        }
+        payload = {"tipo": "forms", "dados": dados}
 
         try:
             resposta_post = requests.post(URL_APPS_SCRIPT_TUR, json=payload)
