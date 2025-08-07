@@ -18,7 +18,7 @@ def main():
     resultado = []
 
     with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
+        navegador = p.chromium.launch(headless=False)
         pagina = navegador.new_page()
         pagina.goto(URL_INICIAL)
 
