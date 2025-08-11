@@ -1,4 +1,4 @@
-name: Executar Script Agora
+name: Executar Scripts Diariamente
 
 on:
   schedule:
@@ -33,9 +33,3 @@ jobs:
       - name: Executar script_det.py
         run: python script_det.py
 
-
-      
-        run: python -m playwright install
-
-      - name: Executar script_det.py
-        run: python script_det.py
