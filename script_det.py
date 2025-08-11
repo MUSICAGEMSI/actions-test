@@ -74,7 +74,7 @@ def obter_candidatos_por_localidade(session):
             'order[0][dir]': 'asc'
         }
         
-        url = "https://musical.congregacao.org.br/grp_musical/listagem"
+        url = "https://musical.congregacao.org.br/alunos/listagem"
         resp = session.post(url, headers=headers, data=form_data, timeout=30)
         
         candidatos_por_localidade = defaultdict(int)
