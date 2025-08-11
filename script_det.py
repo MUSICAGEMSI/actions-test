@@ -59,58 +59,163 @@ def obter_candidatos_por_localidade(session):
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
             'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br, zstd'
         }
         
-        # Dados para o POST (expandir para 10000 registros)
+        # Dados para o POST com estrutura correta para DataTables
         form_data = {
             'draw': '1',
+            'columns[0][data]': '0',
+            'columns[0][name]': '',
+            'columns[0][searchable]': 'true',
+            'columns[0][orderable]': 'true',
+            'columns[0][search][value]': '',
+            'columns[0][search][regex]': 'false',
+            'columns[1][data]': '1',
+            'columns[1][name]': '',
+            'columns[1][searchable]': 'true',
+            'columns[1][orderable]': 'true',
+            'columns[1][search][value]': '',
+            'columns[1][search][regex]': 'false',
+            'columns[2][data]': '2',
+            'columns[2][name]': '',
+            'columns[2][searchable]': 'true',
+            'columns[2][orderable]': 'true',
+            'columns[2][search][value]': '',
+            'columns[2][search][regex]': 'false',
+            'columns[3][data]': '3',
+            'columns[3][name]': '',
+            'columns[3][searchable]': 'true',
+            'columns[3][orderable]': 'true',
+            'columns[3][search][value]': '',
+            'columns[3][search][regex]': 'false',
+            'columns[4][data]': '4',
+            'columns[4][name]': '',
+            'columns[4][searchable]': 'true',
+            'columns[4][orderable]': 'true',
+            'columns[4][search][value]': '',
+            'columns[4][search][regex]': 'false',
+            'columns[5][data]': '5',
+            'columns[5][name]': '',
+            'columns[5][searchable]': 'true',
+            'columns[5][orderable]': 'true',
+            'columns[5][search][value]': '',
+            'columns[5][search][regex]': 'false',
+            'columns[6][data]': '6',
+            'columns[6][name]': '',
+            'columns[6][searchable]': 'false',
+            'columns[6][orderable]': 'false',
+            'columns[6][search][value]': '',
+            'columns[6][search][regex]': 'false',
+            'order[0][column]': '0',
+            'order[0][dir]': 'asc',
             'start': '0',
             'length': '10000',
             'search[value]': '',
-            'search[regex]': 'false',
-            'order[0][column]': '0',
-            'order[0][dir]': 'asc'
+            'search[regex]': 'false'
         }
         
         url = "https://musical.congregacao.org.br/alunos/listagem"
         resp = session.post(url, headers=headers, data=form_data, timeout=30)
         
+        print(f"📊 Status da requisição candidatos: {resp.status_code}")
+        
         candidatos_por_localidade = defaultdict(int)
         
         if resp.status_code == 200:
-            # Parse do JSON retornado
             try:
+                # Primeiro tentar como JSON
                 data = resp.json()
-                if 'data' in data:
-                    for record in data['data']:
-                        # record é uma lista: [checkbox, nome, comum, instrumento, tipo_membro, status, acoes]
-                        if len(record) >= 5:
-                            localidade = record[2]  # Coluna "Comum"
-                            tipo_membro = record[4]  # Coluna "Tipo Membro"
-                            
-                            if 'CANDIDATO' in tipo_membro.upper():
-                                candidatos_por_localidade[localidade] += 1
-                                
-            except (ValueError, KeyError):
-                # Se não for JSON, tentar parsing HTML
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                rows = soup.find_all('tr')
+                print(f"📊 JSON recebido com {len(data.get('data', []))} registros")
                 
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 5:
-                        localidade = cells[2].get_text(strip=True)
-                        tipo_membro = cells[4].get_text(strip=True)
-                        
-                        if 'CANDIDATO' in tipo_membro.upper():
-                            candidatos_por_localidade[localidade] += 1
+                if 'data' in data and isinstance(data['data'], list):
+                    for record in data['data']:
+                        if isinstance(record, list) and len(record) >= 6:
+                            # Estrutura: [checkbox, nome, comum, ministério, instrumento, nível, ações]
+                            localidade_completa = record[2]  # Coluna "Comum Congregação"
+                            nivel = record[5]  # Coluna "Nível"
+                            
+                            # Extrair apenas o nome da localidade (antes do primeiro <span>)
+                            soup_local = BeautifulSoup(str(localidade_completa), 'html.parser')
+                            localidade_texto = soup_local.get_text(strip=True)
+                            
+                            # Pegar apenas a parte antes do " | "
+                            if ' | ' in localidade_texto:
+                                localidade = localidade_texto.split(' | ')[0].strip()
+                            else:
+                                localidade = localidade_texto.split()[0] if localidade_texto else "Desconhecido"
+                            
+                            # Verificar se é candidato
+                            if 'CANDIDATO' in str(nivel).upper():
+                                candidatos_por_localidade[localidade] += 1
+                                print(f"📊 Candidato encontrado: {localidade}")
+                
+                else:
+                    print("⚠️ Resposta não é JSON válido, tentando HTML...")
+                    # Fallback para HTML
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    rows = soup.find_all('tr', role='row')
+                    
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 6:
+                            # Coluna 2: localidade, Coluna 5: nível
+                            localidade_cell = cells[2]
+                            nivel_cell = cells[5]
+                            
+                            localidade_texto = localidade_cell.get_text(strip=True)
+                            nivel_texto = nivel_cell.get_text(strip=True)
+                            
+                            # Extrair nome da localidade
+                            if ' | ' in localidade_texto:
+                                localidade = localidade_texto.split(' | ')[0].strip()
+                            else:
+                                localidade = localidade_texto.split()[0] if localidade_texto else "Desconhecido"
+                            
+                            if 'CANDIDATO' in nivel_texto.upper():
+                                candidatos_por_localidade[localidade] += 1
+                                print(f"📊 Candidato HTML encontrado: {localidade}")
+                                
+            except ValueError as e:
+                print(f"⚠️ Erro ao processar resposta: {e}")
+                # Último recurso: processar como HTML puro
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                tbody = soup.find('tbody')
+                if tbody:
+                    rows = tbody.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 6:
+                            localidade_cell = cells[2]
+                            nivel_cell = cells[5]
+                            
+                            localidade_texto = localidade_cell.get_text(strip=True)
+                            nivel_texto = nivel_cell.get_text(strip=True)
+                            
+                            # Extrair nome da localidade
+                            if ' | ' in localidade_texto:
+                                localidade = localidade_texto.split(' | ')[0].strip()
+                            else:
+                                localidade = localidade_texto.split()[0] if localidade_texto else "Desconhecido"
+                            
+                            if 'CANDIDATO' in nivel_texto.upper():
+                                candidatos_por_localidade[localidade] += 1
+                                print(f"📊 Candidato final encontrado: {localidade}")
+        
+        print(f"📊 Total de candidatos encontrados: {sum(candidatos_por_localidade.values())}")
+        for loc, count in candidatos_por_localidade.items():
+            print(f"  - {loc}: {count} candidatos")
         
         return dict(candidatos_por_localidade)
         
     except Exception as e:
         print(f"⚠️ Erro ao obter candidatos: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 def extrair_cookies_playwright(pagina):
