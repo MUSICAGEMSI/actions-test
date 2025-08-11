@@ -30,6 +30,11 @@ jobs:
       - name: Instalar navegadores do Playwright
         run: python -m playwright install
 
-      - name: Executar script_det.py
-        run: python script_det.py
+      - name: Executar script_formsexpandido.py
+        run: python script_formsexpandido.py
 
+      - name: Executar script_formsresumo.py
+        run: python script_formsresumo.py
+        
+      - name: Executar script_formsnivel.py
+        run: python script_formsnivel.py
