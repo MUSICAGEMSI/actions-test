@@ -330,11 +330,11 @@ def main():
         for linha in relatorio_localidade:
             print(f"{linha[0]:<30} {linha[1]:<6} {linha[2]:<6} {linha[3]:<6} {linha[4]:<7} {linha[5]:<8} {linha[6]:<6}")
 
-        # Preparar dados para envio - FORMATO TABULAR
+        # Preparar dados para envio - FORMATO TABULAR OTIMIZADO PARA SHEETS
         body = {
             "tipo": "relatorio_localidade_tabular",
-            "dados_localidade": relatorio_localidade,
-            "headers_localidade": [
+            "dados": relatorio_localidade,  # Mudança: usar "dados" em vez de "dados_localidade"
+            "headers": [  # Mudança: usar "headers" em vez de "headers_localidade"
                 "Localidade", 
                 "Qty_Turmas", 
                 "Total_Matriculados", 
@@ -345,32 +345,83 @@ def main():
                 "IDs_Turmas",
                 "Lista_Alunos_Unicos"
             ],
-            "dados_detalhados": resultado_detalhado,
-            "headers_detalhados": [
-                "Igreja", "Curso", "Turma", "Matriculados_Badge", "Início", 
-                "Término", "Dia_Hora", "Status", "ID_Turma", 
-                "Real_Matriculados", "Status_Verificação"
-            ],
-            "resumo_geral": {
+            "resumo": {
                 "total_localidades": len(relatorio_localidade),
                 "total_turmas": sum(linha[1] for linha in relatorio_localidade),
                 "total_matriculados": sum(linha[2] for linha in relatorio_localidade),
                 "total_alunos_unicos": sum(linha[3] for linha in relatorio_localidade),
                 "total_sobreposicoes": sum(linha[4] for linha in relatorio_localidade)
-            }
+            },
+            # Adicionar timestamp para debugging
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total_registros": len(relatorio_localidade)
         }
 
-        # Enviar dados para Apps Script
-        try:
-            resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-            print("✅ Dados enviados!")
-            print("Status code:", resposta_post.status_code)
-            print("Resposta do Apps Script:", resposta_post.text)
-        except Exception as e:
-            print(f"❌ Erro ao enviar para Apps Script: {e}")
+        # Debug: mostrar estrutura dos dados antes do envio
+        print(f"\n🔍 DEBUG - Estrutura dos dados:")
+        print(f"   📊 Tipo: {body['tipo']}")
+        print(f"   📈 Headers: {len(body['headers'])} colunas")
+        print(f"   📋 Dados: {len(body['dados'])} linhas")
+        print(f"   ⏰ Timestamp: {body['timestamp']}")
+        
+        # Mostrar amostra dos primeiros dados
+        if body['dados']:
+            print(f"   🔍 Primeira linha: {body['dados'][0][:3]}...")  # Primeiros 3 campos
+
+        # Enviar dados para Apps Script com retry
+        max_tentativas = 3
+        for tentativa in range(max_tentativas):
+            try:
+                print(f"\n📤 Enviando dados (tentativa {tentativa + 1}/{max_tentativas})...")
+                
+                # Headers específicos para Google Apps Script
+                headers_envio = {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Python-Script/1.0'
+                }
+                
+                resposta_post = requests.post(
+                    URL_APPS_SCRIPT, 
+                    json=body, 
+                    headers=headers_envio,
+                    timeout=180  # 3 minutos
+                )
+                
+                print(f"✅ Resposta recebida!")
+                print(f"   📊 Status code: {resposta_post.status_code}")
+                print(f"   📝 Response headers: {dict(resposta_post.headers)}")
+                print(f"   💬 Resposta: {resposta_post.text}")
+                
+                if resposta_post.status_code == 200:
+                    print("✅ Dados enviados com sucesso para o Google Sheets!")
+                    break
+                else:
+                    print(f"⚠️ Status não é 200. Tentando novamente...")
+                    
+            except requests.exceptions.Timeout:
+                print(f"⏰ Timeout na tentativa {tentativa + 1}")
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Erro na requisição (tentativa {tentativa + 1}): {e}")
+            except Exception as e:
+                print(f"❌ Erro inesperado (tentativa {tentativa + 1}): {e}")
+            
+            if tentativa < max_tentativas - 1:
+                print("🔄 Aguardando 5 segundos antes da próxima tentativa...")
+                time.sleep(5)
+        else:
+            print("❌ Falha em todas as tentativas de envio!")
+            
+            # Salvar dados localmente como backup
+            try:
+                import json
+                with open(f"backup_dados_{int(time.time())}.json", "w", encoding="utf-8") as f:
+                    json.dump(body, f, ensure_ascii=False, indent=2)
+                print("💾 Dados salvos localmente como backup.")
+            except Exception as e:
+                print(f"❌ Erro ao salvar backup: {e}")
 
         # Resumo final
-        resumo = body["resumo_geral"]
+        resumo = body["resumo"]
         print(f"\n🎯 RESUMO FINAL:")
         print(f"   🏛️  Localidades: {resumo['total_localidades']}")
         print(f"   📚 Total de turmas: {resumo['total_turmas']}")
@@ -378,6 +429,13 @@ def main():
         print(f"   🎯 Total alunos únicos: {resumo['total_alunos_unicos']}")
         print(f"   🔄 Total sobreposições: {resumo['total_sobreposicoes']}")
         print(f"   📊 Taxa de sobreposição geral: {(resumo['total_sobreposicoes'] / resumo['total_matriculados'] * 100):.1f}%")
+        
+        # Verificar se URL está correta
+        print(f"\n🔗 URL do Apps Script:")
+        print(f"   {URL_APPS_SCRIPT}")
+        
+        if "AKfycbzx5wJjPYSBEeoNQMc02fxi2j4JqROJ1HKbdM59tMHmb2TD2A2Y6IYDtTpHiZvmLFsGug" not in URL_APPS_SCRIPT:
+            print("⚠️ ATENÇÃO: Verifique se a URL do Google Apps Script está correta!")
 
         navegador.close()
 
