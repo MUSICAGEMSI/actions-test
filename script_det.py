@@ -1,4 +1,4 @@
-# script_turmas_localidade.py
+# script_relatorio_localidade.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -7,7 +7,6 @@ import os
 import re
 import requests
 import time
-import json
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
@@ -20,51 +19,99 @@ if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-def extrair_alunos_matriculados(session, turma_id):
+def extrair_matriculados_reais(session, turma_id):
     """
-    Extrai a lista de alunos matriculados na turma
-    Retorna: (quantidade, lista_de_nomes)
+    Obtém apenas a quantidade de matriculados reais
     """
     try:
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
             'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
         url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
-        resp = session.get(url, headers=headers, timeout=15)
+        resp = session.get(url, headers=headers, timeout=10)
         
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
-            alunos = []
             
-            # Procurar linhas da tabela de alunos
+            # Contar linhas válidas do tbody
             tbody = soup.find('tbody')
             if tbody:
                 rows = tbody.find_all('tr')
+                valid_rows = [row for row in rows if len(row.find_all('td')) >= 4]
+                return len(valid_rows)
+            
+            # Fallback: contar botões "Desmatricular"
+            return resp.text.count('Desmatricular')
+                
+        return 0
+        
+    except Exception:
+        return 0
+
+def obter_candidatos_por_localidade(session):
+    """
+    Obtém contagem de candidatos por localidade através da listagem de alunos
+    """
+    try:
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+        }
+        
+        # Dados para o POST (expandir para 10000 registros)
+        form_data = {
+            'draw': '1',
+            'start': '0',
+            'length': '10000',
+            'search[value]': '',
+            'search[regex]': 'false',
+            'order[0][column]': '0',
+            'order[0][dir]': 'asc'
+        }
+        
+        url = "https://musical.congregacao.org.br/grp_musical/listagem"
+        resp = session.post(url, headers=headers, data=form_data, timeout=30)
+        
+        candidatos_por_localidade = defaultdict(int)
+        
+        if resp.status_code == 200:
+            # Parse do JSON retornado
+            try:
+                data = resp.json()
+                if 'data' in data:
+                    for record in data['data']:
+                        # record é uma lista: [checkbox, nome, comum, instrumento, tipo_membro, status, acoes]
+                        if len(record) >= 5:
+                            localidade = record[2]  # Coluna "Comum"
+                            tipo_membro = record[4]  # Coluna "Tipo Membro"
+                            
+                            if 'CANDIDATO' in tipo_membro.upper():
+                                candidatos_por_localidade[localidade] += 1
+                                
+            except (ValueError, KeyError):
+                # Se não for JSON, tentar parsing HTML
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                rows = soup.find_all('tr')
+                
                 for row in rows:
                     cells = row.find_all('td')
-                    if len(cells) >= 2:  # Nome deve estar na primeira célula
-                        nome_completo = cells[0].get_text(strip=True)
-                        if nome_completo and '-' in nome_completo:
-                            # Extrair apenas o nome (antes do hífen)
-                            nome_limpo = nome_completo.split('-')[0].strip()
-                            if nome_limpo:
-                                alunos.append(nome_limpo)
-            
-            # Fallback: usar regex para encontrar padrões de nomes
-            if not alunos:
-                aluno_patterns = re.findall(r'([A-ZÁÉÍÓÚÀÂÊÎÔÛÃÕÇ\s]+) - [A-Z/]+/\d+', resp.text)
-                alunos = [nome.strip() for nome in aluno_patterns if nome.strip()]
-            
-            return len(alunos), alunos
-            
-        return 0, []
+                    if len(cells) >= 5:
+                        localidade = cells[2].get_text(strip=True)
+                        tipo_membro = cells[4].get_text(strip=True)
+                        
+                        if 'CANDIDATO' in tipo_membro.upper():
+                            candidatos_por_localidade[localidade] += 1
+        
+        return dict(candidatos_por_localidade)
         
     except Exception as e:
-        print(f"⚠️ Erro ao extrair alunos da turma {turma_id}: {e}")
-        return -1, []
+        print(f"⚠️ Erro ao obter candidatos: {e}")
+        return {}
 
 def extrair_cookies_playwright(pagina):
     """
@@ -80,9 +127,8 @@ def main():
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
         
-        # Configurações adicionais do navegador
         pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
         pagina.goto(URL_INICIAL)
@@ -94,47 +140,41 @@ def main():
 
         try:
             pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado com sucesso!")
+            print("✅ Login realizado")
         except PlaywrightTimeoutError:
-            print("❌ Falha no login. Verifique suas credenciais.")
+            print("❌ Falha no login")
             navegador.close()
             return
 
-        # Navegar para G.E.M
+        # Criar sessão requests com cookies
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+
+        # Obter candidatos por localidade primeiro
+        print("📊 Obtendo candidatos por localidade...")
+        candidatos_por_local = obter_candidatos_por_localidade(session)
+        
+        # Navegar para G.E.M > Turmas
         try:
             gem_selector = 'span:has-text("G.E.M")'
             pagina.wait_for_selector(gem_selector, timeout=15000)
             gem_element = pagina.locator(gem_selector).first
-
             gem_element.hover()
             pagina.wait_for_timeout(1000)
-
-            if gem_element.is_visible() and gem_element.is_enabled():
-                gem_element.click()
-            else:
-                print("❌ Elemento G.E.M não estava clicável.")
-                navegador.close()
-                return
-        except PlaywrightTimeoutError:
-            print("❌ Menu 'G.E.M' não apareceu a tempo.")
-            navegador.close()
-            return
-
-        # Navegar para Turmas
-        try:
+            gem_element.click()
+            
             pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
             pagina.click('a[href="turmas"]')
-            print("✅ Navegando para Turmas...")
+            print("✅ Navegando para Turmas")
         except PlaywrightTimeoutError:
-            print("❌ Link 'turmas' não encontrado.")
+            print("❌ Erro na navegação")
             navegador.close()
             return
 
-        # Aguardar carregamento da tabela de turmas
+        # Aguardar tabela de turmas
         try:
             pagina.wait_for_selector('table#tabela-turmas', timeout=15000)
-            print("✅ Tabela de turmas carregada.")
-            
             pagina.wait_for_function(
                 """
                 () => {
@@ -143,74 +183,57 @@ def main():
                 }
                 """, timeout=15000
             )
-            print("✅ Linhas da tabela de turmas carregadas.")
+            print("✅ Tabela carregada")
         except PlaywrightTimeoutError:
-            print("❌ A tabela de turmas não carregou a tempo.")
+            print("❌ Tabela não carregou")
             navegador.close()
             return
 
-        # Configurar exibição para mostrar mais itens
+        # Configurar para mostrar mais itens
         try:
             select_length = pagina.query_selector('select[name="tabela-turmas_length"]')
             if select_length:
                 pagina.select_option('select[name="tabela-turmas_length"]', '100')
                 pagina.wait_for_timeout(2000)
-                print("✅ Configurado para mostrar 100 itens por página.")
         except Exception:
-            print("ℹ️ Seletor de quantidade não encontrado, continuando...")
+            pass
 
-        # Criar sessão requests com cookies do navegador
-        cookies_dict = extrair_cookies_playwright(pagina)
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-
-        # Estruturas para análise por localidade
+        # Estrutura para dados por localidade
         dados_localidade = defaultdict(lambda: {
-            'turmas': [],
-            'total_matriculados': 0,
-            'alunos_unicos': set(),
-            'detalhes_turmas': []
+            'quantidade_turmas': 0,
+            'soma_matriculados_badge': 0,
+            'soma_matriculados_reais': 0
         })
         
-        resultado_detalhado = []
-        parar = False
         pagina_atual = 1
+        parar = False
 
         while not parar:
-            if time.time() - tempo_inicio > 1800:  # 30 minutos
-                print("⏹️ Tempo limite atingido. Encerrando a coleta.")
+            if time.time() - tempo_inicio > 1200:  # 20 minutos
+                print("⏹️ Tempo limite atingido")
                 break
 
-            print(f"📄 Processando página {pagina_atual}...")
-
-            # Extrair dados de todas as linhas da página atual
+            print(f"📄 Página {pagina_atual}")
             linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
             
-            for i, linha in enumerate(linhas):
-                if time.time() - tempo_inicio > 1800:
-                    print("⏹️ Tempo limite atingido durante a iteração.")
+            for linha in linhas:
+                if time.time() - tempo_inicio > 1200:
                     parar = True
                     break
 
                 try:
-                    # Extrair dados das colunas
+                    # Extrair dados básicos
                     colunas_td = linha.query_selector_all('td')
+                    if len(colunas_td) < 5:
+                        continue
                     
-                    # Capturar dados das colunas principais
-                    dados_linha = []
-                    for j, td in enumerate(colunas_td[1:], 1):  # Skip first column (radio)
-                        if j == len(colunas_td) - 1:  # Skip last column (actions)
-                            continue
-                        
-                        badge = td.query_selector('span.badge')
-                        if badge:
-                            dados_linha.append(badge.inner_text().strip())
-                        else:
-                            texto = td.inner_text().strip().replace('\n', ' ').replace('\t', ' ')
-                            texto = re.sub(r'\s+', ' ', texto).strip()
-                            dados_linha.append(texto)
-
-                    # Extrair ID da turma
+                    igreja = colunas_td[1].inner_text().strip()
+                    
+                    # Badge de matriculados
+                    badge = colunas_td[4].query_selector('span.badge')
+                    matriculados_badge = int(badge.inner_text().strip()) if badge else 0
+                    
+                    # ID da turma
                     radio_input = linha.query_selector('input[type="radio"][name="item[]"]')
                     if not radio_input:
                         continue
@@ -219,70 +242,29 @@ def main():
                     if not turma_id:
                         continue
 
-                    # Dados principais
-                    igreja = dados_linha[0] if len(dados_linha) > 0 else ""
-                    curso = dados_linha[1] if len(dados_linha) > 1 else ""
-                    turma = dados_linha[2] if len(dados_linha) > 2 else ""
-                    matriculados_badge = dados_linha[3] if len(dados_linha) > 3 else "0"
+                    # Obter matriculados reais
+                    matriculados_reais = extrair_matriculados_reais(session, turma_id)
 
-                    print(f"🔍 Processando {igreja} - {curso} - Turma {turma_id}")
+                    # Acumular dados por localidade
+                    dados_localidade[igreja]['quantidade_turmas'] += 1
+                    dados_localidade[igreja]['soma_matriculados_badge'] += matriculados_badge
+                    dados_localidade[igreja]['soma_matriculados_reais'] += matriculados_reais
 
-                    # Obter lista de alunos matriculados
-                    matriculados_reais, lista_alunos = extrair_alunos_matriculados(session, turma_id)
-                    
-                    if matriculados_reais >= 0:
-                        # Adicionar dados à estrutura de localidade
-                        dados_localidade[igreja]['turmas'].append(turma_id)
-                        dados_localidade[igreja]['total_matriculados'] += matriculados_reais
-                        dados_localidade[igreja]['alunos_unicos'].update(lista_alunos)
-                        
-                        # Detalhes da turma
-                        detalhes_turma = {
-                            'turma_id': turma_id,
-                            'curso': curso,
-                            'turma': turma,
-                            'matriculados_badge': int(matriculados_badge),
-                            'matriculados_reais': matriculados_reais,
-                            'alunos': lista_alunos
-                        }
-                        dados_localidade[igreja]['detalhes_turmas'].append(detalhes_turma)
-                        
-                        status = "✅ OK" if matriculados_reais == int(matriculados_badge) else f"⚠️ Diferença"
-                    else:
-                        status = "❌ Erro"
-
-                    # Linha detalhada para relatório completo
-                    linha_completa = [
-                        igreja, curso, turma, matriculados_badge,
-                        dados_linha[4] if len(dados_linha) > 4 else "",  # Início
-                        dados_linha[5] if len(dados_linha) > 5 else "",  # Término
-                        dados_linha[6] if len(dados_linha) > 6 else "",  # Dia - Hora
-                        dados_linha[7] if len(dados_linha) > 7 else "",  # Status
-                        turma_id,
-                        str(matriculados_reais) if matriculados_reais >= 0 else "Erro",
-                        status
-                    ]
-
-                    resultado_detalhado.append(linha_completa)
-                    print(f"   📊 Badge: {matriculados_badge}, Real: {matriculados_reais}, Únicos acumulados: {len(dados_localidade[igreja]['alunos_unicos'])}")
-
-                    # Pausa para não sobrecarregar
-                    time.sleep(0.5)
+                    print(f"📊 {igreja}: Turma {turma_id} - Badge: {matriculados_badge}, Real: {matriculados_reais}")
+                    time.sleep(0.3)  # Pausa pequena
 
                 except Exception as e:
-                    print(f"⚠️ Erro ao processar linha {i}: {e}")
+                    print(f"⚠️ Erro na linha: {e}")
                     continue
 
             if parar:
                 break
 
-            # Paginação
+            # Próxima página
             try:
                 btn_next = pagina.query_selector('a.paginate_button.next:not(.disabled)')
                 if btn_next and btn_next.is_enabled():
-                    print(f"➡️ Avançando para página {pagina_atual + 1}...")
                     btn_next.click()
-                    
                     pagina.wait_for_function(
                         """
                         () => {
@@ -292,152 +274,63 @@ def main():
                         """,
                         timeout=15000
                     )
-                    pagina.wait_for_timeout(3000)
+                    pagina.wait_for_timeout(2000)
                     pagina_atual += 1
                 else:
-                    print("📄 Última página alcançada.")
                     break
                     
-            except Exception as e:
-                print(f"⚠️ Erro na paginação: {e}")
+            except Exception:
                 break
 
-        # Processar dados por localidade - UMA LINHA POR LOCALIDADE
-        relatorio_localidade = []
-        for igreja, dados in dados_localidade.items():
-            # Criar linha única com todas as informações
-            linha_localidade = [
-                igreja,                                          # Localidade
-                len(dados['turmas']),                           # Quantidade de turmas
-                dados['total_matriculados'],                    # Total matriculados reais
-                len(dados['alunos_unicos']),                   # Matriculados únicos
-                dados['total_matriculados'] - len(dados['alunos_unicos']),  # Sobreposições
-                f"{((dados['total_matriculados'] - len(dados['alunos_unicos'])) / dados['total_matriculados'] * 100):.1f}%" if dados['total_matriculados'] > 0 else "0%",  # % Sobreposição
-                f"{dados['total_matriculados']/len(dados['turmas']):.1f}",  # Média por turma
-                "; ".join(dados['turmas']),                    # IDs das turmas
-                "; ".join(sorted(list(dados['alunos_unicos'])))  # Lista de alunos únicos
+        # Montar relatório final - APENAS 5 COLUNAS
+        relatorio_final = []
+        for localidade, dados in dados_localidade.items():
+            candidatos = candidatos_por_local.get(localidade, 0)
+            
+            linha = [
+                localidade,
+                dados['quantidade_turmas'],
+                dados['soma_matriculados_badge'],
+                dados['soma_matriculados_reais'],
+                candidatos
             ]
-            relatorio_localidade.append(linha_localidade)
+            relatorio_final.append(linha)
 
-        # Ordenar por quantidade de matriculados únicos (decrescente)
-        relatorio_localidade.sort(key=lambda x: x[3], reverse=True)
+        # Ordenar por soma de matriculados reais (decrescente)
+        relatorio_final.sort(key=lambda x: x[3], reverse=True)
 
-        print(f"\n📊 RELATÓRIO POR LOCALIDADE (Uma linha por local):")
-        print("="*120)
-        headers = ["Localidade", "Turmas", "Total", "Únicos", "Sobrep.", "%Sobrep.", "Média", "IDs Turmas", "Alunos"]
-        print(f"{headers[0]:<30} {headers[1]:<6} {headers[2]:<6} {headers[3]:<6} {headers[4]:<7} {headers[5]:<8} {headers[6]:<6}")
-        print("-" * 120)
-        for linha in relatorio_localidade:
-            print(f"{linha[0]:<30} {linha[1]:<6} {linha[2]:<6} {linha[3]:<6} {linha[4]:<7} {linha[5]:<8} {linha[6]:<6}")
+        # Mostrar resultado
+        print(f"\n📊 RELATÓRIO POR LOCALIDADE:")
+        print("="*100)
+        print(f"{'Localidade':<35} {'Turmas':<7} {'Badge':<7} {'Reais':<7} {'Candidatos':<10}")
+        print("-"*100)
+        for linha in relatorio_final:
+            print(f"{linha[0]:<35} {linha[1]:<7} {linha[2]:<7} {linha[3]:<7} {linha[4]:<10}")
 
-        # Preparar dados para envio - FORMATO TABULAR OTIMIZADO PARA SHEETS
+        # Preparar dados para envio
         body = {
-            "tipo": "relatorio_localidade_tabular",
-            "dados": relatorio_localidade,  # Mudança: usar "dados" em vez de "dados_localidade"
-            "headers": [  # Mudança: usar "headers" em vez de "headers_localidade"
-                "Localidade", 
-                "Qty_Turmas", 
-                "Total_Matriculados", 
-                "Matriculados_Unicos", 
-                "Sobreposicoes",
-                "Percent_Sobreposicao",
-                "Media_Por_Turma",
-                "IDs_Turmas",
-                "Lista_Alunos_Unicos"
-            ],
-            "resumo": {
-                "total_localidades": len(relatorio_localidade),
-                "total_turmas": sum(linha[1] for linha in relatorio_localidade),
-                "total_matriculados": sum(linha[2] for linha in relatorio_localidade),
-                "total_alunos_unicos": sum(linha[3] for linha in relatorio_localidade),
-                "total_sobreposicoes": sum(linha[4] for linha in relatorio_localidade)
-            },
-            # Adicionar timestamp para debugging
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "total_registros": len(relatorio_localidade)
+            "tipo": "relatorio_localidade_simples",
+            "dados": relatorio_final,
+            "headers": [
+                "Localidade",
+                "Quantidade_Turmas", 
+                "Soma_Matriculados_Badge",
+                "Soma_Matriculados_Reais",
+                "Quantidade_Candidatos"
+            ]
         }
 
-        # Debug: mostrar estrutura dos dados antes do envio
-        print(f"\n🔍 DEBUG - Estrutura dos dados:")
-        print(f"   📊 Tipo: {body['tipo']}")
-        print(f"   📈 Headers: {len(body['headers'])} colunas")
-        print(f"   📋 Dados: {len(body['dados'])} linhas")
-        print(f"   ⏰ Timestamp: {body['timestamp']}")
-        
-        # Mostrar amostra dos primeiros dados
-        if body['dados']:
-            print(f"   🔍 Primeira linha: {body['dados'][0][:3]}...")  # Primeiros 3 campos
-
-        # Enviar dados para Apps Script com retry
-        max_tentativas = 3
-        for tentativa in range(max_tentativas):
-            try:
-                print(f"\n📤 Enviando dados (tentativa {tentativa + 1}/{max_tentativas})...")
-                
-                # Headers específicos para Google Apps Script
-                headers_envio = {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Python-Script/1.0'
-                }
-                
-                resposta_post = requests.post(
-                    URL_APPS_SCRIPT, 
-                    json=body, 
-                    headers=headers_envio,
-                    timeout=180  # 3 minutos
-                )
-                
-                print(f"✅ Resposta recebida!")
-                print(f"   📊 Status code: {resposta_post.status_code}")
-                print(f"   📝 Response headers: {dict(resposta_post.headers)}")
-                print(f"   💬 Resposta: {resposta_post.text}")
-                
-                if resposta_post.status_code == 200:
-                    print("✅ Dados enviados com sucesso para o Google Sheets!")
-                    break
-                else:
-                    print(f"⚠️ Status não é 200. Tentando novamente...")
-                    
-            except requests.exceptions.Timeout:
-                print(f"⏰ Timeout na tentativa {tentativa + 1}")
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Erro na requisição (tentativa {tentativa + 1}): {e}")
-            except Exception as e:
-                print(f"❌ Erro inesperado (tentativa {tentativa + 1}): {e}")
-            
-            if tentativa < max_tentativas - 1:
-                print("🔄 Aguardando 5 segundos antes da próxima tentativa...")
-                time.sleep(5)
-        else:
-            print("❌ Falha em todas as tentativas de envio!")
-            
-            # Salvar dados localmente como backup
-            try:
-                import json
-                with open(f"backup_dados_{int(time.time())}.json", "w", encoding="utf-8") as f:
-                    json.dump(body, f, ensure_ascii=False, indent=2)
-                print("💾 Dados salvos localmente como backup.")
-            except Exception as e:
-                print(f"❌ Erro ao salvar backup: {e}")
-
-        # Resumo final
-        resumo = body["resumo"]
-        print(f"\n🎯 RESUMO FINAL:")
-        print(f"   🏛️  Localidades: {resumo['total_localidades']}")
-        print(f"   📚 Total de turmas: {resumo['total_turmas']}")
-        print(f"   👥 Total matriculados: {resumo['total_matriculados']}")
-        print(f"   🎯 Total alunos únicos: {resumo['total_alunos_unicos']}")
-        print(f"   🔄 Total sobreposições: {resumo['total_sobreposicoes']}")
-        print(f"   📊 Taxa de sobreposição geral: {(resumo['total_sobreposicoes'] / resumo['total_matriculados'] * 100):.1f}%")
-        
-        # Verificar se URL está correta
-        print(f"\n🔗 URL do Apps Script:")
-        print(f"   {URL_APPS_SCRIPT}")
-        
-        if "AKfycbzx5wJjPYSBEeoNQMc02fxi2j4JqROJ1HKbdM59tMHmb2TD2A2Y6IYDtTpHiZvmLFsGug" not in URL_APPS_SCRIPT:
-            print("⚠️ ATENÇÃO: Verifique se a URL do Google Apps Script está correta!")
+        # Enviar para Google Sheets
+        try:
+            print(f"\n📤 Enviando {len(relatorio_final)} localidades...")
+            resposta = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
+            print(f"✅ Status: {resposta.status_code}")
+            print(f"📝 Resposta: {resposta.text}")
+        except Exception as e:
+            print(f"❌ Erro no envio: {e}")
 
         navegador.close()
+        print(f"\n🎯 Concluído! {len(relatorio_final)} localidades processadas.")
 
 if __name__ == "__main__":
     main()
