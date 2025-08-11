@@ -22,7 +22,7 @@ jobs:
           pip install -r requirements.txt
           playwright install
 
-      - name: Run script_forms.py
+      - name: Run script_tur.py
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
