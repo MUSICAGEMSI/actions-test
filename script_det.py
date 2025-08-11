@@ -145,7 +145,7 @@ def main():
         pagina_atual = 1
 
         while not parar:
-            if time.time() - tempo_inicio > 1800:  # 30 minutos
+            if time.time() - tempo_inicio > 180:  # 3 minutos
                 print("⏹️ Tempo limite atingido. Encerrando a coleta.")
                 break
 
@@ -155,7 +155,7 @@ def main():
             linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
             
             for i, linha in enumerate(linhas):
-                if time.time() - tempo_inicio > 1800:
+                if time.time() - tempo_inicio > 180:
                     print("⏹️ Tempo limite atingido durante a iteração.")
                     parar = True
                     break
