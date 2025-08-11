@@ -1,3 +1,10 @@
+name: Executar Scripts Diariamente
+
+on:
+  schedule:
+    - cron: '0 12 * * 0'  # Todos os dias às 12:00 UTC (09h Brasília)
+  workflow_dispatch:     # Permite disparo manual
+  
 jobs:
   run-scripts:
     runs-on: ubuntu-latest
@@ -9,9 +16,6 @@ jobs:
     steps:
       - name: Clonar o repositório
         uses: actions/checkout@v3
-
-      - name: Listar arquivos no diretório raiz
-        run: ls -la
 
       - name: Configurar Python
         uses: actions/setup-python@v4
@@ -26,11 +30,5 @@ jobs:
       - name: Instalar navegadores do Playwright
         run: python -m playwright install
 
-      - name: Executar script_formsexpandido.py
-        run: python script_formsexpandido.py
-
-      - name: Executar script_formsresumo.py
-        run: python script_formsresumo.py
-        
-      - name: Executar script_formsnivel.py
-        run: python script_formsnivel.py
+      - name: Executar script_det.py
+        run: python script_det.py
