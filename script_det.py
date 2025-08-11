@@ -302,36 +302,49 @@ def main():
                 print(f"⚠️ Erro na paginação: {e}")
                 break
 
-        # Processar dados por localidade
+        # Processar dados por localidade - UMA LINHA POR LOCALIDADE
         relatorio_localidade = []
         for igreja, dados in dados_localidade.items():
-            relatorio_localidade.append({
-                'localidade': igreja,
-                'quantidade_turmas': len(dados['turmas']),
-                'total_matriculados_reais': dados['total_matriculados'],
-                'matriculados_unicos': len(dados['alunos_unicos']),
-                'lista_alunos_unicos': sorted(list(dados['alunos_unicos'])),
-                'turmas_ids': dados['turmas'],
-                'detalhes_turmas': dados['detalhes_turmas']
-            })
+            # Criar linha única com todas as informações
+            linha_localidade = [
+                igreja,                                          # Localidade
+                len(dados['turmas']),                           # Quantidade de turmas
+                dados['total_matriculados'],                    # Total matriculados reais
+                len(dados['alunos_unicos']),                   # Matriculados únicos
+                dados['total_matriculados'] - len(dados['alunos_unicos']),  # Sobreposições
+                f"{((dados['total_matriculados'] - len(dados['alunos_unicos'])) / dados['total_matriculados'] * 100):.1f}%" if dados['total_matriculados'] > 0 else "0%",  # % Sobreposição
+                f"{dados['total_matriculados']/len(dados['turmas']):.1f}",  # Média por turma
+                "; ".join(dados['turmas']),                    # IDs das turmas
+                "; ".join(sorted(list(dados['alunos_unicos'])))  # Lista de alunos únicos
+            ]
+            relatorio_localidade.append(linha_localidade)
 
         # Ordenar por quantidade de matriculados únicos (decrescente)
-        relatorio_localidade.sort(key=lambda x: x['matriculados_unicos'], reverse=True)
+        relatorio_localidade.sort(key=lambda x: x[3], reverse=True)
 
-        print(f"\n📊 RELATÓRIO POR LOCALIDADE:")
-        print("="*80)
-        for loc in relatorio_localidade:
-            print(f"🏛️  {loc['localidade']}")
-            print(f"   📚 Turmas: {loc['quantidade_turmas']}")
-            print(f"   👥 Total matriculados: {loc['total_matriculados_reais']}")
-            print(f"   🎯 Alunos únicos: {loc['matriculados_unicos']}")
-            print(f"   📊 Média por turma: {loc['total_matriculados_reais']/loc['quantidade_turmas']:.1f}")
-            print("-" * 60)
+        print(f"\n📊 RELATÓRIO POR LOCALIDADE (Uma linha por local):")
+        print("="*120)
+        headers = ["Localidade", "Turmas", "Total", "Únicos", "Sobrep.", "%Sobrep.", "Média", "IDs Turmas", "Alunos"]
+        print(f"{headers[0]:<30} {headers[1]:<6} {headers[2]:<6} {headers[3]:<6} {headers[4]:<7} {headers[5]:<8} {headers[6]:<6}")
+        print("-" * 120)
+        for linha in relatorio_localidade:
+            print(f"{linha[0]:<30} {linha[1]:<6} {linha[2]:<6} {linha[3]:<6} {linha[4]:<7} {linha[5]:<8} {linha[6]:<6}")
 
-        # Preparar dados para envio
+        # Preparar dados para envio - FORMATO TABULAR
         body = {
-            "tipo": "turmas_por_localidade",
-            "relatorio_localidade": relatorio_localidade,
+            "tipo": "relatorio_localidade_tabular",
+            "dados_localidade": relatorio_localidade,
+            "headers_localidade": [
+                "Localidade", 
+                "Qty_Turmas", 
+                "Total_Matriculados", 
+                "Matriculados_Unicos", 
+                "Sobreposicoes",
+                "Percent_Sobreposicao",
+                "Media_Por_Turma",
+                "IDs_Turmas",
+                "Lista_Alunos_Unicos"
+            ],
             "dados_detalhados": resultado_detalhado,
             "headers_detalhados": [
                 "Igreja", "Curso", "Turma", "Matriculados_Badge", "Início", 
@@ -340,9 +353,10 @@ def main():
             ],
             "resumo_geral": {
                 "total_localidades": len(relatorio_localidade),
-                "total_turmas": sum(loc['quantidade_turmas'] for loc in relatorio_localidade),
-                "total_matriculados": sum(loc['total_matriculados_reais'] for loc in relatorio_localidade),
-                "total_alunos_unicos": sum(loc['matriculados_unicos'] for loc in relatorio_localidade)
+                "total_turmas": sum(linha[1] for linha in relatorio_localidade),
+                "total_matriculados": sum(linha[2] for linha in relatorio_localidade),
+                "total_alunos_unicos": sum(linha[3] for linha in relatorio_localidade),
+                "total_sobreposicoes": sum(linha[4] for linha in relatorio_localidade)
             }
         }
 
@@ -362,7 +376,8 @@ def main():
         print(f"   📚 Total de turmas: {resumo['total_turmas']}")
         print(f"   👥 Total matriculados: {resumo['total_matriculados']}")
         print(f"   🎯 Total alunos únicos: {resumo['total_alunos_unicos']}")
-        print(f"   📊 Taxa de sobreposição: {((resumo['total_matriculados'] - resumo['total_alunos_unicos']) / resumo['total_matriculados'] * 100):.1f}%")
+        print(f"   🔄 Total sobreposições: {resumo['total_sobreposicoes']}")
+        print(f"   📊 Taxa de sobreposição geral: {(resumo['total_sobreposicoes'] / resumo['total_matriculados'] * 100):.1f}%")
 
         navegador.close()
 
