@@ -18,7 +18,7 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_LISTAGEM_ALUNOS = "https://musical.congregacao.org.br/alunos/listagem"
 URL_GRP_MUSICAL = "https://musical.congregacao.org.br/grp_musical/listagem"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzx5wJjPYSBEeoNQMc02fxi2j4JqROJ1HKbdM59tMHmb2TD2A2Y6IYDtTpHiZvmLFsGug/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzHgvDkG-aGKH12y3mKHX1kNZ96Ucjp3mr0RXNt6PFP23zfLwK3KLVj1IlYVUEzMZR0Fg/exec'
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
