@@ -1,4 +1,4 @@
-# script_turmas_localidade.py
+# script_licoes_musicais.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -9,7 +9,7 @@ import requests
 import time
 import json
 from bs4 import BeautifulSoup
-from collections import defaultdict
+from datetime import datetime
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -20,424 +20,423 @@ if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-def extrair_alunos_matriculados(session, turma_id):
-    """
-    Extrai a lista de alunos matriculados na turma
-    Retorna: (quantidade, lista_de_nomes)
-    """
-    try:
-        headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        }
+class MusicLessonScraper:
+    def __init__(self, session, base_url="https://musical.congregacao.org.br/"):
+        self.session = session
+        self.base_url = base_url
         
-        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
-        resp = session.get(url, headers=headers, timeout=15)
-        
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            alunos = []
-            
-            # Procurar linhas da tabela de alunos
-            tbody = soup.find('tbody')
-            if tbody:
-                rows = tbody.find_all('tr')
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 2:  # Nome deve estar na primeira célula
-                        nome_completo = cells[0].get_text(strip=True)
-                        if nome_completo and '-' in nome_completo:
-                            # Extrair apenas o nome (antes do hífen)
-                            nome_limpo = nome_completo.split('-')[0].strip()
-                            if nome_limpo:
-                                alunos.append(nome_limpo)
-            
-            # Fallback: usar regex para encontrar padrões de nomes
-            if not alunos:
-                aluno_patterns = re.findall(r'([A-ZÁÉÍÓÚÀÂÊÎÔÛÃÕÇ\s]+) - [A-Z/]+/\d+', resp.text)
-                alunos = [nome.strip() for nome in aluno_patterns if nome.strip()]
-            
-            return len(alunos), alunos
-            
-        return 0, []
-        
-    except Exception as e:
-        print(f"⚠️ Erro ao extrair alunos da turma {turma_id}: {e}")
-        return -1, []
-
-def extrair_cookies_playwright(pagina):
-    """
-    Extrai cookies do Playwright para usar em requests
-    """
-    cookies = pagina.context.cookies()
-    return {cookie['name']: cookie['value'] for cookie in cookies}
-
-def main():
-    tempo_inicio = time.time()
-
-    with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
-        pagina = navegador.new_page()
-        
-        # Configurações adicionais do navegador
-        pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        })
-        
-        pagina.goto(URL_INICIAL)
-
-        # Login
-        pagina.fill('input[name="login"]', EMAIL)
-        pagina.fill('input[name="password"]', SENHA)
-        pagina.click('button[type="submit"]')
-
+    def extrair_nome_aluno(self, soup):
+        """Extrai o nome do aluno da página"""
         try:
-            pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado com sucesso!")
-        except PlaywrightTimeoutError:
-            print("❌ Falha no login. Verifique suas credenciais.")
-            navegador.close()
-            return
-
-        # Navegar para G.E.M
-        try:
-            gem_selector = 'span:has-text("G.E.M")'
-            pagina.wait_for_selector(gem_selector, timeout=15000)
-            gem_element = pagina.locator(gem_selector).first
-
-            gem_element.hover()
-            pagina.wait_for_timeout(1000)
-
-            if gem_element.is_visible() and gem_element.is_enabled():
-                gem_element.click()
-            else:
-                print("❌ Elemento G.E.M não estava clicável.")
-                navegador.close()
-                return
-        except PlaywrightTimeoutError:
-            print("❌ Menu 'G.E.M' não apareceu a tempo.")
-            navegador.close()
-            return
-
-        # Navegar para Turmas
-        try:
-            pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
-            pagina.click('a[href="turmas"]')
-            print("✅ Navegando para Turmas...")
-        except PlaywrightTimeoutError:
-            print("❌ Link 'turmas' não encontrado.")
-            navegador.close()
-            return
-
-        # Aguardar carregamento da tabela de turmas
-        try:
-            pagina.wait_for_selector('table#tabela-turmas', timeout=15000)
-            print("✅ Tabela de turmas carregada.")
+            # Procura no título da página
+            title = soup.find('title')
+            if title and title.text:
+                # Padrão: "Lições Aprovadas / Nome - Estado/Idade / Instrumento"
+                match = re.search(r'Lições Aprovadas / (.+)', title.text)
+                if match:
+                    return match.group(1).strip()
             
-            pagina.wait_for_function(
-                """
-                () => {
-                    const tbody = document.querySelector('table#tabela-turmas tbody');
-                    return tbody && tbody.querySelectorAll('tr').length > 0;
-                }
-                """, timeout=15000
-            )
-            print("✅ Linhas da tabela de turmas carregadas.")
-        except PlaywrightTimeoutError:
-            print("❌ A tabela de turmas não carregou a tempo.")
-            navegador.close()
-            return
+            # Fallback: procurar em headers h1, h2
+            for header in soup.find_all(['h1', 'h2', 'h3']):
+                if header.text and '-' in header.text and '/' in header.text:
+                    return header.text.strip()
+            
+            return "Nome não encontrado"
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair nome: {e}")
+            return "Erro ao extrair nome"
 
-        # Configurar exibição para mostrar mais itens
-        try:
-            select_length = pagina.query_selector('select[name="tabela-turmas_length"]')
-            if select_length:
-                pagina.select_option('select[name="tabela-turmas_length"]', '100')
-                pagina.wait_for_timeout(2000)
-                print("✅ Configurado para mostrar 100 itens por página.")
-        except Exception:
-            print("ℹ️ Seletor de quantidade não encontrado, continuando...")
-
-        # Criar sessão requests com cookies do navegador
-        cookies_dict = extrair_cookies_playwright(pagina)
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-
-        # Estruturas para análise por localidade
-        dados_localidade = defaultdict(lambda: {
-            'turmas': [],
-            'total_matriculados': 0,
-            'alunos_unicos': set(),
-            'detalhes_turmas': []
-        })
+    def processar_data(self, data_texto):
+        """Converte texto de data para formato padronizado"""
+        if not data_texto or data_texto.strip() == '':
+            return ""
         
-        resultado_detalhado = []
-        parar = False
-        pagina_atual = 1
-
-        while not parar:
-            if time.time() - tempo_inicio > 1800:  # 30 minutos
-                print("⏹️ Tempo limite atingido. Encerrando a coleta.")
-                break
-
-            print(f"📄 Processando página {pagina_atual}...")
-
-            # Extrair dados de todas as linhas da página atual
-            linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
+        try:
+            # Limpar e normalizar
+            data_limpa = data_texto.strip()
             
-            for i, linha in enumerate(linhas):
-                if time.time() - tempo_inicio > 1800:
-                    print("⏹️ Tempo limite atingido durante a iteração.")
-                    parar = True
-                    break
-
+            # Tentar diferentes formatos
+            for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d/%m/%Y %H:%M:%S']:
                 try:
-                    # Extrair dados das colunas
-                    colunas_td = linha.query_selector_all('td')
-                    
-                    # Capturar dados das colunas principais
-                    dados_linha = []
-                    for j, td in enumerate(colunas_td[1:], 1):  # Skip first column (radio)
-                        if j == len(colunas_td) - 1:  # Skip last column (actions)
-                            continue
-                        
-                        badge = td.query_selector('span.badge')
-                        if badge:
-                            dados_linha.append(badge.inner_text().strip())
-                        else:
-                            texto = td.inner_text().strip().replace('\n', ' ').replace('\t', ' ')
-                            texto = re.sub(r'\s+', ' ', texto).strip()
-                            dados_linha.append(texto)
-
-                    # Extrair ID da turma
-                    radio_input = linha.query_selector('input[type="radio"][name="item[]"]')
-                    if not radio_input:
-                        continue
-                    
-                    turma_id = radio_input.get_attribute('value')
-                    if not turma_id:
-                        continue
-
-                    # Dados principais
-                    igreja = dados_linha[0] if len(dados_linha) > 0 else ""
-                    curso = dados_linha[1] if len(dados_linha) > 1 else ""
-                    turma = dados_linha[2] if len(dados_linha) > 2 else ""
-                    matriculados_badge = dados_linha[3] if len(dados_linha) > 3 else "0"
-
-                    print(f"🔍 Processando {igreja} - {curso} - Turma {turma_id}")
-
-                    # Obter lista de alunos matriculados
-                    matriculados_reais, lista_alunos = extrair_alunos_matriculados(session, turma_id)
-                    
-                    if matriculados_reais >= 0:
-                        # Adicionar dados à estrutura de localidade
-                        dados_localidade[igreja]['turmas'].append(turma_id)
-                        dados_localidade[igreja]['total_matriculados'] += matriculados_reais
-                        dados_localidade[igreja]['alunos_unicos'].update(lista_alunos)
-                        
-                        # Detalhes da turma
-                        detalhes_turma = {
-                            'turma_id': turma_id,
-                            'curso': curso,
-                            'turma': turma,
-                            'matriculados_badge': int(matriculados_badge),
-                            'matriculados_reais': matriculados_reais,
-                            'alunos': lista_alunos
-                        }
-                        dados_localidade[igreja]['detalhes_turmas'].append(detalhes_turma)
-                        
-                        status = "✅ OK" if matriculados_reais == int(matriculados_badge) else f"⚠️ Diferença"
-                    else:
-                        status = "❌ Erro"
-
-                    # Linha detalhada para relatório completo
-                    linha_completa = [
-                        igreja, curso, turma, matriculados_badge,
-                        dados_linha[4] if len(dados_linha) > 4 else "",  # Início
-                        dados_linha[5] if len(dados_linha) > 5 else "",  # Término
-                        dados_linha[6] if len(dados_linha) > 6 else "",  # Dia - Hora
-                        dados_linha[7] if len(dados_linha) > 7 else "",  # Status
-                        turma_id,
-                        str(matriculados_reais) if matriculados_reais >= 0 else "Erro",
-                        status
-                    ]
-
-                    resultado_detalhado.append(linha_completa)
-                    print(f"   📊 Badge: {matriculados_badge}, Real: {matriculados_reais}, Únicos acumulados: {len(dados_localidade[igreja]['alunos_unicos'])}")
-
-                    # Pausa para não sobrecarregar
-                    time.sleep(0.5)
-
-                except Exception as e:
-                    print(f"⚠️ Erro ao processar linha {i}: {e}")
+                    data_obj = datetime.strptime(data_limpa.split()[0], fmt)
+                    return data_obj.strftime('%d/%m/%Y')
+                except ValueError:
                     continue
-
-            if parar:
-                break
-
-            # Paginação
-            try:
-                btn_next = pagina.query_selector('a.paginate_button.next:not(.disabled)')
-                if btn_next and btn_next.is_enabled():
-                    print(f"➡️ Avançando para página {pagina_atual + 1}...")
-                    btn_next.click()
-                    
-                    pagina.wait_for_function(
-                        """
-                        () => {
-                            const tbody = document.querySelector('table#tabela-turmas tbody');
-                            return tbody && tbody.querySelectorAll('tr').length > 0;
-                        }
-                        """,
-                        timeout=15000
-                    )
-                    pagina.wait_for_timeout(3000)
-                    pagina_atual += 1
-                else:
-                    print("📄 Última página alcançada.")
-                    break
-                    
-            except Exception as e:
-                print(f"⚠️ Erro na paginação: {e}")
-                break
-
-        # Processar dados por localidade - UMA LINHA POR LOCALIDADE
-        relatorio_localidade = []
-        for igreja, dados in dados_localidade.items():
-            # Criar linha única com todas as informações
-            linha_localidade = [
-                igreja,                                          # Localidade
-                len(dados['turmas']),                           # Quantidade de turmas
-                dados['total_matriculados'],                    # Total matriculados reais
-                len(dados['alunos_unicos']),                   # Matriculados únicos
-                dados['total_matriculados'] - len(dados['alunos_unicos']),  # Sobreposições
-                f"{((dados['total_matriculados'] - len(dados['alunos_unicos'])) / dados['total_matriculados'] * 100):.1f}%" if dados['total_matriculados'] > 0 else "0%",  # % Sobreposição
-                f"{dados['total_matriculados']/len(dados['turmas']):.1f}",  # Média por turma
-                "; ".join(dados['turmas']),                    # IDs das turmas
-                "; ".join(sorted(list(dados['alunos_unicos'])))  # Lista de alunos únicos
-            ]
-            relatorio_localidade.append(linha_localidade)
-
-        # Ordenar por quantidade de matriculados únicos (decrescente)
-        relatorio_localidade.sort(key=lambda x: x[3], reverse=True)
-
-        print(f"\n📊 RELATÓRIO POR LOCALIDADE (Uma linha por local):")
-        print("="*120)
-        headers = ["Localidade", "Turmas", "Total", "Únicos", "Sobrep.", "%Sobrep.", "Média", "IDs Turmas", "Alunos"]
-        print(f"{headers[0]:<30} {headers[1]:<6} {headers[2]:<6} {headers[3]:<6} {headers[4]:<7} {headers[5]:<8} {headers[6]:<6}")
-        print("-" * 120)
-        for linha in relatorio_localidade:
-            print(f"{linha[0]:<30} {linha[1]:<6} {linha[2]:<6} {linha[3]:<6} {linha[4]:<7} {linha[5]:<8} {linha[6]:<6}")
-
-        # Preparar dados para envio - FORMATO TABULAR OTIMIZADO PARA SHEETS
-        body = {
-            "tipo": "relatorio_localidade_tabular",
-            "dados": relatorio_localidade,  # Mudança: usar "dados" em vez de "dados_localidade"
-            "headers": [  # Mudança: usar "headers" em vez de "headers_localidade"
-                "Localidade", 
-                "Qty_Turmas", 
-                "Total_Matriculados", 
-                "Matriculados_Unicos", 
-                "Sobreposicoes",
-                "Percent_Sobreposicao",
-                "Media_Por_Turma",
-                "IDs_Turmas",
-                "Lista_Alunos_Unicos"
-            ],
-            "resumo": {
-                "total_localidades": len(relatorio_localidade),
-                "total_turmas": sum(linha[1] for linha in relatorio_localidade),
-                "total_matriculados": sum(linha[2] for linha in relatorio_localidade),
-                "total_alunos_unicos": sum(linha[3] for linha in relatorio_localidade),
-                "total_sobreposicoes": sum(linha[4] for linha in relatorio_localidade)
-            },
-            # Adicionar timestamp para debugging
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "total_registros": len(relatorio_localidade)
-        }
-
-        # Debug: mostrar estrutura dos dados antes do envio
-        print(f"\n🔍 DEBUG - Estrutura dos dados:")
-        print(f"   📊 Tipo: {body['tipo']}")
-        print(f"   📈 Headers: {len(body['headers'])} colunas")
-        print(f"   📋 Dados: {len(body['dados'])} linhas")
-        print(f"   ⏰ Timestamp: {body['timestamp']}")
-        
-        # Mostrar amostra dos primeiros dados
-        if body['dados']:
-            print(f"   🔍 Primeira linha: {body['dados'][0][:3]}...")  # Primeiros 3 campos
-
-        # Enviar dados para Apps Script com retry
-        max_tentativas = 3
-        for tentativa in range(max_tentativas):
-            try:
-                print(f"\n📤 Enviando dados (tentativa {tentativa + 1}/{max_tentativas})...")
-                
-                # Headers específicos para Google Apps Script
-                headers_envio = {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Python-Script/1.0'
-                }
-                
-                resposta_post = requests.post(
-                    URL_APPS_SCRIPT, 
-                    json=body, 
-                    headers=headers_envio,
-                    timeout=180  # 3 minutos
-                )
-                
-                print(f"✅ Resposta recebida!")
-                print(f"   📊 Status code: {resposta_post.status_code}")
-                print(f"   📝 Response headers: {dict(resposta_post.headers)}")
-                print(f"   💬 Resposta: {resposta_post.text}")
-                
-                if resposta_post.status_code == 200:
-                    print("✅ Dados enviados com sucesso para o Google Sheets!")
-                    break
-                else:
-                    print(f"⚠️ Status não é 200. Tentando novamente...")
-                    
-            except requests.exceptions.Timeout:
-                print(f"⏰ Timeout na tentativa {tentativa + 1}")
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Erro na requisição (tentativa {tentativa + 1}): {e}")
-            except Exception as e:
-                print(f"❌ Erro inesperado (tentativa {tentativa + 1}): {e}")
             
-            if tentativa < max_tentativas - 1:
-                print("🔄 Aguardando 5 segundos antes da próxima tentativa...")
-                time.sleep(5)
-        else:
-            print("❌ Falha em todas as tentativas de envio!")
+            return data_limpa  # Retorna original se não conseguir converter
+        except:
+            return data_texto
+
+    def extrair_mts_individual(self, soup):
+        """Extrai dados de MTS Individual"""
+        dados = []
+        try:
+            # Procurar tabela com headers específicos de MTS individual
+            tabelas = soup.find_all('table')
+            for tabela in tabelas:
+                header_row = tabela.find('tr')
+                if header_row and any(texto in header_row.get_text().upper() for texto in ['MÓDULO', 'LIÇÕES', 'DATA DA LIÇÃO']):
+                    linhas = tabela.find_all('tr')[1:]  # Pular header
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 6:
+                            dados.append({
+                                'data': self.processar_data(colunas[2].get_text(strip=True)),
+                                'modulo': colunas[0].get_text(strip=True),
+                                'licoes': colunas[1].get_text(strip=True),
+                                'autorizante': colunas[3].get_text(strip=True),
+                                'observacoes': colunas[5].get_text(strip=True) if len(colunas) > 5 else ''
+                            })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair MTS Individual: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def extrair_mts_grupo(self, soup):
+        """Extrai dados de MTS em Grupo"""
+        dados = []
+        try:
+            # Método mais robusto baseado no exemplo real fornecido
+            texto_pagina = soup.get_text()
             
-            # Salvar dados localmente como backup
-            try:
-                import json
-                with open(f"backup_dados_{int(time.time())}.json", "w", encoding="utf-8") as f:
-                    json.dump(body, f, ensure_ascii=False, indent=2)
-                print("💾 Dados salvos localmente como backup.")
-            except Exception as e:
-                print(f"❌ Erro ao salvar backup: {e}")
-
-        # Resumo final
-        resumo = body["resumo"]
-        print(f"\n🎯 RESUMO FINAL:")
-        print(f"   🏛️  Localidades: {resumo['total_localidades']}")
-        print(f"   📚 Total de turmas: {resumo['total_turmas']}")
-        print(f"   👥 Total matriculados: {resumo['total_matriculados']}")
-        print(f"   🎯 Total alunos únicos: {resumo['total_alunos_unicos']}")
-        print(f"   🔄 Total sobreposições: {resumo['total_sobreposicoes']}")
-        print(f"   📊 Taxa de sobreposição geral: {(resumo['total_sobreposicoes'] / resumo['total_matriculados'] * 100):.1f}%")
+            # Procurar por seção "MTS - Aulas em grupo"
+            if "MTS - Aulas em grupo" in texto_pagina or "MTS" in texto_pagina:
+                # Buscar tabelas após mencionar MTS
+                tabelas = soup.find_all('table')
+                for tabela in tabelas:
+                    linhas = tabela.find_all('tr')
+                    
+                    # Verificar se é tabela de MTS grupo pelo padrão de dados
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 6:  # Tabela com data, fases, páginas, lições, claves, observações
+                            data_texto = colunas[0].get_text(strip=True)
+                            
+                            # Verificar se parece com data (formato DD/MM/AAAA)
+                            if re.match(r'\d{2}/\d{2}/\d{4}', data_texto):
+                                dados.append({
+                                    'data': self.processar_data(data_texto),
+                                    'fases': colunas[1].get_text(strip=True),
+                                    'paginas': colunas[2].get_text(strip=True), 
+                                    'licoes': colunas[3].get_text(strip=True),
+                                    'claves': colunas[4].get_text(strip=True),
+                                    'observacoes': colunas[5].get_text(strip=True),
+                                    'autorizante': colunas[6].get_text(strip=True) if len(colunas) > 6 else ''
+                                })
+                            
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair MTS Grupo: {e}")
         
-        # Verificar se URL está correta
-        print(f"\n🔗 URL do Apps Script:")
-        print(f"   {URL_APPS_SCRIPT}")
+        return self.formatar_secao(dados)
+
+    def extrair_msa_individual(self, soup):
+        """Extrai dados de MSA Individual"""
+        # Similar ao MTS individual, mas procurando por padrões específicos de MSA
+        return ""  # Implementar conforme necessário
+
+    def extrair_msa_grupo(self, soup):
+        """Extrai dados de MSA em Grupo"""
+        dados = []
+        try:
+            texto_pagina = soup.get_text()
+            
+            # Método 1: Procurar por padrão específico do exemplo fornecido
+            # "Fase(s): de 1.1 até 1.1; Página(s): de 1 até 1; Clave(s): Sol	Apostila...	03/06/2025"
+            padrao_msa = re.findall(
+                r'Fase\(s\): de ([\d\.]+ até [\d\.]+).*?Página\(s\): de ([\d\s]+ até [\d\s]+).*?(\d{2}/\d{2}/\d{4})', 
+                texto_pagina, 
+                re.DOTALL
+            )
+            
+            for match in padrao_msa:
+                dados.append({
+                    'data': self.processar_data(match[2]),
+                    'fases': match[0],
+                    'paginas': match[1],
+                    'observacoes': 'MSA em Grupo'
+                })
+            
+            # Método 2: Se não encontrou pelo padrão, procurar tabela
+            if not dados:
+                tabelas = soup.find_all('table')
+                for tabela in tabelas:
+                    # Procurar header que indique MSA
+                    header = tabela.find('tr')
+                    if header and ('MSA' in header.get_text().upper() or 'Páginas' in header.get_text()):
+                        linhas = tabela.find_all('tr')[1:]
+                        for linha in linhas:
+                            colunas = linha.find_all('td')
+                            if len(colunas) >= 3:
+                                # Assumir que última coluna é data se parecer com data
+                                data_col = colunas[-1].get_text(strip=True)
+                                if re.match(r'\d{2}/\d{2}/\d{4}', data_col):
+                                    dados.append({
+                                        'data': self.processar_data(data_col),
+                                        'conteudo': ' | '.join([col.get_text(strip=True) for col in colunas[:-1]]),
+                                        'observacoes': 'MSA Grupo'
+                                    })
+                                    
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair MSA Grupo: {e}")
         
-        if "AKfycbzx5wJjPYSBEeoNQMc02fxi2j4JqROJ1HKbdM59tMHmb2TD2A2Y6IYDtTpHiZvmLFsGug" not in URL_APPS_SCRIPT:
-            print("⚠️ ATENÇÃO: Verifique se a URL do Google Apps Script está correta!")
+        return self.formatar_secao(dados)
 
-        navegador.close()
+    def extrair_provas(self, soup):
+        """Extrai dados de Provas"""
+        dados = []
+        try:
+            tabelas = soup.find_all('table')
+            for tabela in tabelas:
+                header_row = tabela.find('tr')
+                if header_row and any(texto in header_row.get_text().upper() for texto in ['NOTA', 'DATA DA PROVA']):
+                    linhas = tabela.find_all('tr')[1:]
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 4:
+                            dados.append({
+                                'data': self.processar_data(colunas[2].get_text(strip=True)),
+                                'fases': colunas[0].get_text(strip=True),
+                                'nota': colunas[1].get_text(strip=True),
+                                'autorizante': colunas[3].get_text(strip=True)
+                            })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Provas: {e}")
+        
+        return self.formatar_secao(dados)
 
-if __name__ == "__main__":
-    main()
+    def extrair_metodo(self, soup):
+        """Extrai dados de Método"""
+        dados = []
+        try:
+            tabelas = soup.find_all('table')
+            for tabela in tabelas:
+                header_row = tabela.find('tr')
+                if header_row and 'MÉTODO' in header_row.get_text().upper():
+                    linhas = tabela.find_all('tr')[1:]
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 4:
+                            dados.append({
+                                'data': self.processar_data(colunas[3].get_text(strip=True)),
+                                'metodo': colunas[2].get_text(strip=True),
+                                'paginas': colunas[0].get_text(strip=True),
+                                'licao': colunas[1].get_text(strip=True),
+                                'autorizante': colunas[4].get_text(strip=True) if len(colunas) > 4 else '',
+                                'observacoes': colunas[6].get_text(strip=True) if len(colunas) > 6 else ''
+                            })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Método: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def extrair_hinario(self, soup):
+        """Extrai dados de Hinário"""
+        dados = []
+        try:
+            tabelas = soup.find_all('table')
+            for tabela in tabelas:
+                header_row = tabela.find('tr')
+                if header_row and any(texto in header_row.get_text().upper() for texto in ['HINO', 'VOZ']):
+                    linhas = tabela.find_all('tr')[1:]
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 4:
+                            dados.append({
+                                'data': self.processar_data(colunas[2].get_text(strip=True)),
+                                'hino': colunas[0].get_text(strip=True),
+                                'voz': colunas[1].get_text(strip=True),
+                                'autorizante': colunas[3].get_text(strip=True),
+                                'observacoes': colunas[6].get_text(strip=True) if len(colunas) > 6 else ''
+                            })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Hinário: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def extrair_hinario_grupo(self, soup):
+        """Extrai dados de Hinário em Grupo"""
+        dados = []
+        try:
+            texto_pagina = soup.get_text()
+            if "Hinos - Aulas em grupo" in texto_pagina:
+                # Buscar padrões específicos
+                padrao = re.findall(r'Hino (\d+).*?(\d{2}/\d{2}/\d{4})', texto_pagina)
+                for match in padrao:
+                    dados.append({
+                        'data': self.processar_data(match[1]),
+                        'hino': f"Hino {match[0]}",
+                        'observacoes': ''
+                    })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Hinário Grupo: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def extrair_escalas(self, soup):
+        """Extrai dados de Escalas"""
+        dados = []
+        try:
+            tabelas = soup.find_all('table')
+            for tabela in tabelas:
+                header_row = tabela.find('tr')
+                if header_row and 'ESCALA' in header_row.get_text().upper():
+                    linhas = tabela.find_all('tr')[1:]
+                    for linha in linhas:
+                        colunas = linha.find_all('td')
+                        if len(colunas) >= 3:
+                            dados.append({
+                                'data': self.processar_data(colunas[1].get_text(strip=True)),
+                                'escala': colunas[0].get_text(strip=True),
+                                'autorizante': colunas[2].get_text(strip=True),
+                                'observacoes': colunas[5].get_text(strip=True) if len(colunas) > 5 else ''
+                            })
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Escalas: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def extrair_escalas_grupo(self, soup):
+        """Extrai dados de Escalas em Grupo"""
+        dados = []
+        try:
+            texto_pagina = soup.get_text()
+            if "Escalas - Aulas em grupo" in texto_pagina:
+                # Implementar lógica específica se necessário
+                pass
+        except Exception as e:
+            print(f"⚠️ Erro ao extrair Escalas Grupo: {e}")
+        
+        return self.formatar_secao(dados)
+
+    def formatar_secao(self, dados_lista):
+        """Formata uma seção de dados usando ';' como separador"""
+        if not dados_lista:
+            return ""
+        
+        entradas_formatadas = []
+        for entrada in dados_lista:
+            partes = []
+            for chave, valor in entrada.items():
+                if valor and str(valor).strip():
+                    partes.append(f"{chave}: {valor}")
+            
+            if partes:
+                entradas_formatadas.append(" | ".join(partes))
+        
+        return "; ".join(entradas_formatadas)
+
+    def extrair_dados_aluno_robusto(self, aluno_id):
+        """
+        Versão mais robusta que tenta múltiplos métodos para extrair dados
+        """
+        url = f"{self.base_url}licoes/index/{aluno_id}"
+        
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+                'Referer': 'https://musical.congregacao.org.br/painel'
+            }
+            
+            print(f"   🔗 Acessando: {url}")
+            response = self.session.get(url, headers=headers, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"   ❌ HTTP {response.status_code}")
+                return None
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Verificar se página carregou
+            if "Lições Aprovadas" not in soup.get_text():
+                print(f"   ⚠️ Página não carregou corretamente")
+                return None
+            
+            nome_aluno = self.extrair_nome_aluno(soup)
+            print(f"   📚 {nome_aluno}")
+            
+            # Extrair dados com múltiplas tentativas para cada seção
+            dados = {
+                'nome': nome_aluno,
+                'mts_individual': self.extrair_secao_robusta(soup, 'MTS', 'individual'),
+                'mts_grupo': self.extrair_secao_robusta(soup, 'MTS', 'grupo'),
+                'msa_individual': self.extrair_secao_robusta(soup, 'MSA', 'individual'),
+                'msa_grupo': self.extrair_secao_robusta(soup, 'MSA', 'grupo'),
+                'provas': self.extrair_secao_robusta(soup, 'PROVAS', ''),
+                'metodo': self.extrair_secao_robusta(soup, 'MÉTODO', ''),
+                'hinario': self.extrair_secao_robusta(soup, 'HINO', ''),
+                'hinario_grupo': self.extrair_secao_robusta(soup, 'HINOS', 'grupo'),
+                'escalas': self.extrair_secao_robusta(soup, 'ESCALA', ''),
+                'escalas_grupo': self.extrair_secao_robusta(soup, 'ESCALAS', 'grupo'),
+                'id_aluno': aluno_id,
+                'data_extracao': datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+            }
+            
+            # Mostrar resumo do que foi extraído
+            resumo = []
+            for campo, valor in dados.items():
+                if campo not in ['nome', 'id_aluno', 'data_extracao'] and valor:
+                    resumo.append(campo)
+            
+            if resumo:
+                print(f"   ✅ Extraído: {', '.join(resumo)}")
+            else:
+                print(f"   ⚠️ Nenhum dado encontrado")
+            
+            return dados
+            
+        except Exception as e:
+            print(f"   ❌ Erro: {e}")
+            return None
+    
+    def extrair_secao_robusta(self, soup, tipo_secao, subtipo):
+        """
+        Método robusto que tenta extrair dados de uma seção específica
+        usando múltiplas estratégias
+        """
+        dados_encontrados = []
+        
+        try:
+            # Estratégia 1: Procurar por texto indicativo da seção
+            texto_completo = soup.get_text()
+            
+            # Estratégia 2: Procurar tabelas relevantes
+            tabelas = soup.find_all('table')
+            
+            for tabela in tabelas:
+                # Verificar se a tabela pertence à seção desejada
+                tabela_texto = tabela.get_text().upper()
+                
+                if tipo_secao in tabela_texto:
+                    if subtipo and 'GRUPO' in subtipo.upper() and 'GRUPO' not in tabela_texto:
+                        continue
+                    if subtipo and 'INDIVIDUAL' in subtipo.upper() and 'GRUPO' in tabela_texto:
+                        continue
+                    
+                    # Extrair dados da tabela
+                    linhas = tabela.find_all('tr')
+                    
+                    for i, linha in enumerate(linhas):
+                        if i == 0:  # Pular header
+                            continue
+                            
+                        colunas = linha.find_all(['td', 'th'])
+                        if len(colunas) >= 3:  # Precisa ter pelo menos 3 colunas
+                            
+                            # Procurar por coluna que contenha data
+                            data_encontrada = None
+                            for col in colunas:
+                                col_texto = col.get_text(strip=True)
+                                if re.match(r'\d{1,2}/\d{1,2}/\d{4}', col_texto):
+                                    data_encontrada = self.processar_data(col_texto)
+                                    break
+                            
+                            if data_encontrada:
+                                # Construir registro com todas as informações da linha
+                                registro = {'data': data_encontrada}
+                                
+                                for j, col in enumerate(colunas):
+                                    col_texto = col.get_text(strip=True)
+                                    if col_texto and not re.match(r'\d{1,2}/\d{1,2}/\d{4}', col_texto):
+                                        registro[f'col_{j}'] = col_texto[:100]  # Limitar tamanho
+                                
+                                dados_encontrados.append(
