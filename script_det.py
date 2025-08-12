@@ -229,6 +229,8 @@ class MusicLessonScraper:
         
         return self.formatar_secao(dados)
 
+
+
     def extrair_hinario(self, soup):
         """Extrai dados de Hinário"""
         dados = []
@@ -439,4 +441,248 @@ class MusicLessonScraper:
                                     if col_texto and not re.match(r'\d{1,2}/\d{1,2}/\d{4}', col_texto):
                                         registro[f'col_{j}'] = col_texto[:100]  # Limitar tamanho
                                 
-                                dados_encontrados.append(
+                                dados_encontrados.append(registro)
+            
+            # Estratégia 3: Procurar por padrões específicos no texto
+            if tipo_secao == 'MSA' and 'grupo' in subtipo.lower():
+                # Padrão específico do MSA: "Fase(s): de X até Y"
+                padrao = re.findall(
+                    r'Fase\(s\): de ([\d\.]+) até ([\d\.]+).*?(\d{2}/\d{2}/\d{4})',
+                    texto_completo,
+                    re.DOTALL
+                )
+                
+                for match in padrao:
+                    dados_encontrados.append({
+                        'data': self.processar_data(match[2]),
+                        'fases': f"{match[0]} até {match[1]}",
+                        'tipo': 'MSA Grupo'
+                    })
+            
+        except Exception as e:
+            print(f"   ⚠️ Erro ao extrair {tipo_secao} {subtipo}: {e}")
+        
+        return self.formatar_secao(dados_encontrados)
+
+def obter_lista_alunos(pagina, session):
+    """
+    Obtém lista de IDs de alunos navegando pelo sistema automaticamente
+    """
+    lista_ids = []
+    
+    try:
+        print("🔍 Navegando para seção de alunos...")
+        
+        # Navegar para G.E.M -> Alunos (adapte conforme a estrutura do site)
+        try:
+            gem_selector = 'span:has-text("G.E.M")'
+            pagina.wait_for_selector(gem_selector, timeout=15000)
+            gem_element = pagina.locator(gem_selector).first
+            gem_element.hover()
+            pagina.wait_for_timeout(1000)
+            gem_element.click()
+            
+            # Clicar em "Alunos" ou link similar
+            pagina.wait_for_selector('a[href*="alunos"], a[href*="licoes"]', timeout=10000)
+            alunos_link = pagina.locator('a[href*="alunos"], a[href*="licoes"]').first
+            alunos_link.click()
+            
+            print("✅ Navegação para alunos realizada")
+            
+        except Exception as e:
+            print(f"⚠️ Erro na navegação: {e}")
+            # Fallback: usar lista manual por enquanto
+            return ["635849"]  # ID de exemplo
+        
+        # Aguardar carregamento da lista de alunos
+        pagina.wait_for_timeout(3000)
+        
+        # Extrair IDs dos alunos da página atual
+        # Método 1: Procurar por links que contenham "/licoes/index/"
+        links_licoes = pagina.locator('a[href*="/licoes/index/"]').all()
+        
+        for link in links_licoes:
+            href = link.get_attribute('href')
+            if href:
+                # Extrair ID do URL: /licoes/index/123456
+                match = re.search(r'/licoes/index/(\d+)', href)
+                if match:
+                    aluno_id = match.group(1)
+                    if aluno_id not in lista_ids:
+                        lista_ids.append(aluno_id)
+        
+        # Método 2: Se não encontrou links, procurar em inputs ou outros elementos
+        if not lista_ids:
+            # Procurar por inputs ou elementos que contenham IDs
+            elementos_com_id = pagina.locator('[value*="6"], [data-id*="6"]').all()
+            for elemento in elementos_com_id:
+                value = elemento.get_attribute('value') or elemento.get_attribute('data-id')
+                if value and value.isdigit() and len(value) >= 6:
+                    if value not in lista_ids:
+                        lista_ids.append(value)
+        
+        # Método 3: Usar requests para pegar lista via AJAX se necessário
+        if not lista_ids:
+            try:
+                headers = {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Referer': 'https://musical.congregacao.org.br/painel',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                
+                # Tentar endpoint que pode retornar lista de alunos
+                endpoints_possveis = [
+                    'https://musical.congregacao.org.br/alunos/lista',
+                    'https://musical.congregacao.org.br/matriculas/lista_alunos',
+                    'https://musical.congregacao.org.br/licoes/lista_alunos'
+                ]
+                
+                for endpoint in endpoints_possveis:
+                    try:
+                        resp = session.get(endpoint, headers=headers, timeout=10)
+                        if resp.status_code == 200:
+                            # Procurar IDs na resposta
+                            ids_encontrados = re.findall(r'"id["\s]*:[\s]*["\']?(\d{6,})["\']?', resp.text)
+                            for id_encontrado in ids_encontrados:
+                                if id_encontrado not in lista_ids:
+                                    lista_ids.append(id_encontrado)
+                            
+                            if lista_ids:
+                                break
+                    except:
+                        continue
+                        
+            except Exception as e:
+                print(f"⚠️ Erro ao buscar via AJAX: {e}")
+        
+        # Se ainda não encontrou, usar lista de exemplo
+        if not lista_ids:
+            print("⚠️ Não foi possível obter lista automaticamente. Usando IDs de exemplo.")
+            lista_ids = ["635849"]  # Adicione mais IDs conhecidos aqui
+        
+        print(f"🎯 Encontrados {len(lista_ids)} alunos para processar")
+        return lista_ids
+        
+    except Exception as e:
+        print(f"❌ Erro ao obter lista de alunos: {e}")
+        return ["635849"]  # Fallback
+
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright para usar em requests"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def main():
+    tempo_inicio = time.time()
+    
+    with sync_playwright() as p:
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        
+        # Configurações do navegador
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        })
+        
+        pagina.goto(URL_INICIAL)
+        
+        # Login
+        pagina.fill('input[name="login"]', EMAIL)
+        pagina.fill('input[name="password"]', SENHA)
+        pagina.click('button[type="submit"]')
+        
+        try:
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login. Verifique suas credenciais.")
+            navegador.close()
+            return
+        
+        # Criar sessão com cookies do navegador
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+        
+        # Inicializar scraper
+        scraper = MusicLessonScraper(session)
+        
+        # Obter lista de alunos automaticamente
+        lista_alunos = obter_lista_alunos(pagina, session)
+        print(f"🎯 Total de alunos para processar: {len(lista_alunos)}")
+        
+        resultado = []
+        
+        for i, aluno_id in enumerate(lista_alunos, 1):
+            if time.time() - tempo_inicio > 1800:  # 30 minutos
+                print("⏹️ Tempo limite atingido. Encerrando a coleta.")
+                break
+            
+            print(f"🔍 Processando aluno {i}/{len(lista_alunos)} - ID: {aluno_id}")
+            
+            dados_aluno = scraper.extrair_dados_aluno_robusto(aluno_id)
+            
+            if dados_aluno:
+                # Converter para formato de linha para planilha
+                linha = [
+                    dados_aluno['nome'],
+                    dados_aluno['mts_individual'],
+                    dados_aluno['mts_grupo'],
+                    dados_aluno['msa_individual'],
+                    dados_aluno['msa_grupo'],
+                    dados_aluno['provas'],
+                    dados_aluno['metodo'],
+                    dados_aluno['hinario'],
+                    dados_aluno['hinario_grupo'],
+                    dados_aluno['escalas'],
+                    dados_aluno['escalas_grupo'],
+                    dados_aluno['id_aluno'],
+                    dados_aluno['data_extracao']
+                ]
+                resultado.append(linha)
+            
+            # Pausa entre requisições
+            time.sleep(2)
+        
+        print(f"📊 Total de alunos processados: {len(resultado)}")
+        
+        # Preparar dados para envio
+        body = {
+            "tipo": "licoes_musicais",
+            "dados": resultado,
+            "headers": [
+                "Nome", "MTS Individual", "MTS Grupo", "MSA Individual", "MSA Grupo",
+                "Provas", "Método", "Hinário", "Hinário Grupo", "Escalas", "Escalas Grupo",
+                "ID Aluno", "Data Extração"
+            ],
+            "resumo": {
+                "total_alunos": len(resultado),
+                "tempo_processamento": round(time.time() - tempo_inicio, 2),
+                "data_coleta": datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+            }
+        }
+        
+        # Enviar dados para Apps Script
+        try:
+            resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
+            print("✅ Dados enviados para Google Sheets!")
+            print("Status code:", resposta_post.status_code)
+            print("Resposta do Apps Script:", resposta_post.text)
+        except Exception as e:
+            print(f"❌ Erro ao enviar para Apps Script: {e}")
+            
+            # Salvar dados localmente como backup
+            import csv
+            with open('backup_licoes_musicais.csv', 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f, delimiter=';')
+                writer.writerow(body["headers"])
+                writer.writerows(resultado)
+            print("💾 Dados salvos localmente como backup")
+        
+        print(f"\n⏱️ Tempo total de processamento: {round(time.time() - tempo_inicio, 2)} segundos")
+        
+        navegador.close()
+
+if __name__ == "__main__":
+    main()
+        
