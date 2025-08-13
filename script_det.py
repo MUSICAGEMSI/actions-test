@@ -120,7 +120,7 @@ def extrair_dias_da_semana(dia_hora_texto):
         'QUA': 'QUA', 'QUARTA': 'QUA',
         'QUI': 'QUI', 'QUINTA': 'QUI',
         'SEX': 'SEX', 'SEXTA': 'SEX',
-        'SAB': 'SÁB', 'SÁBADO': 'SÁB', 'SABADO': 'SÁB'
+        'SÁB': 'SÁB', 'SÁBADO': 'SÁB', 'SÁBADO': 'SÁB'
     }
     
     dias_encontrados = set()
