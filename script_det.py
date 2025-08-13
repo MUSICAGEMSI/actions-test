@@ -24,14 +24,23 @@ def extrair_localidade_limpa(localidade_texto):
     """
     Extrai apenas o nome da localidade, removendo HTML e informações extras
     """
-    # Remove tags HTML
-    localidade_texto = localidade_texto.replace('<\\/span>', '').replace('<span>', '').replace('</span>', '')
+    import re
+    
+    # Remove todas as tags HTML e spans escapados
+    localidade_texto = re.sub(r'<\\?/?span[^>]*>', '', localidade_texto)
+    localidade_texto = re.sub(r'<[^>]+>', '', localidade_texto)
+    
+    # Remove classe CSS escapada
+    localidade_texto = re.sub(r"class='[^']*'", '', localidade_texto)
     
     # Pega apenas a parte antes do " | "
     if ' | ' in localidade_texto:
         localidade = localidade_texto.split(' | ')[0].strip()
     else:
         localidade = localidade_texto.strip()
+    
+    # Remove espaços extras e caracteres especiais
+    localidade = re.sub(r'\s+', ' ', localidade).strip()
     
     return localidade
 
@@ -134,8 +143,11 @@ def obter_candidatos_por_localidade_e_tipo(session, tipo_ministerio):
                             ministerio = record[3]
                             nivel = record[5]
                             
+                            print(f"🔍 Processando: {ministerio} | {nivel} | {localidade_completa[:50]}...")
+                            
                             # Filtrar por tipo de ministério
                             if ministerio != tipo_ministerio:
+                                print(f"⏭️ Pulando: ministério {ministerio} != {tipo_ministerio}")
                                 continue
                             
                             # Extrair localidade limpa
@@ -143,12 +155,15 @@ def obter_candidatos_por_localidade_e_tipo(session, tipo_ministerio):
                             
                             # Ignorar compartilhados
                             if 'COMPARTILHADO' in nivel.upper() or 'COMPARTILHADA' in nivel.upper():
+                                print(f"⏭️ Pulando: {nivel} contém COMPARTILHADO")
                                 continue
                             
                             # Contar apenas os níveis válidos
                             if nivel in niveis_validos:
                                 dados_por_localidade[localidade][nivel] += 1
-                                print(f"📊 {localidade}: {nivel} (+1)")
+                                print(f"✅ {localidade}: {nivel} (+1)")
+                            else:
+                                print(f"❌ Nível inválido: {nivel}")
                 
                 print(f"📊 Total de localidades processadas para {tipo_ministerio}: {len(dados_por_localidade)}")
                 return dict(dados_por_localidade)
@@ -257,18 +272,24 @@ def obter_grupos_musicais_por_localidade_e_tipo(session, tipo_ministerio):
                             ministerio = record[3]
                             nivel = record[4]
                             
+                            print(f"🎵 Processando grupo: {ministerio} | {nivel} | {localidade}")
+                            
                             # Filtrar por tipo de ministério
                             if ministerio != tipo_ministerio:
+                                print(f"⏭️ Pulando grupo: ministério {ministerio} != {tipo_ministerio}")
                                 continue
                             
                             # Ignorar compartilhados
                             if 'COMPARTILHADO' in nivel.upper() or 'COMPARTILHADA' in nivel.upper():
+                                print(f"⏭️ Pulando grupo: {nivel} contém COMPARTILHADO")
                                 continue
                             
                             # Contar apenas os níveis válidos para grupos
                             if nivel in niveis_grupos:
                                 dados_grupos_por_localidade[localidade][nivel] += 1
-                                print(f"🎵 {localidade}: {nivel} (+1)")
+                                print(f"✅ Grupo {localidade}: {nivel} (+1)")
+                            else:
+                                print(f"❌ Nível de grupo inválido: {nivel}")
                 
                 print(f"🎵 Total de localidades processadas nos grupos para {tipo_ministerio}: {len(dados_grupos_por_localidade)}")
                 return dict(dados_grupos_por_localidade)
