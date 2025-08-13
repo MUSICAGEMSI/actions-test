@@ -111,26 +111,50 @@ def obter_alunos_unicos(session, turma_id):
 
 def extrair_dias_da_semana(dia_hora_texto):
     """
-    Extrai os dias da semana do texto de horário
+    Extrai os dias da semana do texto de horário com melhor detecção
     """
+    # Mapeamento mais abrangente de dias
     dias_map = {
-        'DOM': 'DOM', 'DOMINGO': 'DOM',
-        'SEG': 'SEG', 'SEGUNDA': 'SEG',
-        'TER': 'TER', 'TERÇA': 'TER', 'TERCA': 'TER',
-        'QUA': 'QUA', 'QUARTA': 'QUA',
-        'QUI': 'QUI', 'QUINTA': 'QUI',
-        'SEX': 'SEX', 'SEXTA': 'SEX',
-        'SÁB': 'SÁB', 'SÁBADO': 'SÁB', 'SÁBADO': 'SÁB'
+        'DOMINGO': 'DOM', 'DOM': 'DOM',
+        'SEGUNDA': 'SEG', 'SEGUNDA-FEIRA': 'SEG', 'SEG': 'SEG',
+        'TERÇA': 'TER', 'TERÇA-FEIRA': 'TER', 'TERCA': 'TER', 'TER': 'TER',
+        'QUARTA': 'QUA', 'QUARTA-FEIRA': 'QUA', 'QUA': 'QUA',
+        'QUINTA': 'QUI', 'QUINTA-FEIRA': 'QUI', 'QUI': 'QUI',
+        'SEXTA': 'SEX', 'SEXTA-FEIRA': 'SEX', 'SEX': 'SEX',
+        'SÁBADO': 'SÁB', 'SABADO': 'SÁB', 'SÁB': 'SÁB'
     }
     
     dias_encontrados = set()
     texto_upper = dia_hora_texto.upper()
     
+    # Remover acentos para melhor matching
+    texto_normalizado = texto_upper.replace('Ç', 'C').replace('Ã', 'A')
+    
+    # Buscar por padrões mais específicos primeiro
     for dia_key, dia_value in dias_map.items():
+        # Busca exata
+        if dia_key in texto_normalizado:
+            dias_encontrados.add(dia_value)
+        
+        # Busca no texto original também (caso tenha acentos)
         if dia_key in texto_upper:
             dias_encontrados.add(dia_value)
     
-    return sorted(list(dias_encontrados))
+    # Busca adicional por abreviações comuns
+    abreviacoes = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'SÁB']
+    for abrev in abreviacoes:
+        if abrev in texto_upper:
+            # Normalizar SÁB para SÁB
+            if abrev == 'SAB':
+                dias_encontrados.add('SÁB')
+            else:
+                dias_encontrados.add(abrev)
+    
+    # Converter para lista e ordenar cronologicamente
+    ordem_cronologica = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB']
+    dias_ordenados = [dia for dia in ordem_cronologica if dia in dias_encontrados]
+    
+    return dias_ordenados
 
 def processar_relatorio_por_localidade(dados_turmas, session):
     """
@@ -158,6 +182,7 @@ def processar_relatorio_por_localidade(dados_turmas, session):
             
             # Extrair dias da semana
             dias_turma = extrair_dias_da_semana(dia_hora)
+            print(f"   🗓️ Dias extraídos de '{dia_hora}': {dias_turma}")
             
             # Adicionar aos dados da localidade
             localidades[localidade]['turmas'].append(turma)
@@ -178,7 +203,7 @@ def processar_relatorio_por_localidade(dados_turmas, session):
 
 def gerar_relatorio_formatado(localidades):
     """
-    Gera o relatório no formato solicitado
+    Gera o relatório no formato solicitado com ordenação cronológica dos dias
     """
     relatorio = []
     
@@ -193,14 +218,19 @@ def gerar_relatorio_formatado(localidades):
     ]
     relatorio.append(cabecalho)
     
+    # Ordem cronológica dos dias
+    ordem_cronologica = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB']
+    
     # Dados por localidade
     for localidade, dados in localidades.items():
         quantidade_turmas = len(dados['turmas'])
         soma_matriculados = dados['total_matriculados']
         matriculados_unicos = len(dados['alunos_unicos'])
         
-        # Montar string dos dias
-        dias_ordenados = sorted(dados['dias_semana'])
+        # Ordenar dias cronologicamente
+        dias_ordenados = [dia for dia in ordem_cronologica if dia in dados['dias_semana']]
+        
+        # Montar string dos dias no formato correto
         if len(dias_ordenados) > 1:
             dias_texto = f"{dias_ordenados[0]}/{dias_ordenados[-1]}"
         elif len(dias_ordenados) == 1:
@@ -208,7 +238,7 @@ def gerar_relatorio_formatado(localidades):
         else:
             dias_texto = ""
         
-        # Contar por dia da semana
+        # Contar turmas por dia da semana
         contadores_dias = {"DOM": 0, "SEG": 0, "TER": 0, "QUA": 0, "QUI": 0, "SEX": 0, "SÁB": 0}
         
         for turma in dados['turmas']:
