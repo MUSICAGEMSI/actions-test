@@ -1,4 +1,4 @@
-# script_turmas.py
+# script_relatorio_localidade.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -9,6 +9,7 @@ import requests
 import time
 import json
 from bs4 import BeautifulSoup
+from collections import defaultdict
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -34,7 +35,6 @@ def obter_matriculados_reais(session, turma_id):
         resp = session.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
-            # Usar BeautifulSoup para parsing mais confiável
             soup = BeautifulSoup(resp.text, 'html.parser')
             
             # Primeiro: tentar encontrar o texto "de um total de X registros"
@@ -44,7 +44,6 @@ def obter_matriculados_reais(session, turma_id):
                 if match:
                     return int(match.group(1))
                     
-                # Fallback: tentar "Mostrando de X até Y"
                 match2 = re.search(r'Mostrando de \d+ até (\d+)', info_div.text)
                 if match2:
                     return int(match2.group(1))
@@ -53,12 +52,10 @@ def obter_matriculados_reais(session, turma_id):
             tbody = soup.find('tbody')
             if tbody:
                 rows = tbody.find_all('tr')
-                # Filtrar linhas vazias ou inválidas
                 valid_rows = [row for row in rows if len(row.find_all('td')) >= 4]
                 return len(valid_rows)
             
             # Terceiro: contar por padrão de linhas com dados de alunos
-            # Procurar por padrões de nome (contém hífen e barra)
             aluno_pattern = re.findall(r'[A-Z\s]+ - [A-Z/]+/\d+', resp.text)
             if aluno_pattern:
                 return len(aluno_pattern)
@@ -68,11 +65,176 @@ def obter_matriculados_reais(session, turma_id):
             if desmatricular_count > 0:
                 return desmatricular_count
                 
-        return 0  # Se não conseguir encontrar, retorna 0
+        return 0
         
     except Exception as e:
         print(f"⚠️ Erro ao obter matriculados para turma {turma_id}: {e}")
         return -1
+
+def obter_alunos_unicos(session, turma_id):
+    """
+    Obtém lista de alunos únicos de uma turma para contagem sem repetição
+    """
+    try:
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        }
+        
+        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
+        resp = session.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            alunos = set()
+            
+            # Procurar por linhas da tabela com dados de alunos
+            tbody = soup.find('tbody')
+            if tbody:
+                rows = tbody.find_all('tr')
+                for row in rows:
+                    tds = row.find_all('td')
+                    if len(tds) >= 2:
+                        # Assumindo que o nome do aluno está na primeira coluna de dados
+                        nome_aluno = tds[0].get_text(strip=True)
+                        if nome_aluno and nome_aluno not in ['', 'Nenhum registro encontrado']:
+                            alunos.add(nome_aluno)
+            
+            return list(alunos)
+        
+        return []
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao obter alunos únicos para turma {turma_id}: {e}")
+        return []
+
+def extrair_dias_da_semana(dia_hora_texto):
+    """
+    Extrai os dias da semana do texto de horário
+    """
+    dias_map = {
+        'DOM': 'DOM', 'DOMINGO': 'DOM',
+        'SEG': 'SEG', 'SEGUNDA': 'SEG',
+        'TER': 'TER', 'TERÇA': 'TER', 'TERCA': 'TER',
+        'QUA': 'QUA', 'QUARTA': 'QUA',
+        'QUI': 'QUI', 'QUINTA': 'QUI',
+        'SEX': 'SEX', 'SEXTA': 'SEX',
+        'SAB': 'SÁB', 'SÁBADO': 'SÁB', 'SABADO': 'SÁB'
+    }
+    
+    dias_encontrados = set()
+    texto_upper = dia_hora_texto.upper()
+    
+    for dia_key, dia_value in dias_map.items():
+        if dia_key in texto_upper:
+            dias_encontrados.add(dia_value)
+    
+    return sorted(list(dias_encontrados))
+
+def processar_relatorio_por_localidade(dados_turmas, session):
+    """
+    Processa os dados das turmas e agrupa por localidade
+    """
+    localidades = defaultdict(lambda: {
+        'turmas': [],
+        'total_matriculados': 0,
+        'alunos_unicos': set(),
+        'dias_semana': set()
+    })
+    
+    print("📊 Processando dados por localidade...")
+    
+    for turma in dados_turmas:
+        try:
+            localidade = turma[0]  # Igreja/Localidade
+            turma_id = turma[9]    # ID da turma
+            matriculados_badge = int(turma[3]) if turma[3].isdigit() else 0
+            dia_hora = turma[6]    # Dia - Hora
+            
+            # Obter alunos únicos desta turma
+            print(f"🔍 Obtendo alunos únicos da turma {turma_id} - {localidade}")
+            alunos_turma = obter_alunos_unicos(session, turma_id)
+            
+            # Extrair dias da semana
+            dias_turma = extrair_dias_da_semana(dia_hora)
+            
+            # Adicionar aos dados da localidade
+            localidades[localidade]['turmas'].append(turma)
+            localidades[localidade]['total_matriculados'] += matriculados_badge
+            localidades[localidade]['alunos_unicos'].update(alunos_turma)
+            localidades[localidade]['dias_semana'].update(dias_turma)
+            
+            print(f"   ✅ {localidade}: +{matriculados_badge} matriculados, +{len(alunos_turma)} alunos únicos")
+            
+            # Pausa para não sobrecarregar
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao processar turma: {e}")
+            continue
+    
+    return localidades
+
+def gerar_relatorio_formatado(localidades):
+    """
+    Gera o relatório no formato solicitado
+    """
+    relatorio = []
+    
+    # Cabeçalho
+    cabecalho = [
+        "LOCALIDADE",
+        "QUANTIDADE DE TURMAS",
+        "SOMA DOS MATRICULADOS",
+        "MATRICULADOS SEM REPETIÇÃO",
+        "DIAS EM QUE HÁ GEM",
+        "DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"
+    ]
+    relatorio.append(cabecalho)
+    
+    # Dados por localidade
+    for localidade, dados in localidades.items():
+        quantidade_turmas = len(dados['turmas'])
+        soma_matriculados = dados['total_matriculados']
+        matriculados_unicos = len(dados['alunos_unicos'])
+        
+        # Montar string dos dias
+        dias_ordenados = sorted(dados['dias_semana'])
+        if len(dias_ordenados) > 1:
+            dias_texto = f"{dias_ordenados[0]}/{dias_ordenados[-1]}"
+        elif len(dias_ordenados) == 1:
+            dias_texto = dias_ordenados[0]
+        else:
+            dias_texto = ""
+        
+        # Contar por dia da semana
+        contadores_dias = {"DOM": 0, "SEG": 0, "TER": 0, "QUA": 0, "QUI": 0, "SEX": 0, "SÁB": 0}
+        
+        for turma in dados['turmas']:
+            dias_turma = extrair_dias_da_semana(turma[6])
+            for dia in dias_turma:
+                if dia in contadores_dias:
+                    contadores_dias[dia] += 1
+        
+        linha = [
+            localidade,
+            quantidade_turmas,
+            soma_matriculados,
+            matriculados_unicos,
+            dias_texto,
+            contadores_dias["DOM"] if contadores_dias["DOM"] > 0 else "",
+            contadores_dias["SEG"] if contadores_dias["SEG"] > 0 else "",
+            contadores_dias["TER"] if contadores_dias["TER"] > 0 else "",
+            contadores_dias["QUA"] if contadores_dias["QUA"] > 0 else "",
+            contadores_dias["QUI"] if contadores_dias["QUI"] > 0 else "",
+            contadores_dias["SEX"] if contadores_dias["SEX"] > 0 else "",
+            contadores_dias["SÁB"] if contadores_dias["SÁB"] > 0 else ""
+        ]
+        
+        relatorio.append(linha)
+    
+    return relatorio
 
 def extrair_cookies_playwright(pagina):
     """
@@ -88,7 +250,6 @@ def main():
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
         
-        # Configurações adicionais do navegador
         pagina.set_extra_http_headers({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
         })
@@ -172,6 +333,7 @@ def main():
         session = requests.Session()
         session.cookies.update(cookies_dict)
 
+        # Coletar dados das turmas (mesmo processo do código original)
         resultado = []
         parar = False
         pagina_atual = 1
@@ -183,7 +345,6 @@ def main():
 
             print(f"📄 Processando página {pagina_atual}...")
 
-            # Extrair dados de todas as linhas da página atual
             linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
             
             for i, linha in enumerate(linhas):
@@ -193,26 +354,21 @@ def main():
                     break
 
                 try:
-                    # Extrair dados das colunas (exceto a primeira coluna do radio e última de ações)
                     colunas_td = linha.query_selector_all('td')
                     
-                    # Pular primeira coluna (radio button) e capturar dados das outras
                     dados_linha = []
-                    for j, td in enumerate(colunas_td[1:], 1):  # Skip first column
-                        if j == len(colunas_td) - 1:  # Última coluna (ações)
+                    for j, td in enumerate(colunas_td[1:], 1):
+                        if j == len(colunas_td) - 1:
                             continue
                         
-                        # Tratamento especial para coluna de matriculados (badge)
                         badge = td.query_selector('span.badge')
                         if badge:
                             dados_linha.append(badge.inner_text().strip())
                         else:
                             texto = td.inner_text().strip().replace('\n', ' ').replace('\t', ' ')
-                            # Limpar texto de ícones e espaços extras
                             texto = re.sub(r'\s+', ' ', texto).strip()
                             dados_linha.append(texto)
 
-                    # Extrair ID da turma do input radio
                     radio_input = linha.query_selector('input[type="radio"][name="item[]"]')
                     if not radio_input:
                         continue
@@ -221,45 +377,25 @@ def main():
                     if not turma_id:
                         continue
 
-                    # Matriculados mostrado no badge (coluna 4, índice 3)
                     matriculados_badge = dados_linha[3] if len(dados_linha) > 3 else "0"
 
-                    print(f"🔍 Verificando turma {turma_id} - Badge: {matriculados_badge}")
-
-                    # Obter número real de matriculados via API
-                    matriculados_reais = obter_matriculados_reais(session, turma_id)
-                    
-                    # Determinar status
-                    if matriculados_reais >= 0:
-                        if matriculados_reais == int(matriculados_badge):
-                            status_verificacao = "✅ OK"
-                        else:
-                            status_verificacao = f"⚠️ Diferença (Badge: {matriculados_badge}, Real: {matriculados_reais})"
-                    else:
-                        status_verificacao = "❌ Erro ao verificar"
-
-                    # Montar linha completa
                     linha_completa = [
-                        dados_linha[0] if len(dados_linha) > 0 else "",  # Igreja
-                        dados_linha[1] if len(dados_linha) > 1 else "",  # Curso
-                        dados_linha[2] if len(dados_linha) > 2 else "",  # Turma
-                        matriculados_badge,                              # Matriculados Badge
-                        dados_linha[4] if len(dados_linha) > 4 else "",  # Início
-                        dados_linha[5] if len(dados_linha) > 5 else "",  # Término
-                        dados_linha[6] if len(dados_linha) > 6 else "",  # Dia - Hora
-                        dados_linha[7] if len(dados_linha) > 7 else "",  # Status
-                        "Ações",                                         # Ações
-                        turma_id,                                        # ID Turma
-                        matriculados_badge,                              # Badge (duplicado para análise)
-                        str(matriculados_reais) if matriculados_reais >= 0 else "Erro",  # Real
-                        status_verificacao                               # Status Verificação
+                        dados_linha[0] if len(dados_linha) > 0 else "",
+                        dados_linha[1] if len(dados_linha) > 1 else "",
+                        dados_linha[2] if len(dados_linha) > 2 else "",
+                        matriculados_badge,
+                        dados_linha[4] if len(dados_linha) > 4 else "",
+                        dados_linha[5] if len(dados_linha) > 5 else "",
+                        dados_linha[6] if len(dados_linha) > 6 else "",
+                        dados_linha[7] if len(dados_linha) > 7 else "",
+                        "Ações",
+                        turma_id,
+                        matriculados_badge,
+                        "0",  # Será calculado depois
+                        "Pendente"
                     ]
 
                     resultado.append(linha_completa)
-                    print(f"   📊 {linha_completa[0]} | {linha_completa[1]} | {linha_completa[2][:50]}... | Badge: {matriculados_badge}, Real: {matriculados_reais}")
-
-                    # Pequena pausa para não sobrecarregar
-                    time.sleep(0.5)
 
                 except Exception as e:
                     print(f"⚠️ Erro ao processar linha {i}: {e}")
@@ -270,13 +406,11 @@ def main():
 
             # Verificar se há próxima página
             try:
-                # Procurar pelo botão "Next" do DataTable
                 btn_next = pagina.query_selector('a.paginate_button.next:not(.disabled)')
                 if btn_next and btn_next.is_enabled():
                     print(f"➡️ Avançando para página {pagina_atual + 1}...")
                     btn_next.click()
                     
-                    # Aguardar carregamento da nova página
                     pagina.wait_for_function(
                         """
                         () => {
@@ -286,7 +420,7 @@ def main():
                         """,
                         timeout=15000
                     )
-                    pagina.wait_for_timeout(3000)  # Aguardar estabilização
+                    pagina.wait_for_timeout(3000)
                     pagina_atual += 1
                 else:
                     print("📄 Última página alcançada.")
@@ -296,22 +430,25 @@ def main():
                 print(f"⚠️ Erro na paginação: {e}")
                 break
 
-        print(f"📊 Total de turmas processadas: {len(resultado)}")
+        print(f"📊 Total de turmas coletadas: {len(resultado)}")
 
+        # Processar dados por localidade
+        print("\n🏢 Processando relatório por localidade...")
+        localidades = processar_relatorio_por_localidade(resultado, session)
+        
+        # Gerar relatório formatado
+        relatorio_formatado = gerar_relatorio_formatado(localidades)
+        
         # Preparar dados para envio
         body = {
-            "tipo": "turmas_matriculados",
-            "dados": resultado,
-            "headers": [
-                "Igreja", "Curso", "Turma", "Matriculados_Badge", "Início", 
-                "Término", "Dia_Hora", "Status", "Ações", "ID_Turma", 
-                "Badge_Duplicado", "Real_Matriculados", "Status_Verificação"
-            ],
+            "tipo": "relatorio_localidades",
+            "relatorio_formatado": relatorio_formatado,
+            "dados_brutos": resultado,
             "resumo": {
+                "total_localidades": len(localidades),
                 "total_turmas": len(resultado),
-                "turmas_com_diferenca": len([r for r in resultado if "Diferença" in r[-1]]),
-                "turmas_ok": len([r for r in resultado if "✅ OK" in r[-1]]),
-                "turmas_erro": len([r for r in resultado if "❌ Erro" in r[-1]])
+                "total_matriculados": sum(loc['total_matriculados'] for loc in localidades.values()),
+                "total_alunos_unicos": sum(len(loc['alunos_unicos']) for loc in localidades.values())
             }
         }
 
@@ -324,12 +461,21 @@ def main():
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
 
-        # Mostrar resumo
-        print("\n📈 RESUMO DA COLETA:")
-        print(f"   🎯 Total de turmas: {len(resultado)}")
-        print(f"   ✅ Turmas OK: {len([r for r in resultado if '✅ OK' in r[-1]])}")
-        print(f"   ⚠️ Com diferenças: {len([r for r in resultado if 'Diferença' in r[-1]])}")
-        print(f"   ❌ Com erro: {len([r for r in resultado if '❌ Erro' in r[-1]])}")
+        # Mostrar relatório na tela
+        print("\n📊 RELATÓRIO POR LOCALIDADE:")
+        print("-" * 120)
+        for i, linha in enumerate(relatorio_formatado):
+            if i == 0:  # Cabeçalho
+                print(f"{'|'.join(f'{str(item):^15}' for item in linha)}")
+                print("-" * 120)
+            else:
+                print(f"{'|'.join(f'{str(item):^15}' for item in linha)}")
+        
+        print(f"\n📈 RESUMO GERAL:")
+        print(f"   🏢 Total de localidades: {len(localidades)}")
+        print(f"   📚 Total de turmas: {len(resultado)}")
+        print(f"   👥 Total de matriculados: {sum(loc['total_matriculados'] for loc in localidades.values())}")
+        print(f"   👤 Total de alunos únicos: {sum(len(loc['alunos_unicos']) for loc in localidades.values())}")
 
         navegador.close()
 
