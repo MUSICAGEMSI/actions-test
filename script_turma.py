@@ -14,7 +14,7 @@ from collections import defaultdict
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzRSGdID5WjLuukBUt-5TbQjCqSvCKjr0vOWHFfFr0rChW1vINwgQE5VJDQCKM5mc693Q/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxNpziYUDS2IL2L9bpfbtci8Mq1gDNWKL2XUhImPtgevyW_y7nVfRvFJjpHrozh9SiC/exec'
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
