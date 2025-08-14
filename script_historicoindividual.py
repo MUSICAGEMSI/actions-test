@@ -14,7 +14,7 @@ from datetime import datetime
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzx5wJjPYSBEeoNQMc02fxi2j4JqROJ1HKbdM59tMHmb2TD2A2Y6IYDtTpHiZvmLFsGug/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzLbbe8_R3RVLVJ_PmJqvrp8bdkEvYVZwzdCG0L1uhnM8w3AlqebdmbiGTRT4oco266hw/exec'
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
