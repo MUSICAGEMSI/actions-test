@@ -474,11 +474,7 @@ def main():
             "tipo": "relatorio_localidades",
             "relatorio_formatado": relatorio_formatado,
             "dados_brutos": resultado,
-            "resumo": {
-                "total_localidades": len(localidades),
-                "total_turmas": len(resultado),
-                "total_matriculados": sum(loc['total_matriculados'] for loc in localidades.values()),
-                "total_alunos_unicos": sum(len(loc['alunos_unicos']) for loc in localidades.values())
+
             }
         }
 
@@ -490,22 +486,6 @@ def main():
             print("Resposta do Apps Script:", resposta_post.text)
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
-
-        # Mostrar relatório na tela
-        print("\n📊 RELATÓRIO POR LOCALIDADE:")
-        print("-" * 120)
-        for i, linha in enumerate(relatorio_formatado):
-            if i == 0:  # Cabeçalho
-                print(f"{'|'.join(f'{str(item):^15}' for item in linha)}")
-                print("-" * 120)
-            else:
-                print(f"{'|'.join(f'{str(item):^15}' for item in linha)}")
-        
-        print(f"\n📈 RESUMO GERAL:")
-        print(f"   🏢 Total de localidades: {len(localidades)}")
-        print(f"   📚 Total de turmas: {len(resultado)}")
-        print(f"   👥 Total de matriculados: {sum(loc['total_matriculados'] for loc in localidades.values())}")
-        print(f"   👤 Total de alunos únicos: {sum(len(loc['alunos_unicos']) for loc in localidades.values())}")
 
         navegador.close()
 
