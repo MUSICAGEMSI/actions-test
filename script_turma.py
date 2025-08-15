@@ -473,9 +473,7 @@ def main():
         body = {
             "tipo": "relatorio_localidades",
             "relatorio_formatado": relatorio_formatado,
-            "dados_brutos": resultado,
-
-            }
+            "dados_brutos": resultado
         }
 
         # Enviar dados para Apps Script
