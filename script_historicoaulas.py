@@ -1,4 +1,4 @@
-# script_historico_aulas.py
+# script_historico_aulas_corrigido.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -115,9 +115,16 @@ def processar_frequencia_modal(pagina, aula_id, professor_id):
             'tem_presenca': "ERRO"
         }
 
-def extrair_dados_linha_aula(linha):
-    """Extrai dados básicos de uma linha de aula"""
+def extrair_dados_de_linha_por_indice(pagina, indice_linha):
+    """Extrai dados de uma linha específica pelo índice, evitando referências antigas"""
     try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
+        linhas = pagina.query_selector_all("table tbody tr")
+        
+        if indice_linha >= len(linhas):
+            return None, False
+        
+        linha = linhas[indice_linha]
         colunas = linha.query_selector_all("td")
         
         if len(colunas) >= 6:
@@ -155,8 +162,38 @@ def extrair_dados_linha_aula(linha):
         return None, False
         
     except Exception as e:
-        print(f"⚠️ Erro ao extrair dados da linha: {e}")
+        print(f"⚠️ Erro ao extrair dados da linha {indice_linha}: {e}")
         return None, False
+
+def clicar_botao_frequencia_por_indice(pagina, indice_linha):
+    """Clica no botão de frequência de uma linha específica pelo índice"""
+    try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
+        linhas = pagina.query_selector_all("table tbody tr")
+        
+        if indice_linha >= len(linhas):
+            return False
+        
+        linha = linhas[indice_linha]
+        btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
+        
+        if btn_freq:
+            btn_freq.click()
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao clicar no botão da linha {indice_linha}: {e}")
+        return False
+
+def contar_linhas_na_pagina(pagina):
+    """Conta quantas linhas existem na página atual"""
+    try:
+        linhas = pagina.query_selector_all("table tbody tr")
+        return len(linhas)
+    except:
+        return 0
 
 def navegar_para_historico_aulas(pagina):
     """Navega pelos menus para chegar ao histórico de aulas"""
@@ -339,18 +376,19 @@ def main():
             except:
                 print("⚠️ Timeout aguardando linhas - tentando continuar...")
             
-            # Obter todas as linhas da página atual
-            linhas = pagina.query_selector_all("table tbody tr")
+            # Contar quantas linhas temos na página atual
+            total_linhas = contar_linhas_na_pagina(pagina)
             
-            if not linhas:
+            if total_linhas == 0:
                 print("🏁 Não há mais linhas para processar.")
                 break
             
-            print(f"   📊 Encontradas {len(linhas)} aulas nesta página")
+            print(f"   📊 Encontradas {total_linhas} aulas nesta página")
             
-            # Processar cada linha
-            for i, linha in enumerate(linhas):
-                dados_aula, deve_parar_ano = extrair_dados_linha_aula(linha)
+            # Processar cada linha POR ÍNDICE (evita referências antigas)
+            for i in range(total_linhas):
+                # Extrair dados da linha atual pelo índice
+                dados_aula, deve_parar_ano = extrair_dados_de_linha_por_indice(pagina, i)
                 
                 if deve_parar_ano:
                     print("🛑 Encontrado ano 2024 - finalizando coleta!")
@@ -360,39 +398,36 @@ def main():
                 if not dados_aula:
                     continue
                 
-                print(f"      🎯 Aula {i+1}/{len(linhas)}: {dados_aula['data']} - {dados_aula['curso']}")
+                print(f"      🎯 Aula {i+1}/{total_linhas}: {dados_aula['data']} - {dados_aula['curso']}")
                 
                 # Clicar no botão de frequência para abrir modal
                 try:
-                    btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
-                    if btn_freq:
-                        # Aguardar que não haja modal aberto antes de clicar
+                    # Aguardar que não haja modal aberto antes de clicar
+                    try:
+                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
+                    except:
+                        # Se ainda há modal, forçar fechamento
+                        print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
                         try:
-                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
+                            # Tentar múltiplas formas de fechar modal
+                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
+                            if btn_fechar:
+                                btn_fechar.click()
+                            else:
+                                # Forçar fechamento via JavaScript
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                            
+                            # Aguardar fechar
+                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
                         except:
-                            # Se ainda há modal, forçar fechamento
-                            print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
-                            try:
-                                # Tentar múltiplas formas de fechar modal
-                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
-                                if btn_fechar:
-                                    btn_fechar.click()
-                                else:
-                                    # Forçar fechamento via JavaScript
-                                    pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                                
-                                # Aguardar fechar
-                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
-                            except:
-                                # Último recurso: recarregar página
-                                print("⚠️ Forçando escape...")
-                                pagina.keyboard.press("Escape")
-                                time.sleep(1)
-                        
-                        # Agora clicar no botão de frequência
-                        print(f"         🖱️ Clicando em frequência...")
-                        btn_freq.click()
-                        
+                            # Último recurso: recarregar página
+                            print("⚠️ Forçando escape...")
+                            pagina.keyboard.press("Escape")
+                            time.sleep(1)
+                    
+                    # Agora clicar no botão de frequência PELO ÍNDICE
+                    print(f"         🖱️ Clicando em frequência...")
+                    if clicar_botao_frequencia_por_indice(pagina, i):
                         # Aguardar modal carregar
                         time.sleep(1)
                         
@@ -463,6 +498,9 @@ def main():
                         # Mostrar resumo da aula
                         total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
                         print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
+                    
+                    else:
+                        print(f"         ❌ Falha ao clicar no botão de frequência")
                         
                 except Exception as e:
                     print(f"⚠️ Erro ao processar aula: {e}")
