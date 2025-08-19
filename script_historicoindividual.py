@@ -354,20 +354,94 @@ def fazer_login(page):
         page.goto(URL_INICIAL, timeout=30000)
         page.wait_for_load_state('networkidle')
         
-        # Preencher dados de login
-        page.fill('input[name="data[Usuario][email]"]', EMAIL)
-        page.fill('input[name="data[Usuario][senha]"]', SENHA)
+        # Aguardar os campos de login aparecerem
+        page.wait_for_selector('input[type="email"], input[name*="email"], input[id*="email"]', timeout=10000)
         
-        # Fazer login
-        page.click('input[type="submit"]')
-        page.wait_for_load_state('networkidle')
+        # Tentar diferentes seletores para o campo de email
+        email_selectors = [
+            'input[name="data[Usuario][email]"]',
+            'input[type="email"]',
+            'input[name*="email"]',
+            'input[id*="email"]',
+            'input[placeholder*="email"], input[placeholder*="Email"]'
+        ]
+        
+        email_preenchido = False
+        for selector in email_selectors:
+            try:
+                if page.is_visible(selector):
+                    page.fill(selector, EMAIL)
+                    email_preenchido = True
+                    print(f"✅ Email preenchido com seletor: {selector}")
+                    break
+            except:
+                continue
+        
+        if not email_preenchido:
+            print("❌ Não foi possível encontrar o campo de email")
+            return False
+        
+        # Tentar diferentes seletores para o campo de senha
+        senha_selectors = [
+            'input[name="data[Usuario][senha]"]',
+            'input[type="password"]',
+            'input[name*="senha"], input[name*="password"]',
+            'input[id*="senha"], input[id*="password"]'
+        ]
+        
+        senha_preenchida = False
+        for selector in senha_selectors:
+            try:
+                if page.is_visible(selector):
+                    page.fill(selector, SENHA)
+                    senha_preenchida = True
+                    print(f"✅ Senha preenchida com seletor: {selector}")
+                    break
+            except:
+                continue
+        
+        if not senha_preenchida:
+            print("❌ Não foi possível encontrar o campo de senha")
+            return False
+        
+        # Tentar diferentes seletores para o botão de submit
+        submit_selectors = [
+            'input[type="submit"]',
+            'button[type="submit"]',
+            'button:has-text("Entrar")',
+            'button:has-text("Login")',
+            'input[value*="Entrar"]'
+        ]
+        
+        submit_clicado = False
+        for selector in submit_selectors:
+            try:
+                if page.is_visible(selector):
+                    page.click(selector)
+                    submit_clicado = True
+                    print(f"✅ Botão de login clicado: {selector}")
+                    break
+            except:
+                continue
+        
+        if not submit_clicado:
+            print("❌ Não foi possível encontrar o botão de login")
+            return False
+        
+        # Aguardar resposta do login
+        page.wait_for_load_state('networkidle', timeout=15000)
         
         # Verificar se login foi bem-sucedido
-        if "Sair" in page.content() or "logout" in page.content().lower():
+        content = page.content().lower()
+        if any(termo in content for termo in ["sair", "logout", "dashboard", "painel", "alunos"]):
             print("✅ Login realizado com sucesso!")
             return True
         else:
-            print("❌ Falha no login!")
+            print("❌ Falha no login - não foi possível verificar sucesso!")
+            # Debug: salvar página para análise
+            with open('debug_login.html', 'w', encoding='utf-8') as f:
+                f.write(page.content())
+            print("🔍 Página salva como debug_login.html para análise")
             return False
             
     except Exception as e:
