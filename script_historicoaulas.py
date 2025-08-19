@@ -15,7 +15,7 @@ EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_HISTORICO_AULAS = "https://musical.congregacao.org.br/aulas_abertas/listagem"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxVW_i69_DL_UQQqVjxLsAcEv5edorXSD4g-PZUu4LC9TkGd9yEfNiTL0x92ELDNm8M/exec'
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
@@ -183,15 +183,102 @@ def main():
         print("📚 Navegando para histórico de aulas...")
         pagina.goto(URL_HISTORICO_AULAS)
         
-        # Aguardar carregamento da página
-        pagina.wait_for_selector("select[name='listagem_length']", timeout=10000)
+        # Aguardar carregamento da página com múltiplas tentativas
+        print("⏳ Aguardando carregamento da página...")
+        try:
+            # Tentar diferentes seletores possíveis
+            seletores_possiveis = [
+                "select[name='listagem_length']",
+                "select.form-control",
+                "[name='listagem_length']",
+                "select:has-text('20')"
+            ]
+            
+            seletor_encontrado = None
+            for seletor in seletores_possiveis:
+                try:
+                    pagina.wait_for_selector(seletor, timeout=5000)
+                    seletor_encontrado = seletor
+                    print(f"✅ Encontrado seletor: {seletor}")
+                    break
+                except:
+                    continue
+            
+            if not seletor_encontrado:
+                # Se não encontrou o seletor, aguarda um pouco mais e tenta novamente
+                print("⚠️ Seletor não encontrado, aguardando mais tempo...")
+                time.sleep(5)
+                
+                # Verificar se a tabela já carregou
+                pagina.wait_for_selector("table", timeout=15000)
+                print("📊 Tabela encontrada, tentando localizar controle de paginação...")
+                
+                # Tentar encontrar qualquer select na página
+                selects = pagina.query_selector_all("select")
+                if selects:
+                    seletor_encontrado = "select"
+                    print(f"✅ Encontrado {len(selects)} seletor(es) na página")
+            
+            # Configurar para mostrar 2000 registros
+            if seletor_encontrado:
+                print("⚙️ Configurando para mostrar 2000 registros...")
+                try:
+                    pagina.select_option(seletor_encontrado, "2000")
+                    print("✅ Configurado para 2000 registros")
+                except Exception as e:
+                    print(f"⚠️ Erro ao configurar registros: {e}")
+                    print("📋 Continuando com configuração padrão...")
+            else:
+                print("⚠️ Não foi possível encontrar seletor de paginação")
+                print("📋 Continuando com configuração padrão...")
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao configurar página: {e}")
+            print("📋 Tentando continuar mesmo assim...")
         
-        # Configurar para mostrar 2000 registros
-        print("⚙️ Configurando para mostrar 2000 registros...")
-        pagina.select_option("select[name='listagem_length']", "2000")
-        
-        # Aguardar carregamento da primeira linha
-        pagina.wait_for_selector("table tbody tr:first-child", timeout=15000)
+        # Aguardar carregamento da primeira linha com múltiplas tentativas
+        print("⏳ Aguardando carregamento das aulas...")
+        try:
+            # Tentar diferentes seletores para a tabela
+            seletores_tabela = [
+                "table tbody tr:first-child",
+                "tbody tr:first-child", 
+                "table tr:not(:first-child)",
+                ".table tbody tr",
+                "#listagem tbody tr"
+            ]
+            
+            tabela_carregada = False
+            for seletor in seletores_tabela:
+                try:
+                    pagina.wait_for_selector(seletor, timeout=8000)
+                    tabela_carregada = True
+                    print(f"✅ Tabela carregada com seletor: {seletor}")
+                    break
+                except:
+                    continue
+            
+            if not tabela_carregada:
+                print("⚠️ Timeout aguardando tabela - verificando manualmente...")
+                # Aguardar um pouco mais e tentar localizar qualquer tabela
+                time.sleep(3)
+                tabelas = pagina.query_selector_all("table")
+                if tabelas:
+                    print(f"📊 Encontradas {len(tabelas)} tabelas na página")
+                    tabela_carregada = True
+                else:
+                    print("❌ Nenhuma tabela encontrada na página")
+                    # Vamos tentar capturar o HTML da página para debug
+                    print("🔍 Capturando conteúdo da página para análise...")
+                    conteudo = pagina.content()
+                    if "aula" in conteudo.lower():
+                        print("✅ Conteúdo relacionado a aulas encontrado")
+                    else:
+                        print("❌ Conteúdo de aulas não encontrado")
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao aguardar carregamento: {e}")
+            print("📋 Tentando continuar mesmo assim...")
         
         # Criar sessão requests com cookies para detalhes das aulas
         cookies_dict = extrair_cookies_playwright(pagina)
@@ -205,15 +292,62 @@ def main():
         while not deve_parar:
             print(f"📖 Processando página {pagina_atual}...")
             
-            # Aguardar linhas carregarem
+            # Aguardar linhas carregarem com seletores flexíveis
             try:
-                pagina.wait_for_selector("table tbody tr", timeout=10000)
+                seletores_linhas = [
+                    "table tbody tr",
+                    "tbody tr",
+                    ".table tbody tr",
+                    "#listagem tbody tr",
+                    "tr:has(td)"
+                ]
+                
+                linhas_carregadas = False
+                for seletor in seletores_linhas:
+                    try:
+                        pagina.wait_for_selector(seletor, timeout=5000)
+                        linhas_carregadas = True
+                        break
+                    except:
+                        continue
+                
+                if not linhas_carregadas:
+                    print("⚠️ Timeout aguardando linhas - buscando manualmente...")
+                
                 time.sleep(2)  # Aguardar estabilização
             except:
                 print("⚠️ Timeout aguardando linhas - tentando continuar...")
             
-            # Obter todas as linhas da página atual
-            linhas = pagina.query_selector_all("table tbody tr")
+            # Obter todas as linhas da página atual com seletores flexíveis
+            seletores_linhas = [
+                "table tbody tr",
+                "tbody tr",
+                ".table tbody tr", 
+                "#listagem tbody tr",
+                "tr:has(td)"
+            ]
+            
+            linhas = []
+            for seletor in seletores_linhas:
+                linhas = pagina.query_selector_all(seletor)
+                if linhas:
+                    print(f"✅ Linhas encontradas com seletor: {seletor}")
+                    break
+            
+            if not linhas:
+                print("⚠️ Nenhuma linha encontrada - tentando análise manual...")
+                # Debug: verificar estrutura da página
+                todas_tabelas = pagina.query_selector_all("table")
+                print(f"🔍 Total de tabelas na página: {len(todas_tabelas)}")
+                
+                if todas_tabelas:
+                    for i, tabela in enumerate(todas_tabelas[:3]):  # Verificar até 3 tabelas
+                        linhas_tabela = tabela.query_selector_all("tr")
+                        print(f"   Tabela {i+1}: {len(linhas_tabela)} linhas")
+                        if len(linhas_tabela) > 1:  # Tem header + dados
+                            linhas = linhas_tabela[1:]  # Pular header
+                            print(f"✅ Usando tabela {i+1} com {len(linhas)} linhas de dados")
+                            break
             
             if not linhas:
                 print("🏁 Não há mais linhas para processar.")
@@ -290,19 +424,57 @@ def main():
             if deve_parar:
                 break
             
-            # Tentar avançar para próxima página
+            # Tentar avançar para próxima página com seletores flexíveis
             try:
-                btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
-                if btn_proximo and not btn_proximo.get_attribute("class") or "disabled" not in btn_proximo.get_attribute("class"):
-                    print("➡️ Avançando para próxima página...")
-                    btn_proximo.click()
-                    pagina_atual += 1
+                seletores_proximo = [
+                    "a:has(i.fa-chevron-right)",
+                    "a i.fa-chevron-right",
+                    ".fa-chevron-right",
+                    "a:has-text('Próxima')",
+                    "a:has-text('>')",
+                    ".pagination a:last-child",
+                    "[aria-label='Next']"
+                ]
+                
+                btn_proximo = None
+                for seletor in seletores_proximo:
+                    try:
+                        btn_proximo = pagina.query_selector(seletor)
+                        if btn_proximo:
+                            print(f"✅ Botão próximo encontrado: {seletor}")
+                            break
+                    except:
+                        continue
+                
+                if btn_proximo:
+                    # Verificar se o botão não está desabilitado
+                    class_attr = btn_proximo.get_attribute("class") or ""
+                    parent_class = ""
+                    parent = btn_proximo.query_selector("..")
+                    if parent:
+                        parent_class = parent.get_attribute("class") or ""
                     
-                    # Aguardar nova página carregar
-                    time.sleep(3)
+                    if "disabled" not in class_attr and "disabled" not in parent_class:
+                        print("➡️ Avançando para próxima página...")
+                        btn_proximo.click()
+                        pagina_atual += 1
+                        
+                        # Aguardar nova página carregar
+                        time.sleep(3)
+                        
+                        # Verificar se realmente mudou de página
+                        try:
+                            pagina.wait_for_load_state("networkidle", timeout=5000)
+                        except:
+                            pass
+                        
+                    else:
+                        print("🏁 Botão próximo desabilitado - não há mais páginas.")
+                        break
                 else:
-                    print("🏁 Não há mais páginas para processar.")
+                    print("🏁 Botão próximo não encontrado - não há mais páginas.")
                     break
+                    
             except Exception as e:
                 print(f"⚠️ Erro ao navegar para próxima página: {e}")
                 break
