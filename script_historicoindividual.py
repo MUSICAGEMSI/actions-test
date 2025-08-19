@@ -465,7 +465,7 @@ def main():
             
             # Processar cada aluno
             for i, aluno_id in enumerate(ALUNOS_IDS, 1):
-                print(f"\n📋 Processando {i}/{len(ALUNOS_IDS)}")")
+                print(f"\n📋 Processando {i}/{len(ALUNOS_IDS)}")
                 
                 dados_aluno = scraper.extrair_dados_aluno(aluno_id)
                 if dados_aluno:
