@@ -183,34 +183,51 @@ def navegar_para_historico_aulas(pagina):
             print("❌ Não foi possível encontrar o menu G.E.M")
             return False
         
-        # Aguardar submenu aparecer
-        time.sleep(2)
+        # Aguardar mais tempo para o submenu aparecer e tentar múltiplas estratégias
+        print("⏳ Aguardando submenu expandir...")
+        time.sleep(3)
         
-        print("🔍 Clicando em Histórico de Aulas...")
+        print("🔍 Procurando por Histórico de Aulas...")
         
-        # Buscar e clicar no submenu Histórico de Aulas
-        seletores_historico = [
-            'a[href="aulas_abertas"]',
-            'a:has-text("Histórico de Aulas")',
-            'a[href="aulas_abertas"]:has-text("Histórico de Aulas")',
-            'a:has(.fa-angle-right):has-text("Histórico de Aulas")'
-        ]
-        
+        # Estratégia 1: Tentar aguardar elemento ficar visível
         historico_clicado = False
-        for seletor in seletores_historico:
+        try:
+            # Aguardar elemento aparecer e ficar visível
+            historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', 
+                                                     state="visible", timeout=10000)
+            if historico_link:
+                print("✅ Histórico de Aulas visível - clicando...")
+                historico_link.click()
+                historico_clicado = True
+        except Exception as e:
+            print(f"⚠️ Estratégia 1 falhou: {e}")
+        
+        # Estratégia 2: Forçar visibilidade com JavaScript
+        if not historico_clicado:
             try:
-                elemento_historico = pagina.query_selector(seletor)
-                if elemento_historico:
-                    print(f"✅ Histórico de Aulas encontrado: {seletor}")
-                    elemento_historico.click()
+                print("🔧 Tentando forçar clique com JavaScript...")
+                # Buscar elemento mesmo que não visível
+                elemento = pagina.query_selector('a:has-text("Histórico de Aulas")')
+                if elemento:
+                    # Forçar clique via JavaScript
+                    pagina.evaluate("element => element.click()", elemento)
                     historico_clicado = True
-                    break
+                    print("✅ Clique forçado com JavaScript")
             except Exception as e:
-                print(f"⚠️ Tentativa com seletor {seletor} falhou: {e}")
-                continue
+                print(f"⚠️ Estratégia 2 falhou: {e}")
+        
+        # Estratégia 3: Navegar diretamente via URL
+        if not historico_clicado:
+            try:
+                print("🌐 Navegando diretamente para URL do histórico...")
+                pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
+                historico_clicado = True
+                print("✅ Navegação direta bem-sucedida")
+            except Exception as e:
+                print(f"⚠️ Estratégia 3 falhou: {e}")
         
         if not historico_clicado:
-            print("❌ Não foi possível encontrar o link Histórico de Aulas")
+            print("❌ Todas as estratégias falharam")
             return False
         
         print("⏳ Aguardando página do histórico carregar...")
