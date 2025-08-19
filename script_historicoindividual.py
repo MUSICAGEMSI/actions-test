@@ -449,7 +449,16 @@ def main():
     
     with sync_playwright() as p:
         # Configurar navegador
-        navegador = p.chromium.launch(headless=False)  # headless=True para executar em background
+        navegador = p.chromium.launch(
+            headless=True,  # Sempre headless para compatibilidade com servidores
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
+            ]
+        )
         contexto = navegador.new_context()
         page = contexto.new_page()
         
