@@ -352,96 +352,162 @@ def fazer_login(page):
     try:
         print("🔐 Fazendo login...")
         page.goto(URL_INICIAL, timeout=30000)
-        page.wait_for_load_state('networkidle')
         
-        # Aguardar os campos de login aparecerem
-        page.wait_for_selector('input[type="email"], input[name*="email"], input[id*="email"]', timeout=10000)
+        # Aguardar página carregar completamente
+        print("⏳ Aguardando página carregar...")
+        page.wait_for_load_state('domcontentloaded')
+        time.sleep(3)  # Aguardar elementos JavaScript carregarem
         
-        # Tentar diferentes seletores para o campo de email
+        # Debug: salvar página inicial para análise
+        print("🔍 Analisando estrutura da página de login...")
+        with open('debug_pagina_inicial.html', 'w', encoding='utf-8') as f:
+            f.write(page.content())
+        print("📄 Página inicial salva como debug_pagina_inicial.html")
+        
+        # Procurar por campos de login de forma mais ampla
+        page_content = page.content().lower()
+        
+        # Verificar se já está logado
+        if any(termo in page_content for termo in ["sair", "logout", "dashboard", "alunos", "licoes"]):
+            print("✅ Já estava logado!")
+            return True
+        
+        # Lista de seletores mais ampla para email
         email_selectors = [
-            'input[name="data[Usuario][email]"]',
             'input[type="email"]',
             'input[name*="email"]',
             'input[id*="email"]',
-            'input[placeholder*="email"], input[placeholder*="Email"]'
+            'input[placeholder*="email"]',
+            'input[name*="usuario"]',
+            'input[name*="login"]',
+            'input[name="data[Usuario][email]"]',
+            'input.email',
+            '#email',
+            '#usuario',
+            '#login'
         ]
         
+        # Tentar preencher email
         email_preenchido = False
         for selector in email_selectors:
             try:
-                if page.is_visible(selector):
-                    page.fill(selector, EMAIL)
-                    email_preenchido = True
-                    print(f"✅ Email preenchido com seletor: {selector}")
+                elements = page.query_selector_all(selector)
+                if elements:
+                    for element in elements:
+                        if element.is_visible():
+                            page.fill(selector, EMAIL)
+                            email_preenchido = True
+                            print(f"✅ Email preenchido com: {selector}")
+                            break
+                if email_preenchido:
                     break
-            except:
+            except Exception as e:
                 continue
         
         if not email_preenchido:
-            print("❌ Não foi possível encontrar o campo de email")
+            print("❌ Campo de email não encontrado. Verificando estrutura...")
+            # Listar todos os inputs para debug
+            inputs = page.query_selector_all('input')
+            print(f"🔍 Encontrados {len(inputs)} campos input na página")
+            for i, inp in enumerate(inputs):
+                try:
+                    input_type = inp.get_attribute('type') or 'text'
+                    input_name = inp.get_attribute('name') or 'sem-nome'
+                    input_id = inp.get_attribute('id') or 'sem-id'
+                    print(f"  Input {i+1}: type='{input_type}', name='{input_name}', id='{input_id}'")
+                except:
+                    continue
             return False
         
-        # Tentar diferentes seletores para o campo de senha
+        # Lista de seletores para senha
         senha_selectors = [
-            'input[name="data[Usuario][senha]"]',
             'input[type="password"]',
-            'input[name*="senha"], input[name*="password"]',
-            'input[id*="senha"], input[id*="password"]'
+            'input[name*="senha"]',
+            'input[name*="password"]',
+            'input[id*="senha"]',
+            'input[id*="password"]',
+            'input[name="data[Usuario][senha]"]',
+            'input.senha',
+            '#senha',
+            '#password'
         ]
         
+        # Tentar preencher senha
         senha_preenchida = False
         for selector in senha_selectors:
             try:
-                if page.is_visible(selector):
-                    page.fill(selector, SENHA)
-                    senha_preenchida = True
-                    print(f"✅ Senha preenchida com seletor: {selector}")
+                elements = page.query_selector_all(selector)
+                if elements:
+                    for element in elements:
+                        if element.is_visible():
+                            page.fill(selector, SENHA)
+                            senha_preenchida = True
+                            print(f"✅ Senha preenchida com: {selector}")
+                            break
+                if senha_preenchida:
                     break
-            except:
+            except Exception as e:
                 continue
         
         if not senha_preenchida:
-            print("❌ Não foi possível encontrar o campo de senha")
+            print("❌ Campo de senha não encontrado")
             return False
         
-        # Tentar diferentes seletores para o botão de submit
+        # Aguardar um pouco antes de submeter
+        time.sleep(2)
+        
+        # Lista de seletores para botão de submit
         submit_selectors = [
             'input[type="submit"]',
             'button[type="submit"]',
-            'button:has-text("Entrar")',
-            'button:has-text("Login")',
-            'input[value*="Entrar"]'
+            'button:text("Entrar")',
+            'button:text("Login")',
+            'input[value*="Entrar"]',
+            '.btn-login',
+            '#login-btn',
+            'form button',
+            'form input[type="submit"]'
         ]
         
+        # Tentar clicar no botão de login
         submit_clicado = False
         for selector in submit_selectors:
             try:
-                if page.is_visible(selector):
-                    page.click(selector)
-                    submit_clicado = True
-                    print(f"✅ Botão de login clicado: {selector}")
+                elements = page.query_selector_all(selector)
+                if elements:
+                    for element in elements:
+                        if element.is_visible():
+                            page.click(selector)
+                            submit_clicado = True
+                            print(f"✅ Botão clicado: {selector}")
+                            break
+                if submit_clicado:
                     break
-            except:
+            except Exception as e:
                 continue
         
         if not submit_clicado:
-            print("❌ Não foi possível encontrar o botão de login")
+            print("❌ Botão de login não encontrado")
             return False
         
-        # Aguardar resposta do login
-        page.wait_for_load_state('networkidle', timeout=15000)
+        # Aguardar redirecionamento após login
+        print("⏳ Aguardando resposta do login...")
+        time.sleep(5)
+        page.wait_for_load_state('networkidle', timeout=20000)
         
         # Verificar se login foi bem-sucedido
         content = page.content().lower()
-        if any(termo in content for termo in ["sair", "logout", "dashboard", "painel", "alunos"]):
+        sucesso_indicadores = ["sair", "logout", "dashboard", "painel", "alunos", "licoes", "bem-vindo"]
+        
+        if any(termo in content for termo in sucesso_indicadores):
             print("✅ Login realizado com sucesso!")
             return True
         else:
-            print("❌ Falha no login - não foi possível verificar sucesso!")
-            # Debug: salvar página para análise
-            with open('debug_login.html', 'w', encoding='utf-8') as f:
+            print("❌ Login parece ter falhado")
+            # Salvar página pós-login para debug
+            with open('debug_pos_login.html', 'w', encoding='utf-8') as f:
                 f.write(page.content())
-            print("🔍 Página salva como debug_login.html para análise")
+            print("📄 Página pós-login salva como debug_pos_login.html")
             return False
             
     except Exception as e:
