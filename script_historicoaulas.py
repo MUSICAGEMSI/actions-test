@@ -1,4 +1,4 @@
-# script_historico_aulas_otimizado_conservador.py
+# script_historico_SEM_MODALS.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -8,110 +8,175 @@ import re
 import requests
 import time
 import json
-from bs4 import BeautifulSoup
 from datetime import datetime
 import concurrent.futures
 from threading import Lock
+from urllib.parse import urljoin
+import asyncio
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
-# Cache para ATAs (única otimização que mantemos)
+# Caches
+cache_lock = Lock()
+frequencia_cache = {}
 ata_cache = {}
-ata_lock = Lock()
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-def extrair_cookies_playwright(pagina):
-    """Extrai cookies do Playwright para usar em requests"""
-    cookies = pagina.context.cookies()
-    return {cookie['name']: cookie['value'] for cookie in cookies}
+def interceptar_requisicoes_ajax(pagina, session):
+    """
+    ABORDAGEM 1: Interceptar requisições AJAX que os modais fazem
+    Esta é a mais eficiente - captura os dados direto da API
+    """
+    dados_interceptados = []
+    
+    def handle_response(response):
+        # Interceptar chamadas para visualizar frequência
+        if "visualizar_frequencia" in response.url or "frequencia" in response.url:
+            try:
+                if response.status == 200:
+                    data = response.json()
+                    dados_interceptados.append({
+                        'url': response.url,
+                        'data': data
+                    })
+                    print(f"🎯 Interceptada API: {response.url}")
+            except:
+                pass
+    
+    pagina.on("response", handle_response)
+    return dados_interceptados
 
-def extrair_detalhes_aula(session, aula_id):
-    """Extrai detalhes da aula via requests para verificar ATA com cache"""
-    # Verificar cache primeiro
-    with ata_lock:
-        if aula_id in ata_cache:
-            return ata_cache[aula_id]
+def extrair_via_requests_diretas(session, aula_id, professor_id):
+    """
+    ABORDAGEM 2: Fazer requisições diretas para APIs que os modals usam
+    Reverse engineering das chamadas AJAX
+    """
+    possíveis_endpoints = [
+        f"https://musical.congregacao.org.br/ajax/frequencia/{aula_id}",
+        f"https://musical.congregacao.org.br/aulas_abertas/frequencia_ajax/{aula_id}",
+        f"https://musical.congregacao.org.br/frequencia/listar/{aula_id}",
+        f"https://musical.congregacao.org.br/api/frequencia/{aula_id}",
+        f"https://musical.congregacao.org.br/aulas_abertas/ajax_frequencia?aula_id={aula_id}&professor_id={professor_id}",
+    ]
+    
+    headers = {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://musical.congregacao.org.br/aulas_abertas',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    
+    for endpoint in possíveis_endpoints:
+        try:
+            # Tentar GET
+            resp = session.get(endpoint, headers=headers, timeout=3)
+            if resp.status_code == 200 and resp.text.strip():
+                try:
+                    data = resp.json()
+                    return processar_dados_api(data)
+                except:
+                    # Se não é JSON, pode ser HTML com dados
+                    if "fa-check" in resp.text or "fa-remove" in resp.text:
+                        return processar_html_frequencia(resp.text)
+            
+            # Tentar POST
+            resp = session.post(endpoint, headers=headers, 
+                              data={'aula_id': aula_id, 'professor_id': professor_id}, 
+                              timeout=3)
+            if resp.status_code == 200 and resp.text.strip():
+                try:
+                    data = resp.json()
+                    return processar_dados_api(data)
+                except:
+                    if "fa-check" in resp.text or "fa-remove" in resp.text:
+                        return processar_html_frequencia(resp.text)
+                        
+        except:
+            continue
+    
+    return None
+
+def processar_dados_api(data):
+    """Processa dados vindos da API JSON"""
+    if isinstance(data, dict):
+        # Diferentes formatos possíveis da API
+        if 'frequencia' in data:
+            return extrair_frequencia_do_json(data['frequencia'])
+        elif 'alunos' in data:
+            return extrair_frequencia_do_json(data['alunos'])
+        elif 'presentes' in data and 'ausentes' in data:
+            return {
+                'presentes_ids': [str(p.get('id', '')) for p in data.get('presentes', [])],
+                'presentes_nomes': [p.get('nome', '') for p in data.get('presentes', [])],
+                'ausentes_ids': [str(a.get('id', '')) for a in data.get('ausentes', [])],
+                'ausentes_nomes': [a.get('nome', '') for a in data.get('ausentes', [])],
+                'tem_presenca': "OK" if data.get('presentes') else "FANTASMA"
+            }
+    
+    return None
+
+def extrair_frequencia_do_json(alunos_data):
+    """Extrai frequência de dados JSON"""
+    presentes_ids, presentes_nomes = [], []
+    ausentes_ids, ausentes_nomes = [], []
+    
+    for aluno in alunos_data:
+        if aluno.get('presente', False) or aluno.get('status') == 'presente':
+            presentes_ids.append(str(aluno.get('id', '')))
+            presentes_nomes.append(aluno.get('nome', ''))
+        else:
+            ausentes_ids.append(str(aluno.get('id', '')))
+            ausentes_nomes.append(aluno.get('nome', ''))
+    
+    return {
+        'presentes_ids': presentes_ids,
+        'presentes_nomes': presentes_nomes,
+        'ausentes_ids': ausentes_ids,
+        'ausentes_nomes': ausentes_nomes,
+        'tem_presenca': "OK" if presentes_ids else "FANTASMA"
+    }
+
+def processar_html_frequencia(html_content):
+    """Processa HTML retornado por requisições diretas"""
+    from bs4 import BeautifulSoup
     
     try:
-        url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
-        }
+        soup = BeautifulSoup(html_content, 'html.parser')
         
-        resp = session.get(url_detalhes, headers=headers, timeout=10)
+        presentes_ids, presentes_nomes = [], []
+        ausentes_ids, ausentes_nomes = [], []
         
-        if resp.status_code == 200:
-            resultado = "OK" if "ATA DA AULA" in resp.text else "FANTASMA"
-        else:
-            resultado = "ERRO"
-        
-        # Salvar no cache
-        with ata_lock:
-            ata_cache[aula_id] = resultado
-        
-        return resultado
-        
-    except Exception as e:
-        print(f"⚠️ Erro ao extrair detalhes da aula {aula_id}: {e}")
-        resultado = "ERRO"
-        with ata_lock:
-            ata_cache[aula_id] = resultado
-        return resultado
-
-def processar_frequencia_modal(pagina, aula_id, professor_id):
-    """Processa a frequência após abrir o modal - mantido original"""
-    try:
-        # Aguardar o modal carregar completamente
-        pagina.wait_for_selector("table.table-bordered tbody tr", timeout=10000)
-        
-        presentes_ids = []
-        presentes_nomes = []
-        ausentes_ids = []
-        ausentes_nomes = []
-        
-        # Extrair todas as linhas da tabela de frequência
-        linhas = pagina.query_selector_all("table.table-bordered tbody tr")
+        # Buscar por linhas da tabela
+        linhas = soup.find_all('tr')
         
         for linha in linhas:
-            # Extrair nome do aluno
-            nome_cell = linha.query_selector("td:first-child")
-            nome_completo = nome_cell.inner_text().strip() if nome_cell else ""
-            
-            # IGNORAR linhas sem nome (vazias)
-            if not nome_completo:
-                continue
-            
-            # Extrair status de presença
-            link_presenca = linha.query_selector("td:last-child a")
-            
-            if link_presenca:
-                # Extrair ID do membro do data-id-membro
-                id_membro = link_presenca.get_attribute("data-id-membro")
+            colunas = linha.find_all(['td', 'th'])
+            if len(colunas) >= 2:
+                nome = colunas[0].get_text(strip=True)
                 
-                # IGNORAR se não tem ID válido
-                if not id_membro:
-                    continue
-                
-                # Verificar se está presente ou ausente pelo ícone
-                icone = link_presenca.query_selector("i")
-                if icone:
-                    classes = icone.get_attribute("class")
+                # Buscar por ícones ou links de presença
+                link = linha.find('a', {'data-id-membro': True})
+                if link and nome:
+                    id_membro = link.get('data-id-membro')
+                    icone = link.find('i')
                     
-                    if "fa-check text-success" in classes:
-                        # Presente
-                        presentes_ids.append(id_membro)
-                        presentes_nomes.append(nome_completo)
-                    elif "fa-remove text-danger" in classes:
-                        # Ausente
-                        ausentes_ids.append(id_membro)
-                        ausentes_nomes.append(nome_completo)
+                    if icone:
+                        classes = icone.get('class', [])
+                        classes_str = ' '.join(classes)
+                        
+                        if 'fa-check' in classes_str and 'text-success' in classes_str:
+                            presentes_ids.append(id_membro)
+                            presentes_nomes.append(nome)
+                        elif 'fa-remove' in classes_str and 'text-danger' in classes_str:
+                            ausentes_ids.append(id_membro)
+                            ausentes_nomes.append(nome)
         
         return {
             'presentes_ids': presentes_ids,
@@ -120,496 +185,404 @@ def processar_frequencia_modal(pagina, aula_id, professor_id):
             'ausentes_nomes': ausentes_nomes,
             'tem_presenca': "OK" if presentes_ids else "FANTASMA"
         }
-        
+    
     except Exception as e:
-        print(f"⚠️ Erro ao processar frequência: {e}")
-        return {
-            'presentes_ids': [],
-            'presentes_nomes': [],
-            'ausentes_ids': [],
-            'ausentes_nomes': [],
-            'tem_presenca': "ERRO"
-        }
+        print(f"⚠️ Erro processando HTML: {e}")
+        return None
 
-def extrair_dados_de_linha_por_indice(pagina, indice_linha):
-    """Extrai dados de uma linha específica pelo índice - mantido original"""
-    try:
-        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
-        linhas = pagina.query_selector_all("table tbody tr")
-        
-        if indice_linha >= len(linhas):
-            return None, False
-        
-        linha = linhas[indice_linha]
-        colunas = linha.query_selector_all("td")
-        
-        if len(colunas) >= 6:
-            # Extrair data da aula
-            data_aula = colunas[1].inner_text().strip()
-            
-            # Verificar se é 2024 - parar processamento
-            if "2024" in data_aula:
-                return None, True  # Sinal para parar
-            
-            # Extrair outros dados
-            congregacao = colunas[2].inner_text().strip()
-            curso = colunas[3].inner_text().strip()
-            turma = colunas[4].inner_text().strip()
-            
-            # Extrair IDs do botão de frequência
-            btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
-            if btn_freq:
-                onclick = btn_freq.get_attribute("onclick")
-                # Extrair os dois IDs: visualizarFrequencias(aula_id, professor_id)
-                match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
-                if match:
-                    aula_id = match.group(1)
-                    professor_id = match.group(2)
-                    
-                    return {
-                        'aula_id': aula_id,
-                        'professor_id': professor_id,
-                        'data': data_aula,
-                        'congregacao': congregacao,
-                        'curso': curso,
-                        'turma': turma
-                    }, False
-        
-        return None, False
-        
-    except Exception as e:
-        print(f"⚠️ Erro ao extrair dados da linha {indice_linha}: {e}")
-        return None, False
-
-def clicar_botao_frequencia_por_indice(pagina, indice_linha):
-    """Clica no botão de frequência de uma linha específica pelo índice - mantido original"""
-    try:
-        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
-        linhas = pagina.query_selector_all("table tbody tr")
-        
-        if indice_linha >= len(linhas):
-            return False
-        
-        linha = linhas[indice_linha]
-        btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
-        
-        if btn_freq:
-            btn_freq.click()
-            return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"⚠️ Erro ao clicar no botão da linha {indice_linha}: {e}")
-        return False
-
-def contar_linhas_na_pagina(pagina):
-    """Conta quantas linhas existem na página atual"""
-    try:
-        linhas = pagina.query_selector_all("table tbody tr")
-        return len(linhas)
-    except:
-        return 0
-
-def navegar_para_historico_aulas(pagina):
-    """Navega pelos menus para chegar ao histórico de aulas"""
-    try:
-        print("🔍 Navegando para G.E.M...")
-        
-        # Aguardar o menu carregar após login
-        pagina.wait_for_selector("nav", timeout=15000)
-        
-        # Buscar e clicar no menu G.E.M
-        seletores_gem = [
-            'a:has-text("G.E.M")',
-            'a:has(.fa-graduation-cap)',
-            'a[href="#"]:has(span:text-is("G.E.M"))',
-            'a:has(span):has-text("G.E.M")'
-        ]
-        
-        menu_gem_clicado = False
-        for seletor in seletores_gem:
-            try:
-                elemento_gem = pagina.query_selector(seletor)
-                if elemento_gem:
-                    print(f"✅ Menu G.E.M encontrado: {seletor}")
-                    elemento_gem.click()
-                    menu_gem_clicado = True
-                    break
-            except Exception as e:
-                print(f"⚠️ Tentativa com seletor {seletor} falhou: {e}")
-                continue
-        
-        if not menu_gem_clicado:
-            print("❌ Não foi possível encontrar o menu G.E.M")
-            return False
-        
-        # Aguardar mais tempo para o submenu aparecer e tentar múltiplas estratégias
-        print("⏳ Aguardando submenu expandir...")
-        time.sleep(3)
-        
-        print("🔍 Procurando por Histórico de Aulas...")
-        
-        # Estratégia 1: Tentar aguardar elemento ficar visível
-        historico_clicado = False
+def extrair_via_urls_diretas(session, dados_aula):
+    """
+    ABORDAGEM 3: Tentar acessar URLs diretas da frequência
+    Algumas aplicações expõem URLs diretas para cada aula
+    """
+    possíveis_urls = [
+        f"https://musical.congregacao.org.br/aulas_abertas/frequencia/{dados_aula['aula_id']}",
+        f"https://musical.congregacao.org.br/frequencia/aula/{dados_aula['aula_id']}",
+        f"https://musical.congregacao.org.br/gem/frequencia/{dados_aula['aula_id']}",
+        f"https://musical.congregacao.org.br/aula/{dados_aula['aula_id']}/frequencia",
+    ]
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://musical.congregacao.org.br/aulas_abertas',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    }
+    
+    for url in possíveis_urls:
         try:
-            # Aguardar elemento aparecer e ficar visível
-            historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', 
-                                                     state="visible", timeout=10000)
-            if historico_link:
-                print("✅ Histórico de Aulas visível - clicando...")
-                historico_link.click()
-                historico_clicado = True
-        except Exception as e:
-            print(f"⚠️ Estratégia 1 falhou: {e}")
-        
-        # Estratégia 2: Forçar visibilidade com JavaScript
-        if not historico_clicado:
+            resp = session.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                # Verificar se tem dados de frequência
+                if "table" in resp.text and ("fa-check" in resp.text or "presente" in resp.text.lower()):
+                    return processar_html_frequencia(resp.text)
+        except:
+            continue
+    
+    return None
+
+def descobrir_endpoints_dinamicamente(pagina):
+    """
+    ABORDAGEM 4: Descobrir endpoints dinamicamente monitorando network
+    """
+    endpoints_descobertos = set()
+    
+    def capture_request(request):
+        url = request.url
+        if any(keyword in url.lower() for keyword in ['frequencia', 'ajax', 'api', 'aluno']):
+            endpoints_descobertos.add(url)
+            print(f"🔍 Endpoint descoberto: {url}")
+    
+    pagina.on("request", capture_request)
+    
+    # Fazer algumas ações na página para descobrir endpoints
+    try:
+        # Clicar em alguns botões para ver que requisições são feitas
+        botoes = pagina.query_selector_all("button[onclick*='visualizarFrequencias']")
+        if botoes:
+            # Clicar no primeiro para descobrir o endpoint
+            print("🔍 Descobrindo endpoints...")
+            botoes[0].click()
+            time.sleep(2)
+            
+            # Fechar modal
             try:
-                print("🔧 Tentando forçar clique com JavaScript...")
-                # Buscar elemento mesmo que não visível
-                elemento = pagina.query_selector('a:has-text("Histórico de Aulas")')
-                if elemento:
-                    # Forçar clique via JavaScript
-                    pagina.evaluate("element => element.click()", elemento)
-                    historico_clicado = True
-                    print("✅ Clique forçado com JavaScript")
-            except Exception as e:
-                print(f"⚠️ Estratégia 2 falhou: {e}")
-        
-        # Estratégia 3: Navegar diretamente via URL
-        if not historico_clicado:
-            try:
-                print("🌐 Navegando diretamente para URL do histórico...")
-                pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
-                historico_clicado = True
-                print("✅ Navegação direta bem-sucedida")
-            except Exception as e:
-                print(f"⚠️ Estratégia 3 falhou: {e}")
-        
-        if not historico_clicado:
-            print("❌ Todas as estratégias falharam")
-            return False
-        
-        print("⏳ Aguardando página do histórico carregar...")
-        
-        # Aguardar indicador de carregamento da tabela
-        try:
-            # Aguardar pelo menos um checkbox aparecer (indica que a tabela carregou)
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
-            print("✅ Tabela do histórico carregada!")
-            return True
-        except PlaywrightTimeoutError:
-            print("⚠️ Timeout aguardando tabela - tentando continuar...")
-            # Verificar se pelo menos temos uma tabela
-            try:
-                pagina.wait_for_selector("table", timeout=5000)
-                print("✅ Tabela encontrada (sem checkboxes)")
-                return True
+                pagina.keyboard.press("Escape")
             except:
-                print("❌ Nenhuma tabela encontrada")
-                return False
+                pass
+    except:
+        pass
+    
+    return list(endpoints_descobertos)
+
+def processar_batch_sem_modals(session, aulas_lote):
+    """
+    Processa um lote de aulas tentando todas as abordagens sem modal
+    """
+    resultados = []
+    
+    # Usar threading para paralelizar as requisições
+    def processar_aula_individual(dados_aula):
+        aula_id = dados_aula['aula_id']
+        professor_id = dados_aula['professor_id']
+        
+        # Verificar cache
+        cache_key = f"{aula_id}_{professor_id}"
+        with cache_lock:
+            if cache_key in frequencia_cache:
+                return dados_aula, frequencia_cache[cache_key]
+        
+        # Tentar abordagem 2: Requisições diretas para APIs
+        freq_data = extrair_via_requests_diretas(session, aula_id, professor_id)
+        
+        if not freq_data:
+            # Tentar abordagem 3: URLs diretas
+            freq_data = extrair_via_urls_diretas(session, dados_aula)
+        
+        if not freq_data:
+            # Se tudo falhar, retornar dados vazios
+            freq_data = {
+                'presentes_ids': [],
+                'presentes_nomes': [],
+                'ausentes_ids': [],
+                'ausentes_nomes': [],
+                'tem_presenca': "ERRO"
+            }
+        
+        # Salvar no cache
+        with cache_lock:
+            frequencia_cache[cache_key] = freq_data
+        
+        return dados_aula, freq_data
+    
+    # Processar em paralelo
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(processar_aula_individual, dados) for dados in aulas_lote]
+        
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                dados_aula, freq_data = future.result()
+                resultados.append({
+                    'dados': dados_aula,
+                    'freq': freq_data
+                })
+            except Exception as e:
+                print(f"⚠️ Erro processando aula: {e}")
+    
+    return resultados
+
+def extrair_dados_pagina_otimizado(pagina):
+    """Extrai dados da página atual (mantido do código original)"""
+    return pagina.evaluate("""
+        () => {
+            const dados = [];
+            const linhas = document.querySelectorAll('table tbody tr');
+            
+            for (let i = 0; i < linhas.length; i++) {
+                const linha = linhas[i];
+                const colunas = linha.querySelectorAll('td');
                 
-    except Exception as e:
-        print(f"❌ Erro durante navegação: {e}")
-        return False
+                if (colunas.length < 6) continue;
+                
+                const data = colunas[1]?.textContent?.trim();
+                if (!data) continue;
+                
+                if (data.includes('2024')) {
+                    dados.push({ deve_parar: true });
+                    break;
+                }
+                
+                const btnFreq = linha.querySelector('button[onclick*="visualizarFrequencias"]');
+                if (!btnFreq) continue;
+                
+                const onclick = btnFreq.getAttribute('onclick');
+                const match = onclick?.match(/visualizarFrequencias\\((\\d+),\\s*(\\d+)\\)/);
+                
+                if (match) {
+                    dados.push({
+                        aula_id: match[1],
+                        professor_id: match[2],
+                        data: data,
+                        congregacao: colunas[2]?.textContent?.trim() || '',
+                        curso: colunas[3]?.textContent?.trim() || '',
+                        turma: colunas[4]?.textContent?.trim() || ''
+                    });
+                }
+            }
+            
+            return dados;
+        }
+    """)
+
+def processar_atas_paralelo(session, aula_ids):
+    """Processa ATAs em paralelo (mantido do código anterior)"""
+    def processar_ata(aula_id):
+        with cache_lock:
+            if aula_id in ata_cache:
+                return aula_id, ata_cache[aula_id]
+        
+        try:
+            url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+            resp = session.get(url, timeout=3)
+            resultado = "OK" if resp.status_code == 200 and "ATA DA AULA" in resp.text else "FANTASMA"
+            
+            with cache_lock:
+                ata_cache[aula_id] = resultado
+            
+            return aula_id, resultado
+        except:
+            with cache_lock:
+                ata_cache[aula_id] = "ERRO"
+            return aula_id, "ERRO"
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+        futures = [executor.submit(processar_ata, aula_id) for aula_id in aula_ids]
+        
+        resultados = {}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                aula_id, status = future.result()
+                resultados[aula_id] = status
+            except:
+                pass
+        
+        return resultados
 
 def main():
     tempo_inicio = time.time()
+    
+    print("🚀 MODO SEM MODALS - Abordagens Alternativas")
+    print("🎯 Meta: Eliminar gargalo dos modals")
     
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
         
-        # Configurações do navegador
-        pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        })
-        
-        print("🔐 Fazendo login...")
+        print("🔐 Login...")
         pagina.goto(URL_INICIAL)
         
-        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
         
         try:
             pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado com sucesso!")
-        except PlaywrightTimeoutError:
-            print("❌ Falha no login. Verifique suas credenciais.")
-            navegador.close()
+            print("✅ Login OK!")
+        except:
+            print("❌ Login falhou")
             return
         
-        # Navegar pelos menus para histórico de aulas
-        if not navegar_para_historico_aulas(pagina):
-            print("❌ Falha na navegação para histórico de aulas.")
-            navegador.close()
-            return
+        # Navegação direta para histórico
+        print("🌐 Navegando para histórico...")
+        pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
         
-        # Configurar para mostrar 2000 registros
-        print("⚙️ Configurando para mostrar 2000 registros...")
+        # Configurar 2000 registros
         try:
-            # Aguardar o seletor de quantidade aparecer
             pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
             pagina.select_option('select[name="listagem_length"]', "2000")
+            time.sleep(2)
             print("✅ Configurado para 2000 registros")
-            
-            # Aguardar a página recarregar com 2000 registros
-            time.sleep(3)
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao configurar registros: {e}")
-            print("📋 Continuando com configuração padrão...")
-        
-        # Aguardar carregamento da tabela após mudança de quantidade
-        print("⏳ Aguardando nova configuração carregar...")
-        try:
-            # Aguardar pelo menos um checkbox aparecer novamente
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-            print("✅ Tabela recarregada com nova configuração!")
         except:
-            print("⚠️ Timeout aguardando recarregamento - continuando...")
+            print("⚠️ Não conseguiu configurar 2000")
         
-        # Criar sessão requests com cookies para detalhes das aulas
-        cookies_dict = extrair_cookies_playwright(pagina)
+        # Setup session
+        cookies = {cookie['name']: cookie['value'] for cookie in pagina.context.cookies()}
         session = requests.Session()
-        session.cookies.update(cookies_dict)
+        session.cookies.update(cookies)
         
-        resultado = []
+        # DISCOVERY PHASE: Descobrir endpoints
+        print("\n🔍 FASE 1: Descobrindo endpoints...")
+        endpoints = descobrir_endpoints_dinamicamente(pagina)
+        
+        if endpoints:
+            print(f"✅ Descobertos {len(endpoints)} endpoints:")
+            for endpoint in endpoints[:5]:  # Mostrar apenas os primeiros 5
+                print(f"   • {endpoint}")
+        else:
+            print("⚠️ Nenhum endpoint descoberto - usando abordagens diretas")
+        
+        resultado_final = []
         pagina_atual = 1
-        deve_parar = False
+        total_processado = 0
         
-        while not deve_parar:
-            print(f"📖 Processando página {pagina_atual}...")
+        # Interceptar requisições AJAX (Abordagem 1)
+        dados_interceptados = interceptar_requisicoes_ajax(pagina, session)
+        
+        print("\n🔄 FASE 2: Processamento...")
+        
+        while True:
+            print(f"\n📖 Página {pagina_atual}")
             
-            # Aguardar linhas carregarem
-            try:
-                # Aguardar checkboxes que indicam linhas carregadas
-                pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
-                time.sleep(2)  # Aguardar estabilização
-            except:
-                print("⚠️ Timeout aguardando linhas - tentando continuar...")
+            time.sleep(1)
             
-            # Contar quantas linhas temos na página atual
-            total_linhas = contar_linhas_na_pagina(pagina)
+            # Extrair dados da página
+            dados_pagina = extrair_dados_pagina_otimizado(pagina)
             
-            if total_linhas == 0:
-                print("🏁 Não há mais linhas para processar.")
+            if not dados_pagina:
                 break
             
-            print(f"   📊 Encontradas {total_linhas} aulas nesta página")
+            # Verificar parada
+            deve_parar = any(d.get('deve_parar') for d in dados_pagina)
+            if deve_parar:
+                dados_pagina = [d for d in dados_pagina if not d.get('deve_parar')]
+                print("🛑 Encontrou 2024")
             
-            # Processar cada linha POR ÍNDICE (evita referências antigas)
-            for i in range(total_linhas):
-                # Extrair dados da linha atual pelo índice
-                dados_aula, deve_parar_ano = extrair_dados_de_linha_por_indice(pagina, i)
+            total_aulas = len(dados_pagina)
+            if total_aulas == 0:
+                break
+            
+            print(f"   📊 {total_aulas} aulas encontradas")
+            
+            # PROCESSAR SEM MODALS
+            print("   🚀 Processando sem modals...")
+            
+            # Processar frequências em lote (SEM MODALS!)
+            resultados_freq = processar_batch_sem_modals(session, dados_pagina)
+            
+            # Processar ATAs em paralelo
+            aula_ids = [d['aula_id'] for d in dados_pagina]
+            resultados_ata = processar_atas_paralelo(session, aula_ids)
+            
+            # Montar resultados finais
+            for resultado_freq in resultados_freq:
+                dados = resultado_freq['dados']
+                freq = resultado_freq['freq']
+                ata_status = resultados_ata.get(dados['aula_id'], "ERRO")
                 
-                if deve_parar_ano:
-                    print("🛑 Encontrado ano 2024 - finalizando coleta!")
-                    deve_parar = True
-                    break
+                linha = [
+                    dados['congregacao'],
+                    dados['curso'],
+                    dados['turma'],
+                    dados['data'],
+                    "; ".join(freq['presentes_ids']),
+                    "; ".join(freq['presentes_nomes']),
+                    "; ".join(freq['ausentes_ids']),
+                    "; ".join(freq['ausentes_nomes']),
+                    freq['tem_presenca'],
+                    ata_status
+                ]
                 
-                if not dados_aula:
-                    continue
-                
-                print(f"      🎯 Aula {i+1}/{total_linhas}: {dados_aula['data']} - {dados_aula['curso']}")
-                
-                # Clicar no botão de frequência para abrir modal
-                try:
-                    # Aguardar que não haja modal aberto antes de clicar
-                    try:
-                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
-                    except:
-                        # Se ainda há modal, forçar fechamento
-                        print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
-                        try:
-                            # Tentar múltiplas formas de fechar modal
-                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
-                            if btn_fechar:
-                                btn_fechar.click()
-                            else:
-                                # Forçar fechamento via JavaScript
-                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                            
-                            # Aguardar fechar
-                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
-                        except:
-                            # Último recurso: recarregar página
-                            print("⚠️ Forçando escape...")
-                            pagina.keyboard.press("Escape")
-                            time.sleep(1)
-                    
-                    # Agora clicar no botão de frequência PELO ÍNDICE
-                    print(f"         🖱️ Clicando em frequência...")
-                    if clicar_botao_frequencia_por_indice(pagina, i):
-                        # Aguardar modal carregar
-                        time.sleep(1)
-                        
-                        # Processar dados de frequência
-                        freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
-                        
-                        # Fechar modal de forma mais robusta
-                        print(f"         🚪 Fechando modal...")
-                        try:
-                            # Tentar diferentes formas de fechar
-                            fechou = False
-                            
-                            # 1. Botão Fechar específico
-                            btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
-                            if btn_fechar:
-                                btn_fechar.click()
-                                fechou = True
-                            
-                            # 2. Qualquer botão de fechar modal
-                            if not fechou:
-                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
-                                if btn_fechar:
-                                    btn_fechar.click()
-                                    fechou = True
-                            
-                            # 3. Via JavaScript
-                            if not fechou:
-                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                                fechou = True
-                            
-                            # 4. ESC como último recurso
-                            if not fechou:
-                                pagina.keyboard.press("Escape")
-                            
-                            # Aguardar modal fechar completamente
-                            try:
-                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
-                                print(f"         ✅ Modal fechado com sucesso")
-                            except:
-                                print(f"         ⚠️ Modal pode não ter fechado completamente")
-                                
-                        except Exception as close_error:
-                            print(f"         ⚠️ Erro ao fechar modal: {close_error}")
-                            pagina.keyboard.press("Escape")
-                        
-                        # Pausa adicional para estabilizar
-                        time.sleep(1)
-                        
-                        # Obter detalhes da ATA via requests
-                        ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
-                        
-                        # Montar linha de resultado
-                        linha_resultado = [
-                            dados_aula['congregacao'],
-                            dados_aula['curso'],
-                            dados_aula['turma'],
-                            dados_aula['data'],
-                            "; ".join(freq_data['presentes_ids']),
-                            "; ".join(freq_data['presentes_nomes']),
-                            "; ".join(freq_data['ausentes_ids']),
-                            "; ".join(freq_data['ausentes_nomes']),
-                            freq_data['tem_presenca'],
-                            ata_status
-                        ]
-                        
-                        resultado.append(linha_resultado)
-                        
-                        # Mostrar resumo da aula
-                        total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
-                        print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
-                    
-                    else:
-                        print(f"         ❌ Falha ao clicar no botão de frequência")
-                        
-                except Exception as e:
-                    print(f"⚠️ Erro ao processar aula: {e}")
-                    continue
-                
-                # Pequena pausa entre aulas
-                time.sleep(0.5)
+                resultado_final.append(linha)
+                total_processado += 1
+            
+            # Stats
+            freq_ok = sum(1 for r in resultados_freq if r['freq']['tem_presenca'] == 'OK')
+            freq_erro = sum(1 for r in resultados_freq if r['freq']['tem_presenca'] == 'ERRO')
+            
+            print(f"   ✅ {len(resultados_freq)} processadas | OK: {freq_ok} | ERRO: {freq_erro}")
+            print(f"   📊 Total acumulado: {total_processado}")
             
             if deve_parar:
                 break
             
-            # Tentar avançar para próxima página
-            try:
-                # Aguardar um pouco para garantir que a página atual está estável
-                time.sleep(2)
-                
-                # Buscar botão próximo
-                btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
-                
-                if btn_proximo:
-                    # Verificar se o botão não está desabilitado
-                    parent = btn_proximo.query_selector("..")
-                    parent_class = parent.get_attribute("class") if parent else ""
-                    
-                    if "disabled" not in parent_class:
-                        print("➡️ Avançando para próxima página...")
-                        btn_proximo.click()
-                        pagina_atual += 1
-                        
-                        # Aguardar nova página carregar
-                        time.sleep(3)
-                        
-                        # Aguardar checkboxes da nova página
-                        try:
-                            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
-                        except:
-                            print("⚠️ Timeout aguardando nova página")
-                        
-                    else:
-                        print("🏁 Botão próximo desabilitado - não há mais páginas.")
-                        break
-                else:
-                    print("🏁 Botão próximo não encontrado - não há mais páginas.")
-                    break
-                    
-            except Exception as e:
-                print(f"⚠️ Erro ao navegar para próxima página: {e}")
-                break
-        
-        print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado)}")
-        
-        # Preparar dados para envio
-        headers = [
-            "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
-            "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
-        ]
-        
-        body = {
-            "tipo": "historico_aulas",
-            "dados": resultado,
-            "headers": headers,
-            "resumo": {
-                "total_aulas": len(resultado),
-                "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
-                "paginas_processadas": pagina_atual
-            }
-        }
-        
-        # Enviar dados para Apps Script
-        if resultado:
-            try:
-                print("📤 Enviando dados para Google Sheets...")
-                resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-                print("✅ Dados enviados!")
-                print("Status code:", resposta_post.status_code)
-                print("Resposta do Apps Script:", resposta_post.text)
-            except Exception as e:
-                print(f"❌ Erro ao enviar para Apps Script: {e}")
-        
-        # Resumo final
-        print("\n📈 RESUMO DA COLETA:")
-        print(f"   🎯 Total de aulas: {len(resultado)}")
-        print(f"   📄 Páginas processadas: {pagina_atual}")
-        print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
-        
-        if resultado:
-            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado)
-            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado)
-            aulas_com_ata = sum(1 for linha in resultado if linha[9] == "OK")
+            # Próxima página
+            proxima = pagina.evaluate("""
+                () => {
+                    const btn = document.querySelector('a:has(i.fa-chevron-right)');
+                    if (btn && !btn.parentElement.classList.contains('disabled')) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                }
+            """)
             
-            print(f"   👥 Total de presenças registradas: {total_presentes}")
-            print(f"   ❌ Total de ausências registradas: {total_ausentes}")
-            print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado)}")
+            if not proxima:
+                break
+            
+            pagina_atual += 1
+            time.sleep(1.5)
+
+        # Resultados finais
+        tempo_total = (time.time() - tempo_inicio) / 60
+        
+        print(f"\n🏁 CONCLUÍDO SEM MODALS!")
+        print(f"   ⏱️ Tempo: {tempo_total:.1f} minutos")
+        print(f"   🎯 Aulas: {len(resultado_final)}")
+        print(f"   📈 Performance: {len(resultado_final)/tempo_total:.1f} aulas/min")
+        print(f"   💾 Cache frequências: {len(frequencia_cache)}")
+        print(f"   💾 Cache ATAs: {len(ata_cache)}")
+        
+        # Análise de eficácia das abordagens
+        freq_ok = sum(1 for linha in resultado_final if linha[8] == 'OK')
+        freq_fantasma = sum(1 for linha in resultado_final if linha[8] == 'FANTASMA')
+        freq_erro = sum(1 for linha in resultado_final if linha[8] == 'ERRO')
+        
+        print(f"\n📊 EFICÁCIA DAS ABORDAGENS:")
+        print(f"   ✅ Sucessos: {freq_ok} ({freq_ok/len(resultado_final)*100:.1f}%)")
+        print(f"   👻 Sem dados: {freq_fantasma} ({freq_fantasma/len(resultado_final)*100:.1f}%)")
+        print(f"   ❌ Erros: {freq_erro} ({freq_erro/len(resultado_final)*100:.1f}%)")
+        
+        # Salvar dados
+        if resultado_final:
+            headers = [
+                "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+                "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+            ]
+            
+            body = {
+                "tipo": "historico_aulas_sem_modals",
+                "dados": resultado_final,
+                "headers": headers,
+                "resumo": {
+                    "total_aulas": len(resultado_final),
+                    "tempo_minutos": round(tempo_total, 1),
+                    "performance_aulas_por_minuto": round(len(resultado_final)/tempo_total, 1),
+                    "paginas": pagina_atual,
+                    "cache_frequencias": len(frequencia_cache),
+                    "cache_atas": len(ata_cache),
+                    "sucessos": freq_ok,
+                    "erros": freq_erro,
+                    "modo": "SEM_MODALS",
+                    "endpoints_descobertos": len(endpoints) if endpoints else 0
+                }
+            }
+            
+            try:
+                print("📤 Enviando...")
+                resp = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
+                print(f"✅ Enviado! {resp.status_code}")
+            except Exception as e:
+                print(f"❌ Erro envio: {e}")
         
         navegador.close()
 
