@@ -465,4 +465,39 @@ def main():
             
             # Processar cada aluno
             for i, aluno_id in enumerate(ALUNOS_IDS, 1):
-                print(f"\n📋 Processando {i}/{len(ALUNOS_IDS)
+                print(f"\n📋 Processando {i}/{len(ALUNOS_IDS)}")")
+                
+                dados_aluno = scraper.extrair_dados_aluno(aluno_id)
+                if dados_aluno:
+                    dados_extraidos.append(dados_aluno)
+                
+                # Pequena pausa entre requisições
+                time.sleep(2)
+            
+            # Salvar dados
+            if dados_extraidos:
+                print(f"\n✅ Extração concluída! {len(dados_extraidos)} alunos processados.")
+                
+                # Salvar localmente primeiro
+                salvar_dados_local(dados_extraidos)
+                
+                # Tentar enviar para Google Sheets
+                if not enviar_para_apps_script(dados_extraidos):
+                    print("⚠️ Falha no envio para Google Sheets, mas dados foram salvos localmente.")
+                
+            else:
+                print("❌ Nenhum dado foi extraído.")
+            
+        except Exception as e:
+            print(f"❌ Erro geral: {e}")
+        
+        finally:
+            navegador.close()
+            
+            # Estatísticas finais
+            tempo_total = round(time.time() - tempo_inicio, 2)
+            print(f"\n⏱️ Tempo total de processamento: {tempo_total} segundos")
+            print(f"📈 Alunos processados com sucesso: {len(dados_extraidos)}")
+
+if __name__ == "__main__":
+    main()
