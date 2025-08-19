@@ -68,12 +68,20 @@ def processar_frequencia_modal(pagina, aula_id, professor_id):
             nome_cell = linha.query_selector("td:first-child")
             nome_completo = nome_cell.inner_text().strip() if nome_cell else ""
             
+            # IGNORAR linhas sem nome (vazias)
+            if not nome_completo:
+                continue
+            
             # Extrair status de presença
             link_presenca = linha.query_selector("td:last-child a")
             
             if link_presenca:
                 # Extrair ID do membro do data-id-membro
                 id_membro = link_presenca.get_attribute("data-id-membro")
+                
+                # IGNORAR se não tem ID válido
+                if not id_membro:
+                    continue
                 
                 # Verificar se está presente ou ausente pelo ícone
                 icone = link_presenca.query_selector("i")
@@ -358,22 +366,79 @@ def main():
                 try:
                     btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
                     if btn_freq:
+                        # Aguardar que não haja modal aberto antes de clicar
+                        try:
+                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
+                        except:
+                            # Se ainda há modal, forçar fechamento
+                            print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
+                            try:
+                                # Tentar múltiplas formas de fechar modal
+                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
+                                if btn_fechar:
+                                    btn_fechar.click()
+                                else:
+                                    # Forçar fechamento via JavaScript
+                                    pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                                
+                                # Aguardar fechar
+                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
+                            except:
+                                # Último recurso: recarregar página
+                                print("⚠️ Forçando escape...")
+                                pagina.keyboard.press("Escape")
+                                time.sleep(1)
+                        
+                        # Agora clicar no botão de frequência
+                        print(f"         🖱️ Clicando em frequência...")
                         btn_freq.click()
+                        
+                        # Aguardar modal carregar
+                        time.sleep(1)
                         
                         # Processar dados de frequência
                         freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
                         
-                        # Fechar modal
+                        # Fechar modal de forma mais robusta
+                        print(f"         🚪 Fechando modal...")
                         try:
-                            btn_fechar = pagina.query_selector("button.close, .modal-header button, [data-dismiss='modal']")
+                            # Tentar diferentes formas de fechar
+                            fechou = False
+                            
+                            # 1. Botão Fechar específico
+                            btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
                             if btn_fechar:
                                 btn_fechar.click()
-                            else:
+                                fechou = True
+                            
+                            # 2. Qualquer botão de fechar modal
+                            if not fechou:
+                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
+                                if btn_fechar:
+                                    btn_fechar.click()
+                                    fechou = True
+                            
+                            # 3. Via JavaScript
+                            if not fechou:
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                                fechou = True
+                            
+                            # 4. ESC como último recurso
+                            if not fechou:
                                 pagina.keyboard.press("Escape")
-                        except:
+                            
+                            # Aguardar modal fechar completamente
+                            try:
+                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
+                                print(f"         ✅ Modal fechado com sucesso")
+                            except:
+                                print(f"         ⚠️ Modal pode não ter fechado completamente")
+                                
+                        except Exception as close_error:
+                            print(f"         ⚠️ Erro ao fechar modal: {close_error}")
                             pagina.keyboard.press("Escape")
                         
-                        # Aguardar modal fechar
+                        # Pausa adicional para estabilizar
                         time.sleep(1)
                         
                         # Obter detalhes da ATA via requests
