@@ -30,5 +30,11 @@ jobs:
       - name: Instalar navegadores do Playwright
         run: python -m playwright install
 
-      - name: Executar script_historicoindividual.py
-        run: python script_historicoindividual.py
+      - name: Executar script_turma.py
+        run: python script_turma.py
+
+      - name: Executar script_expandido.py
+        run: python script_expandido.py
+
+      - name: Executar script_nivel.py
+        run: python script_nivel.py
