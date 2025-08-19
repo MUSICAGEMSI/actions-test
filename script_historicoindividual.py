@@ -17,12 +17,8 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxVW_i69_DL_UQQqVjxLsAcEv5edorXSD4g-PZUu4LC9TkGd9yEfNiTL0x92ELDNm8M/exec'
 
-# Lista de IDs dos alunos (adicione os IDs que você precisa)
-ALUNOS_IDS = [
-    697150,
-    732523,
-    # Adicione mais IDs conforme necessário
-]
+# URL para acessar a lista de alunos (ajuste conforme necessário)
+URL_ALUNOS = "https://musical.congregacao.org.br/alunos/"
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
@@ -31,6 +27,371 @@ if not EMAIL or not SENHA:
 class MusicLessonScraper:
     def __init__(self, page):
         self.page = page
+        
+    def obter_lista_alunos(self):
+        """Obtém a lista completa de IDs de alunos do sistema"""
+        print("🔍 Buscando lista completa de alunos...")
+        
+        alunos_ids = []
+        
+        try:
+            # Tentar diferentes URLs possíveis para lista de alunos
+            urls_possiveis = [
+                "https://musical.congregacao.org.br/alunos/",
+                "https://musical.congregacao.org.br/alunos/index",
+                "https://musical.congregacao.org.br/usuarios/",
+                "https://musical.congregacao.org.br/dashboard/",
+                "https://musical.congregacao.org.br/"
+            ]
+            
+            for url in urls_possiveis:
+                try:
+                    print(f"   🔍 Tentando: {url}")
+                    self.page.goto(url, timeout=30000)
+                    self.page.wait_for_load_state('networkidle')
+                    
+                    html_content = self.page.content()
+                    
+                    # Procurar por links que contenham IDs de alunos
+                    # Padrões comuns: /licoes/index/123456, /aluno/123456, etc.
+                    padroes_ids = [
+                        r'/licoes/index/(\d+)',
+                        r'/aluno[s]?/(\d+)',
+                        r'/usuario[s]?/(\d+)',
+                        r'aluno[_-]?id[=:](\d+)',
+                        r'id[=:](\d+)',
+                        r'data-id[=:][\'""](\d+)[\'""]',
+                        r'value[=:][\'""](\d+)[\'""]'
+                    ]
+                    
+                    ids_encontrados = set()
+                    
+                    for padrao in padroes_ids:
+                        matches = re.findall(padrao, html_content, re.IGNORECASE)
+                        for match in matches:
+                            if len(match) >= 4:  # IDs geralmente têm pelo menos 4 dígitos
+                                ids_encontrados.add(int(match))
+                    
+                    if ids_encontrados:
+                        alunos_ids.extend(list(ids_encontrados))
+                        print(f"   ✅ Encontrados {len(ids_encontrados)} IDs únicos em: {url}")
+                        break
+                        
+                except Exception as e:
+                    print(f"   ❌ Erro ao acessar {url}: {e}")
+                    continue
+            
+            # Se não encontrou IDs automaticamente, tentar extrair de tabelas
+            if not alunos_ids:
+                print("🔍 Tentando extrair IDs de tabelas...")
+                soup = BeautifulSoup(self.page.content(), 'html.parser')
+                
+                # Procurar em tabelas
+                for table in soup.find_all('table'):
+                    for link in table.find_all('a', href=True):
+                        href = link['href']
+                        match = re.search(r'(\d{4,})', href)
+                        if match:
+                            alunos_ids.append(int(match.group(1)))
+                
+                # Procurar em forms e inputs
+                for form in soup.find_all('form'):
+                    for input_elem in form.find_all('input'):
+                        value = input_elem.get('value', '')
+                        if value.isdigit() and len(value) >= 4:
+                            alunos_ids.append(int(value))
+            
+            # Remover duplicatas e ordenar
+            alunos_ids = sorted(list(set(alunos_ids)))
+            
+            print(f"✅ Total de {len(alunos_ids)} alunos encontrados: {alunos_ids[:10]}{'...' if len(alunos_ids) > 10 else ''}")
+            
+            # Se ainda não encontrou nada, usar lista padrão expandida
+            if not alunos_ids:
+                print("⚠️ Não foi possível encontrar IDs automaticamente. Usando lista padrão...")
+                alunos_ids = [697150, 732523]  # Lista padrão como fallback
+                
+                # Tentar alguns IDs sequenciais próximos aos conhecidos
+                base_ids = [697150, 732523]
+                for base_id in base_ids:
+                    for offset in range(-50, 51):
+                        test_id = base_id + offset
+                        if test_id > 0:
+                            alunos_ids.append(test_id)
+                
+                alunos_ids = sorted(list(set(alunos_ids)))
+                print(f"📝 Lista expandida com {len(alunos_ids)} IDs para testar")
+            
+            return alunos_ids
+            
+        except Exception as e:
+            print(f"❌ Erro ao obter lista de alunos: {e}")
+            # Retornar lista padrão em caso de erro
+            return [697150, 732523]
+    
+    def verificar_aluno_existe(self, aluno_id):
+        """Verifica se um aluno existe antes de tentar extrair dados"""
+        try:
+            url = f"https://musical.congregacao.org.br/licoes/index/{aluno_id}"
+            self.page.goto(url, timeout=15000)
+            
+            # Aguardar um pouco para carregar
+            time.sleep(2)
+            
+            content = self.page.content().lower()
+            
+            # Verificar se login foi bem-sucedido
+        content = page.content().lower()
+        sucesso_indicadores = ["sair", "logout", "dashboard", "painel", "alunos", "licoes", "bem-vindo"]
+        
+        if any(termo in content for termo in sucesso_indicadores):
+            print("✅ Login realizado com sucesso!")
+            return True
+        else:
+            print("❌ Login parece ter falhado")
+            # Salvar página pós-login para debug
+            with open('debug_pos_login.html', 'w', encoding='utf-8') as f:
+                f.write(page.content())
+            print("📄 Página pós-login salva como debug_pos_login.html")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro durante o login: {e}")
+        return False
+
+def salvar_dados_local(dados, nome_arquivo='licoes_musicais_extraidas.csv'):
+    """Salva os dados localmente em CSV"""
+    try:
+        with open(nome_arquivo, 'w', newline='', encoding='utf-8-sig') as arquivo:
+            writer = csv.writer(arquivo, delimiter=';')
+            
+            # Cabeçalho
+            writer.writerow([
+                'ID', 'Nome do Aluno', 'MTS (Data da Lição)', 
+                'MSA (Data da Lição)', 'PROVAS (Data da Prova)', 
+                'MÉTODO (Data da Lição)', 'HINÁRIO (Data da Aula)', 
+                'ESCALAS (Data de Cadastro)'
+            ])
+            
+            # Dados
+            for aluno in dados:
+                writer.writerow([
+                    aluno['id'], aluno['nome'], aluno['mts'],
+                    aluno['msa'], aluno['provas'], aluno['metodo'],
+                    aluno['hinario'], aluno['escalas']
+                ])
+        
+        print(f"💾 Dados salvos localmente em: {nome_arquivo}")
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao salvar dados localmente: {e}")
+        return False
+
+def enviar_para_apps_script(dados):
+    """Envia dados para Google Apps Script"""
+    try:
+        print("📤 Enviando dados para Google Sheets...")
+        
+        # Preparar dados para envio
+        headers = [
+            'ID', 'Nome do Aluno', 'MTS (Data da Lição)', 
+            'MSA (Data da Lição)', 'PROVAS (Data da Prova)', 
+            'MÉTODO (Data da Lição)', 'HINÁRIO (Data da Aula)', 
+            'ESCALAS (Data de Cadastro)'
+        ]
+        
+        rows = []
+        for aluno in dados:
+            rows.append([
+                aluno['id'], aluno['nome'], aluno['mts'],
+                aluno['msa'], aluno['provas'], aluno['metodo'],
+                aluno['hinario'], aluno['escalas']
+            ])
+        
+        payload = {
+            "headers": headers,
+            "data": rows
+        }
+        
+        # Configurar timeout maior para envios grandes
+        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
+        
+        if response.status_code == 200:
+            print("✅ Dados enviados com sucesso para Google Sheets!")
+            try:
+                resposta_json = response.json()
+                if 'planilha_url' in resposta_json:
+                    print(f"🔗 Link da planilha: {resposta_json['planilha_url']}")
+            except:
+                pass
+            return True
+        else:
+            print(f"❌ Erro ao enviar para Apps Script: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro ao enviar para Apps Script: {e}")
+        return False
+
+def main():
+    """Função principal"""
+    tempo_inicio = time.time()
+    print("🎵 Iniciando extração de lições musicais...")
+    
+    with sync_playwright() as p:
+        # Configurar navegador
+        navegador = p.chromium.launch(
+            headless=True,  # Sempre headless para compatibilidade com servidores
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
+            ]
+        )
+        contexto = navegador.new_context()
+        page = contexto.new_page()
+        
+        try:
+            # Fazer login
+            if not fazer_login(page):
+                print("❌ Não foi possível fazer login. Encerrando.")
+                return
+            
+            # Inicializar scraper
+            scraper = MusicLessonScraper(page)
+            
+            # Obter lista completa de alunos
+            alunos_ids = scraper.obter_lista_alunos()
+            print(f"📋 Total de alunos para verificar: {len(alunos_ids)}")
+            
+            # Filtrar apenas alunos válidos (existe uma página para eles)
+            print("🔍 Verificando quais alunos são válidos...")
+            alunos_validos = []
+            
+            for i, aluno_id in enumerate(alunos_ids[:50]):  # Limitar a 50 primeiros para teste
+                print(f"   Verificando {i+1}/{min(50, len(alunos_ids))}: ID {aluno_id}")
+                
+                if scraper.verificar_aluno_existe(aluno_id):
+                    alunos_validos.append(aluno_id)
+                    print(f"   ✅ Aluno {aluno_id} é válido")
+                else:
+                    print(f"   ❌ Aluno {aluno_id} não existe ou sem acesso")
+                
+                # Pausa entre verificações
+                time.sleep(1)
+                
+                # A cada 10 verificações, mostrar progresso
+                if (i + 1) % 10 == 0:
+                    print(f"   📊 Progresso: {i+1}/{min(50, len(alunos_ids))} verificados, {len(alunos_validos)} válidos encontrados")
+            
+            print(f"\n✅ {len(alunos_validos)} alunos válidos encontrados: {alunos_validos}")
+            
+            if not alunos_validos:
+                print("❌ Nenhum aluno válido encontrado. Verifique as credenciais e URLs.")
+                return
+            
+            # Processar dados dos alunos válidos
+            dados_extraidos = []
+            print(f"\n🔄 Iniciando extração de dados de {len(alunos_validos)} alunos...")
+            
+            for i, aluno_id in enumerate(alunos_validos, 1):
+                print(f"\n📋 Processando {i}/{len(alunos_validos)}")
+                
+                dados_aluno = scraper.extrair_dados_aluno(aluno_id)
+                if dados_aluno:
+                    dados_extraidos.append(dados_aluno)
+                    print(f"   ✅ Dados extraídos com sucesso para {dados_aluno['nome']}")
+                else:
+                    print(f"   ❌ Falha na extração para aluno {aluno_id}")
+                
+                # Pequena pausa entre requisições
+                time.sleep(3)
+                
+                # A cada 5 alunos, mostrar estatísticas
+                if i % 5 == 0:
+                    print(f"\n📊 Progresso: {i}/{len(alunos_validos)} processados, {len(dados_extraidos)} com sucesso")
+            
+            # Salvar dados
+            if dados_extraidos:
+                print(f"\n🎉 Extração concluída! {len(dados_extraidos)} alunos processados com sucesso.")
+                
+                # Salvar localmente primeiro
+                if salvar_dados_local(dados_extraidos):
+                    print("✅ Backup local criado com sucesso")
+                
+                # Tentar enviar para Google Sheets
+                print("\n📤 Enviando dados para Google Sheets...")
+                if enviar_para_apps_script(dados_extraidos):
+                    print("🎉 Dados sincronizados com Google Sheets!")
+                else:
+                    print("⚠️ Falha no envio para Google Sheets, mas dados foram salvos localmente.")
+                
+                # Mostrar estatísticas finais
+                print(f"\n📊 ESTATÍSTICAS FINAIS:")
+                print(f"   📈 Total de alunos processados: {len(dados_extraidos)}")
+                
+                # Contar registros por categoria
+                stats = {
+                    'MTS': sum(1 for a in dados_extraidos if a['mts']),
+                    'MSA': sum(1 for a in dados_extraidos if a['msa']),
+                    'Provas': sum(1 for a in dados_extraidos if a['provas']),
+                    'Método': sum(1 for a in dados_extraidos if a['metodo']),
+                    'Hinário': sum(1 for a in dados_extraidos if a['hinario']),
+                    'Escalas': sum(1 for a in dados_extraidos if a['escalas'])
+                }
+                
+                for categoria, count in stats.items():
+                    percentual = (count / len(dados_extraidos) * 100) if dados_extraidos else 0
+                    print(f"   📊 {categoria}: {count} alunos ({percentual:.1f}%)")
+                
+            else:
+                print("❌ Nenhum dado foi extraído com sucesso.")
+            
+        except Exception as e:
+            print(f"❌ Erro geral: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            navegador.close()
+            
+            # Estatísticas finais
+            tempo_total = round(time.time() - tempo_inicio, 2)
+            print(f"\n⏱️ Tempo total de processamento: {tempo_total} segundos")
+            print(f"📈 Alunos processados com sucesso: {len(dados_extraidos) if 'dados_extraidos' in locals() else 0}")
+
+if __name__ == "__main__":
+    main() é uma página válida de aluno
+            indicadores_validos = [
+                "lições aprovadas",
+                "módulo",
+                "fase",
+                "método",
+                "hinário",
+                "escala",
+                "prova"
+            ]
+            
+            # Verificar se não é página de erro
+            indicadores_erro = [
+                "erro",
+                "não encontrado",
+                "not found",
+                "acesso negado",
+                "forbidden"
+            ]
+            
+            tem_indicadores_validos = any(ind in content for ind in indicadores_validos)
+            tem_indicadores_erro = any(ind in content for ind in indicadores_erro)
+            
+            return tem_indicadores_validos and not tem_indicadores_erro
+            
+        except Exception as e:
+            print(f"   ⚠️ Erro ao verificar aluno {aluno_id}: {e}")
+            return False
         
     def extrair_nome_aluno(self, html_content):
         """Extrai o nome do aluno do título da página"""
@@ -495,158 +856,4 @@ def fazer_login(page):
         time.sleep(5)
         page.wait_for_load_state('networkidle', timeout=20000)
         
-        # Verificar se login foi bem-sucedido
-        content = page.content().lower()
-        sucesso_indicadores = ["sair", "logout", "dashboard", "painel", "alunos", "licoes", "bem-vindo"]
-        
-        if any(termo in content for termo in sucesso_indicadores):
-            print("✅ Login realizado com sucesso!")
-            return True
-        else:
-            print("❌ Login parece ter falhado")
-            # Salvar página pós-login para debug
-            with open('debug_pos_login.html', 'w', encoding='utf-8') as f:
-                f.write(page.content())
-            print("📄 Página pós-login salva como debug_pos_login.html")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Erro durante o login: {e}")
-        return False
-
-def salvar_dados_local(dados, nome_arquivo='licoes_musicais_extraidas.csv'):
-    """Salva os dados localmente em CSV"""
-    try:
-        with open(nome_arquivo, 'w', newline='', encoding='utf-8-sig') as arquivo:
-            writer = csv.writer(arquivo, delimiter=';')
-            
-            # Cabeçalho
-            writer.writerow([
-                'ID', 'Nome do Aluno', 'MTS (Data da Lição)', 
-                'MSA (Data da Lição)', 'PROVAS (Data da Prova)', 
-                'MÉTODO (Data da Lição)', 'HINÁRIO (Data da Aula)', 
-                'ESCALAS (Data de Cadastro)'
-            ])
-            
-            # Dados
-            for aluno in dados:
-                writer.writerow([
-                    aluno['id'], aluno['nome'], aluno['mts'],
-                    aluno['msa'], aluno['provas'], aluno['metodo'],
-                    aluno['hinario'], aluno['escalas']
-                ])
-        
-        print(f"💾 Dados salvos localmente em: {nome_arquivo}")
-        return True
-    except Exception as e:
-        print(f"❌ Erro ao salvar dados localmente: {e}")
-        return False
-
-def enviar_para_apps_script(dados):
-    """Envia dados para Google Apps Script"""
-    try:
-        print("📤 Enviando dados para Google Sheets...")
-        
-        # Preparar dados para envio
-        headers = [
-            'ID', 'Nome do Aluno', 'MTS (Data da Lição)', 
-            'MSA (Data da Lição)', 'PROVAS (Data da Prova)', 
-            'MÉTODO (Data da Lição)', 'HINÁRIO (Data da Aula)', 
-            'ESCALAS (Data de Cadastro)'
-        ]
-        
-        rows = []
-        for aluno in dados:
-            rows.append([
-                aluno['id'], aluno['nome'], aluno['mts'],
-                aluno['msa'], aluno['provas'], aluno['metodo'],
-                aluno['hinario'], aluno['escalas']
-            ])
-        
-        payload = {
-            "headers": headers,
-            "data": rows
-        }
-        
-        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=60)
-        
-        if response.status_code == 200:
-            print("✅ Dados enviados com sucesso para Google Sheets!")
-            return True
-        else:
-            print(f"❌ Erro ao enviar para Apps Script: {response.status_code}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Erro ao enviar para Apps Script: {e}")
-        return False
-
-def main():
-    """Função principal"""
-    tempo_inicio = time.time()
-    print("🎵 Iniciando extração de lições musicais...")
-    print(f"📋 Total de alunos a processar: {len(ALUNOS_IDS)}")
-    
-    with sync_playwright() as p:
-        # Configurar navegador
-        navegador = p.chromium.launch(
-            headless=True,  # Sempre headless para compatibilidade com servidores
-            args=[
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-web-security',
-                '--disable-features=VizDisplayCompositor'
-            ]
-        )
-        contexto = navegador.new_context()
-        page = contexto.new_page()
-        
-        try:
-            # Fazer login
-            if not fazer_login(page):
-                print("❌ Não foi possível fazer login. Encerrando.")
-                return
-            
-            # Inicializar scraper
-            scraper = MusicLessonScraper(page)
-            dados_extraidos = []
-            
-            # Processar cada aluno
-            for i, aluno_id in enumerate(ALUNOS_IDS, 1):
-                print(f"\n📋 Processando {i}/{len(ALUNOS_IDS)}")
-                
-                dados_aluno = scraper.extrair_dados_aluno(aluno_id)
-                if dados_aluno:
-                    dados_extraidos.append(dados_aluno)
-                
-                # Pequena pausa entre requisições
-                time.sleep(2)
-            
-            # Salvar dados
-            if dados_extraidos:
-                print(f"\n✅ Extração concluída! {len(dados_extraidos)} alunos processados.")
-                
-                # Salvar localmente primeiro
-                salvar_dados_local(dados_extraidos)
-                
-                # Tentar enviar para Google Sheets
-                if not enviar_para_apps_script(dados_extraidos):
-                    print("⚠️ Falha no envio para Google Sheets, mas dados foram salvos localmente.")
-                
-            else:
-                print("❌ Nenhum dado foi extraído.")
-            
-        except Exception as e:
-            print(f"❌ Erro geral: {e}")
-        
-        finally:
-            navegador.close()
-            
-            # Estatísticas finais
-            tempo_total = round(time.time() - tempo_inicio, 2)
-            print(f"\n⏱️ Tempo total de processamento: {tempo_total} segundos")
-            print(f"📈 Alunos processados com sucesso: {len(dados_extraidos)}")
-
-if __name__ == "__main__":
-    main()
+        # Verificar se
