@@ -7,516 +7,473 @@ import re
 import requests
 import time
 import json
-from bs4 import BeautifulSoup
-from datetime import datetime
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import queue
+from datetime import datetime
+from queue import Queue
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_PAINEL = "https://musical.congregacao.org.br/painel"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
+
+# Configurações otimizadas para GitHub Actions
+MAX_ABAS_SIMULTANEAS = 16  # GitHub Actions tem recursos robustos
+TIMEOUT_RAPIDO = 8         # Timeouts reduzidos para CI/CD
+TIMEOUT_MODAL = 5
+PAUSA_ENTRE_MODAIS = 0.1   # Pausa mínima entre operações
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-# Configurações otimizadas
-MAX_WORKERS = 8  # Aumentar workers simultâneos
-TIMEOUT_MODAL = 3000  # Reduzir timeout dos modais
-DELAY_BETWEEN_CLICKS = 0.2  # Reduzir delay entre cliques
-MAX_RETRIES = 2  # Reduzir tentativas
+class ColetorTurbo:
+    def __init__(self):
+        self.resultado_global = []
+        self.lock = threading.Lock()
+        self.session_cookies = None
+        self.contexto_principal = None
+        self.total_processadas = 0
+        
+    def extrair_cookies_playwright(self, pagina):
+        """Extrai cookies do Playwright para usar em requests"""
+        cookies = pagina.context.cookies()
+        return {cookie['name']: cookie['value'] for cookie in cookies}
 
-# Locks e estruturas globais
-print_lock = threading.Lock()
-resultado_global = []
-resultado_lock = threading.Lock()
-stop_processing = threading.Event()
-cookies_global = None
-
-def safe_print(message):
-    """Print thread-safe"""
-    with print_lock:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-def adicionar_resultado(linhas):
-    """Adiciona resultados de forma thread-safe"""
-    with resultado_lock:
-        resultado_global.extend(linhas)
-
-def extrair_detalhes_aula_batch(session, aulas_ids):
-    """Extrai detalhes de múltiplas aulas de uma vez - OTIMIZADO"""
-    resultados = {}
-    
-    for aula_id in aulas_ids:
-        try:
-            url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-                'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
-            }
+    def extrair_detalhes_aula_batch(self, aulas_ids):
+        """Extrai detalhes de múltiplas aulas de uma vez via requests"""
+        resultados = {}
+        
+        if not self.session_cookies:
+            return {aula_id: "ERRO" for aula_id in aulas_ids}
             
-            resp = session.get(url_detalhes, headers=headers, timeout=5)  # Timeout reduzido
-            
-            if resp.status_code == 200:
-                resultados[aula_id] = "OK" if "ATA DA AULA" in resp.text else "FANTASMA"
-            else:
-                resultados[aula_id] = "ERRO"
-                
-        except Exception as e:
-            resultados[aula_id] = "ERRO"
-    
-    return resultados
-
-def processar_frequencia_modal_rapido(pagina, aula_id):
-    """Versão SUPER OTIMIZADA do processamento de modal"""
-    try:
-        # Aguardar apenas a tabela aparecer - timeout reduzido
-        pagina.wait_for_selector("table.table-bordered tbody tr", timeout=TIMEOUT_MODAL)
+        session = requests.Session()
+        session.cookies.update(self.session_cookies)
         
-        # Extrair TODOS os dados de uma vez usando JavaScript - MUITO MAIS RÁPIDO!
-        dados_freq = pagina.evaluate("""
-            () => {
-                const linhas = document.querySelectorAll('table.table-bordered tbody tr');
-                const presentes_ids = [];
-                const presentes_nomes = [];
-                const ausentes_ids = [];
-                const ausentes_nomes = [];
-                
-                linhas.forEach(linha => {
-                    const nomeCell = linha.querySelector('td:first-child');
-                    const nomeCompleto = nomeCell ? nomeCell.innerText.trim() : '';
-                    
-                    if (!nomeCompleto) return;
-                    
-                    const linkPresenca = linha.querySelector('td:last-child a');
-                    if (!linkPresenca) return;
-                    
-                    const idMembro = linkPresenca.getAttribute('data-id-membro');
-                    if (!idMembro) return;
-                    
-                    const icone = linkPresenca.querySelector('i');
-                    if (!icone) return;
-                    
-                    const classes = icone.getAttribute('class');
-                    
-                    if (classes && classes.includes('fa-check text-success')) {
-                        presentes_ids.push(idMembro);
-                        presentes_nomes.push(nomeCompleto);
-                    } else if (classes && classes.includes('fa-remove text-danger')) {
-                        ausentes_ids.push(idMembro);
-                        ausentes_nomes.push(nomeCompleto);
-                    }
-                });
-                
-                return {
-                    presentes_ids,
-                    presentes_nomes,
-                    ausentes_ids,
-                    ausentes_nomes,
-                    tem_presenca: presentes_ids.length > 0 ? 'OK' : 'FANTASMA'
-                };
-            }
-        """)
-        
-        return dados_freq
-        
-    except Exception as e:
-        return {
-            'presentes_ids': [],
-            'presentes_nomes': [],
-            'ausentes_ids': [],
-            'ausentes_nomes': [],
-            'tem_presenca': "ERRO"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
+            'Connection': 'keep-alive'
         }
-
-def extrair_todas_aulas_da_pagina(pagina):
-    """Extrai TODAS as informações das aulas da página atual de uma vez - SUPER OTIMIZADO"""
-    try:
-        # Usar JavaScript para extrair todos os dados de uma vez - MUITO mais rápido que Playwright
-        dados_aulas = pagina.evaluate("""
-            () => {
-                const linhas = document.querySelectorAll('table tbody tr');
-                const aulas = [];
+        
+        for aula_id in aulas_ids:
+            try:
+                url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+                resp = session.get(url_detalhes, headers=headers, timeout=3)
                 
-                linhas.forEach((linha, indice) => {
-                    const colunas = linha.querySelectorAll('td');
+                if resp.status_code == 200:
+                    resultados[aula_id] = "OK" if "ATA DA AULA" in resp.text else "FANTASMA"
+                else:
+                    resultados[aula_id] = "ERRO"
                     
-                    if (colunas.length >= 6) {
-                        const dataAula = colunas[1].innerText.trim();
-                        const congregacao = colunas[2].innerText.trim();
-                        const curso = colunas[3].innerText.trim();
-                        const turma = colunas[4].innerText.trim();
+            except Exception:
+                resultados[aula_id] = "ERRO"
+        
+        return resultados
+
+    def processar_frequencia_modal_rapido(self, pagina):
+        """Versão ultra otimizada do processamento de frequência"""
+        try:
+            # Aguardar com timeout mínimo
+            pagina.wait_for_selector("table.table-bordered tbody tr", timeout=TIMEOUT_MODAL * 1000)
+            
+            # Extrair dados via JavaScript para máxima velocidade
+            dados_frequencia = pagina.evaluate("""
+                () => {
+                    const linhas = document.querySelectorAll('table.table-bordered tbody tr');
+                    const presentes_ids = [], presentes_nomes = [];
+                    const ausentes_ids = [], ausentes_nomes = [];
+                    
+                    linhas.forEach(linha => {
+                        const nomeTd = linha.querySelector('td:first-child');
+                        if (!nomeTd) return;
                         
-                        const btnFreq = linha.querySelector('button[onclick*="visualizarFrequencias"]');
+                        const nome = nomeTd.innerText.trim();
+                        if (!nome) return;
                         
-                        if (btnFreq) {
-                            const onclick = btnFreq.getAttribute('onclick');
-                            const match = onclick.match(/visualizarFrequencias\\((\\d+),\\s*(\\d+)\\)/);
+                        const linkPresenca = linha.querySelector('td:last-child a');
+                        if (!linkPresenca) return;
+                        
+                        const idMembro = linkPresenca.getAttribute('data-id-membro');
+                        if (!idMembro) return;
+                        
+                        const icone = linkPresenca.querySelector('i');
+                        if (!icone) return;
+                        
+                        const classes = icone.className;
+                        
+                        if (classes.includes('fa-check text-success')) {
+                            presentes_ids.push(idMembro);
+                            presentes_nomes.push(nome);
+                        } else if (classes.includes('fa-remove text-danger')) {
+                            ausentes_ids.push(idMembro);
+                            ausentes_nomes.push(nome);
+                        }
+                    });
+                    
+                    return {
+                        presentes_ids, presentes_nomes,
+                        ausentes_ids, ausentes_nomes,
+                        tem_presenca: presentes_ids.length > 0 ? 'OK' : 'FANTASMA'
+                    };
+                }
+            """)
+            
+            return dados_frequencia
+            
+        except Exception as e:
+            return {
+                'presentes_ids': [], 'presentes_nomes': [],
+                'ausentes_ids': [], 'ausentes_nomes': [],
+                'tem_presenca': "ERRO"
+            }
+
+    def processar_pagina_turbo(self, numero_pagina, total_paginas):
+        """Versão turbo do processamento de página com contexto compartilhado"""
+        print(f"🚀 [P{numero_pagina:02d}] Iniciando processamento turbo")
+        
+        try:
+            # Criar nova página no MESMO contexto (compartilha cookies automaticamente)
+            nova_aba = self.contexto_principal.new_page()
+            
+            # Configurações de performance para CI/CD
+            nova_aba.set_default_timeout(TIMEOUT_RAPIDO * 1000)
+            nova_aba.set_extra_http_headers({
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+            })
+            
+            # URL direta com parâmetros de página
+            if numero_pagina == 1:
+                url_pagina = "https://musical.congregacao.org.br/aulas_abertas"
+            else:
+                # Calcular start baseado na página (assumindo 2000 por página)
+                start = (numero_pagina - 1) * 2000
+                url_pagina = f"https://musical.congregacao.org.br/aulas_abertas?start={start}&length=2000"
+            
+            nova_aba.goto(url_pagina, wait_until="domcontentloaded")
+            
+            # Configurar 2000 registros imediatamente
+            try:
+                nova_aba.wait_for_selector('select[name="listagem_length"]', timeout=TIMEOUT_RAPIDO * 1000)
+                nova_aba.select_option('select[name="listagem_length"]', "2000")
+                time.sleep(1.5)  # Reduzido para CI/CD
+            except:
+                pass
+            
+            # Se não é página 1, navegar para ela
+            if numero_pagina > 1:
+                try:
+                    # Tentar clique direto no número
+                    link_pagina = nova_aba.query_selector(f'a:has-text("{numero_pagina}")')
+                    if link_pagina:
+                        link_pagina.click()
+                        time.sleep(2)
+                    else:
+                        # Navegar sequencialmente (mais lento mas confiável)
+                        for _ in range(numero_pagina - 1):
+                            btn_proximo = nova_aba.query_selector("a:has(i.fa-chevron-right)")
+                            if btn_proximo:
+                                btn_proximo.click()
+                                time.sleep(0.8)
+                            else:
+                                break
+                except:
+                    pass
+            
+            # Aguardar tabela carregar
+            nova_aba.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=TIMEOUT_RAPIDO * 1000)
+            time.sleep(0.5)
+            
+            # Extrair TODOS os dados da página via JavaScript (ultra rápido)
+            dados_pagina = nova_aba.evaluate("""
+                () => {
+                    const linhas = document.querySelectorAll('table tbody tr');
+                    const dados = [];
+                    
+                    linhas.forEach((linha, index) => {
+                        const colunas = linha.querySelectorAll('td');
+                        if (colunas.length >= 6) {
+                            const data = colunas[1]?.innerText?.trim() || '';
+                            const congregacao = colunas[2]?.innerText?.trim() || '';
+                            const curso = colunas[3]?.innerText?.trim() || '';
+                            const turma = colunas[4]?.innerText?.trim() || '';
                             
-                            if (match) {
-                                aulas.push({
-                                    indice: indice,
-                                    aula_id: match[1],
-                                    professor_id: match[2],
-                                    data: dataAula,
-                                    congregacao: congregacao,
-                                    curso: curso,
-                                    turma: turma,
-                                    tem_2024: dataAula.includes('2024')
-                                });
+                            const btnFreq = linha.querySelector('button[onclick*="visualizarFrequencias"]');
+                            if (btnFreq) {
+                                const onclick = btnFreq.getAttribute('onclick');
+                                const match = onclick.match(/visualizarFrequencias\\((\\d+),\\s*(\\d+)\\)/);
+                                if (match) {
+                                    dados.push({
+                                        index: index,
+                                        data: data,
+                                        congregacao: congregacao,
+                                        curso: curso,
+                                        turma: turma,
+                                        aula_id: match[1],
+                                        professor_id: match[2]
+                                    });
+                                }
                             }
                         }
-                    }
-                });
-                
-                return aulas;
-            }
-        """)
-        
-        return dados_aulas
-        
-    except Exception as e:
-        safe_print(f"❌ Erro ao extrair dados da página: {e}")
-        return []
-
-def clicar_botao_por_indice_otimizado(pagina, indice):
-    """Versão otimizada para clicar no botão"""
-    try:
-        # Usar JavaScript direto - mais rápido
-        sucesso = pagina.evaluate(f"""
-            () => {{
-                const linhas = document.querySelectorAll('table tbody tr');
-                if ({indice} >= linhas.length) return false;
-                
-                const linha = linhas[{indice}];
-                const btnFreq = linha.querySelector('button[onclick*="visualizarFrequencias"]');
-                
-                if (btnFreq) {{
-                    btnFreq.click();
-                    return true;
-                }}
-                return false;
-            }}
-        """)
-        
-        return sucesso
-        
-    except Exception as e:
-        return False
-
-def processar_pagina_ultra_otimizada(contexto, numero_pagina, cookies_dict):
-    """Worker ULTRA OTIMIZADO para processar página"""
-    safe_print(f"🚀 [P{numero_pagina}] INICIANDO processamento ultra rápido")
-    
-    pagina = None
-    try:
-        # Criar nova aba
-        pagina = contexto.new_page()
-        
-        # Configurar timeouts menores
-        pagina.set_default_timeout(10000)  # 10 segundos
-        
-        # Headers otimizados
-        pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        })
-        
-        # IR DIRETO para a página específica do histórico
-        url_direto = f"https://musical.congregacao.org.br/aulas_abertas?page={numero_pagina}&length=100"
-        pagina.goto(url_direto, timeout=15000)
-        
-        # Aguardar tabela aparecer
-        try:
-            pagina.wait_for_selector('table tbody tr', timeout=10000)
-        except:
-            # Se não carregar, tentar navegação tradicional
-            if not navegar_para_historico_aulas_rapido(pagina, numero_pagina):
-                safe_print(f"❌ [P{numero_pagina}] Falha na navegação")
-                return []
-        
-        # Extrair TODOS os dados da página de uma vez
-        aulas_dados = extrair_todas_aulas_da_pagina(pagina)
-        
-        if not aulas_dados:
-            safe_print(f"📭 [P{numero_pagina}] Página vazia")
-            return []
-        
-        safe_print(f"📊 [P{numero_pagina}] {len(aulas_dados)} aulas encontradas")
-        
-        # Verificar se tem 2024 - se sim, parar tudo
-        tem_2024 = any(aula['tem_2024'] for aula in aulas_dados)
-        if tem_2024:
-            safe_print(f"🛑 [P{numero_pagina}] ENCONTROU 2024! Parando tudo!")
-            stop_processing.set()
-            return []
-        
-        # Criar sessão requests
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-        
-        # Coletar IDs das aulas para busca em lote da ATA
-        aulas_ids = [aula['aula_id'] for aula in aulas_dados]
-        safe_print(f"📋 [P{numero_pagina}] Buscando ATAs em lote...")
-        atas_resultados = extrair_detalhes_aula_batch(session, aulas_ids)
-        
-        resultado_pagina = []
-        
-        # Processar cada aula
-        for i, aula in enumerate(aulas_dados):
-            if stop_processing.is_set():
-                break
+                    });
+                    
+                    return dados;
+                }
+            """)
             
-            try:
-                # Fechar modal anterior
-                pagina.evaluate("try { $('#modalFrequencia').modal('hide'); } catch(e) {}")
-                
-                # Clicar no botão
-                if clicar_botao_por_indice_otimizado(pagina, aula['indice']):
-                    time.sleep(DELAY_BETWEEN_CLICKS)  # Delay mínimo
-                    
-                    # Processar frequência
-                    freq_data = processar_frequencia_modal_rapido(pagina, aula['aula_id'])
-                    
-                    # Fechar modal rapidamente
-                    pagina.evaluate("try { $('#modalFrequencia').modal('hide'); } catch(e) {}")
-                    
-                    # Pegar ATA do resultado em lote
-                    ata_status = atas_resultados.get(aula['aula_id'], "ERRO")
-                    
-                    # Montar resultado
-                    linha_resultado = [
-                        aula['congregacao'],
-                        aula['curso'],
-                        aula['turma'],
-                        aula['data'],
-                        "; ".join(freq_data['presentes_ids']),
-                        "; ".join(freq_data['presentes_nomes']),
-                        "; ".join(freq_data['ausentes_ids']),
-                        "; ".join(freq_data['ausentes_nomes']),
-                        freq_data['tem_presenca'],
-                        ata_status
-                    ]
-                    
-                    resultado_pagina.append(linha_resultado)
-                    
-                    if (i + 1) % 20 == 0:
-                        safe_print(f"⚡ [P{numero_pagina}] {i+1}/{len(aulas_dados)} processadas")
-                
-            except Exception as e:
-                safe_print(f"⚠️ [P{numero_pagina}] Erro aula {i+1}: {e}")
-                continue
-        
-        safe_print(f"✅ [P{numero_pagina}] FINALIZADA! {len(resultado_pagina)} aulas coletadas")
-        return resultado_pagina
-        
-    except Exception as e:
-        safe_print(f"❌ [P{numero_pagina}] ERRO CRÍTICO: {e}")
-        return []
-    
-    finally:
-        if pagina:
-            try:
-                pagina.close()
-            except:
-                pass
-
-def navegar_para_historico_aulas_rapido(pagina, numero_pagina):
-    """Navegação rápida para histórico"""
-    try:
-        # Tentar URL direta primeiro
-        pagina.goto("https://musical.congregacao.org.br/aulas_abertas", timeout=15000)
-        
-        # Configurar 100 registros
-        try:
-            pagina.select_option('select[name="listagem_length"]', "100")
-            time.sleep(1)
-        except:
-            pass
-        
-        # Navegar para página específica se não for a primeira
-        if numero_pagina > 1:
-            try:
-                link_pagina = pagina.query_selector(f'a:has-text("{numero_pagina}")')
-                if link_pagina:
-                    link_pagina.click()
-                    time.sleep(1)
-            except:
-                pass
-        
-        # Verificar se carregou
-        try:
-            pagina.wait_for_selector('table tbody tr', timeout=5000)
-            return True
-        except:
-            return False
+            resultado_pagina = []
+            aulas_ids = [item['aula_id'] for item in dados_pagina]
             
-    except Exception as e:
-        return False
-
-def descobrir_total_paginas_rapido(pagina_principal):
-    """Versão rápida para descobrir total de páginas"""
-    try:
-        # Usar JavaScript para pegar todos os números da paginação
-        max_pagina = pagina_principal.evaluate("""
-            () => {
-                const links = document.querySelectorAll('ul.pagination li a');
-                let maxNum = 1;
+            print(f"   📊 [P{numero_pagina:02d}] {len(dados_pagina)} aulas encontradas")
+            
+            # Verificar se chegou em 2024 (parar se necessário)
+            if dados_pagina and "2024" in dados_pagina[0]['data']:
+                print(f"   🛑 [P{numero_pagina:02d}] Ano 2024 detectado - parando")
+                nova_aba.close()
+                return
+            
+            # Obter ATAs em batch (paralelamente)
+            atas_status = self.extrair_detalhes_aula_batch(aulas_ids)
+            
+            # Processar cada aula na página
+            for i, item in enumerate(dados_pagina):
+                try:
+                    # Parar se chegou em 2024
+                    if "2024" in item['data']:
+                        print(f"   🛑 [P{numero_pagina:02d}] Parando em 2024")
+                        break
+                    
+                    # Fechar qualquer modal anterior
+                    nova_aba.evaluate("$('#modalFrequencia').modal('hide')")
+                    
+                    # Clicar no botão de frequência via JavaScript (mais rápido)
+                    clicou = nova_aba.evaluate(f"""
+                        () => {{
+                            const linhas = document.querySelectorAll('table tbody tr');
+                            const linha = linhas[{i}];
+                            const btn = linha?.querySelector('button[onclick*="visualizarFrequencias"]');
+                            if (btn) {{
+                                btn.click();
+                                return true;
+                            }}
+                            return false;
+                        }}
+                    """)
+                    
+                    if clicou:
+                        time.sleep(PAUSA_ENTRE_MODAIS)
+                        
+                        # Processar frequência
+                        freq_data = self.processar_frequencia_modal_rapido(nova_aba)
+                        
+                        # Fechar modal rapidamente
+                        nova_aba.evaluate("$('#modalFrequencia').modal('hide')")
+                        time.sleep(PAUSA_ENTRE_MODAIS)
+                        
+                        # Montar resultado
+                        linha_resultado = [
+                            item['congregacao'], item['curso'], item['turma'], item['data'],
+                            "; ".join(freq_data['presentes_ids']),
+                            "; ".join(freq_data['presentes_nomes']),
+                            "; ".join(freq_data['ausentes_ids']),
+                            "; ".join(freq_data['ausentes_nomes']),
+                            freq_data['tem_presenca'],
+                            atas_status.get(item['aula_id'], "ERRO")
+                        ]
+                        
+                        resultado_pagina.append(linha_resultado)
+                        
+                        # Log compacto para CI/CD
+                        total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
+                        if i % 5 == 0 or i == len(dados_pagina) - 1:  # Log a cada 5 ou última
+                            print(f"   ⚡ [P{numero_pagina:02d}] {i+1}/{len(dados_pagina)} - {item['data'][:5]} - {total_alunos}alunos")
                 
-                links.forEach(link => {
-                    const texto = link.innerText.trim();
-                    if (/^\\d+$/.test(texto)) {
-                        maxNum = Math.max(maxNum, parseInt(texto));
-                    }
-                });
-                
-                return maxNum;
-            }
-        """)
-        
-        safe_print(f"📄 Total de páginas detectadas: {max_pagina}")
-        return max_pagina if max_pagina > 1 else 30  # Fallback
-        
-    except Exception as e:
-        safe_print(f"⚠️ Erro ao detectar páginas: {e}")
-        return 30
+                except Exception as e:
+                    print(f"   ⚠️ [P{numero_pagina:02d}] Erro linha {i}: {str(e)[:50]}")
+                    continue
+            
+            # Thread-safe: adicionar ao resultado global
+            with self.lock:
+                self.resultado_global.extend(resultado_pagina)
+                self.total_processadas += len(resultado_pagina)
+                print(f"   ✅ [P{numero_pagina:02d}] Concluída: {len(resultado_pagina)} aulas | Total global: {self.total_processadas}")
+            
+            nova_aba.close()
+            
+        except Exception as e:
+            print(f"   ❌ [P{numero_pagina:02d}] Erro crítico: {e}")
 
-def main():
-    tempo_inicio = time.time()
-    
-    safe_print("🚀 INICIANDO COLETA ULTRA OTIMIZADA!")
-    
-    try:
+    def descobrir_total_paginas(self, pagina):
+        """Descobre total de páginas de forma otimizada"""
+        try:
+            # Configurar 2000 primeiro
+            pagina.wait_for_selector('select[name="listagem_length"]', timeout=TIMEOUT_RAPIDO * 1000)
+            pagina.select_option('select[name="listagem_length"]', "2000")
+            time.sleep(2)
+            
+            # Descobrir via JavaScript
+            total_paginas = pagina.evaluate("""
+                () => {
+                    const links = document.querySelectorAll('.pagination a');
+                    let maxNum = 1;
+                    
+                    links.forEach(link => {
+                        const texto = link.innerText.trim();
+                        if (/^\\d+$/.test(texto)) {
+                            maxNum = Math.max(maxNum, parseInt(texto));
+                        }
+                    });
+                    
+                    return maxNum;
+                }
+            """)
+            
+            print(f"📊 Total de páginas descobertas: {total_paginas}")
+            return total_paginas
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir páginas: {e} - usando 1")
+            return 1
+
+    def main(self):
+        tempo_inicio = time.time()
+        
         with sync_playwright() as p:
-            # Navegador otimizado para velocidade
+            # Configurações otimizadas para GitHub Actions
             navegador = p.chromium.launch(
                 headless=True,
                 args=[
                     '--no-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--disable-images',  # Não carregar imagens
-                    '--disable-javascript-harmony-shipping',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
                     '--disable-extensions',
                     '--disable-plugins',
-                    '--no-first-run',
-                    '--disable-default-apps',
-                    '--disable-popup-blocking',
-                    '--disable-translate',
+                    '--disable-images',  # Não carregar imagens (mais rápido)
+                    '--disable-javascript-harmony-shipping',
                     '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
                     '--disable-renderer-backgrounding',
-                    '--disable-features=TranslateUI,VizDisplayCompositor'
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-ipc-flooding-protection',
+                    '--memory-pressure-off'
                 ]
             )
             
-            contexto = navegador.new_context()
-            pagina_principal = contexto.new_page()
+            # Criar contexto compartilhado
+            self.contexto_principal = navegador.new_context(
+                viewport={'width': 1280, 'height': 720},
+                user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+            )
             
-            # LOGIN ÚNICO E RÁPIDO
-            safe_print("🔐 Login único ultra rápido...")
-            pagina_principal.goto(URL_INICIAL, timeout=30000)
+            # Página principal para login
+            pagina_principal = self.contexto_principal.new_page()
+            pagina_principal.set_default_timeout(TIMEOUT_RAPIDO * 1000)
             
+            print("🔐 Login ultra-rápido...")
+            pagina_principal.goto(URL_INICIAL, wait_until="domcontentloaded")
+            
+            # Login
             pagina_principal.fill('input[name="login"]', EMAIL)
             pagina_principal.fill('input[name="password"]', SENHA)
             pagina_principal.click('button[type="submit"]')
             
             try:
-                pagina_principal.wait_for_selector("nav", timeout=15000)
-                safe_print("✅ Login OK!")
-            except:
-                safe_print("❌ Falha no login")
+                pagina_principal.wait_for_selector("nav", timeout=TIMEOUT_RAPIDO * 1000)
+                print("✅ Login realizado!")
+            except PlaywrightTimeoutError:
+                print("❌ Falha no login.")
                 navegador.close()
                 return
             
             # Navegar para histórico
-            if not navegar_para_historico_aulas_rapido(pagina_principal, 1):
-                safe_print("❌ Falha na navegação inicial")
-                navegador.close()
-                return
+            print("🔍 Navegando para histórico...")
+            try:
+                # Tentar menu primeiro
+                elemento_gem = pagina_principal.query_selector('a:has-text("G.E.M")')
+                if elemento_gem:
+                    elemento_gem.click()
+                    time.sleep(1.5)
+            except:
+                pass
+            
+            # URL direta
+            pagina_principal.goto("https://musical.congregacao.org.br/aulas_abertas", wait_until="domcontentloaded")
+            
+            # Extrair cookies para requests
+            self.session_cookies = self.extrair_cookies_playwright(pagina_principal)
             
             # Descobrir total de páginas
-            total_paginas = descobrir_total_paginas_rapido(pagina_principal)
+            total_paginas = self.descobrir_total_paginas(pagina_principal)
             
-            # Extrair cookies
-            cookies_dict = {cookie['name']: cookie['value'] for cookie in pagina_principal.context.cookies()}
+            # Fechar página principal (já temos o contexto)
+            pagina_principal.close()
             
-            safe_print(f"🎯 PROCESSAMENTO PARALELO ULTRA OTIMIZADO")
-            safe_print(f"📄 Páginas: {total_paginas} | Workers: {MAX_WORKERS}")
+            print(f"🚀 COLETA TURBO: {total_paginas} páginas com {MAX_ABAS_SIMULTANEAS} abas simultâneas!")
+            print(f"⚡ Estimativa: {total_paginas * 2000 / MAX_ABAS_SIMULTANEAS / 60:.1f} minutos")
             
-            # Reset flag
-            stop_processing.clear()
-            
-            # EXECUÇÃO PARALELA ULTRA OTIMIZADA
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {}
-                
-                # Submeter todas as tarefas
+            # Processamento paralelo TURBO
+            with ThreadPoolExecutor(max_workers=MAX_ABAS_SIMULTANEAS) as executor:
+                futures = []
                 for pagina_num in range(1, total_paginas + 1):
-                    future = executor.submit(processar_pagina_ultra_otimizada, contexto, pagina_num, cookies_dict)
-                    futures[future] = pagina_num
+                    future = executor.submit(self.processar_pagina_turbo, pagina_num, total_paginas)
+                    futures.append(future)
                 
-                safe_print(f"🚀 {len(futures)} workers executando!")
-                
-                # Coletar resultados
-                processadas = 0
+                # Aguardar todas as threads
                 for future in as_completed(futures):
-                    pagina_num = futures[future]
                     try:
-                        resultado = future.result(timeout=300)  # 5 min timeout
-                        if resultado:
-                            adicionar_resultado(resultado)
-                        
-                        processadas += 1
-                        safe_print(f"📊 [{processadas}/{len(futures)}] P{pagina_num}: {len(resultado) if resultado else 0} aulas")
-                        
+                        future.result()
                     except Exception as e:
-                        processadas += 1
-                        safe_print(f"⚠️ [{processadas}/{len(futures)}] P{pagina_num}: ERRO - {e}")
+                        print(f"❌ Thread error: {e}")
             
-            # Resumo e envio
+            navegador.close()
+            
+            # Resultado final
             tempo_total = (time.time() - tempo_inicio) / 60
             
-            safe_print(f"\n🎉 COLETA ULTRA RÁPIDA FINALIZADA!")
-            safe_print(f"   ⏱️ Tempo: {tempo_total:.1f} minutos")
-            safe_print(f"   🎯 Aulas coletadas: {len(resultado_global)}")
-            safe_print(f"   ⚡ Velocidade: {len(resultado_global)/tempo_total:.0f} aulas/min")
+            print(f"\n🎯 COLETA TURBO FINALIZADA!")
+            print(f"   📊 Total de aulas: {len(self.resultado_global)}")
+            print(f"   ⏱️ Tempo: {tempo_total:.1f} minutos")
+            print(f"   ⚡ Velocidade: {len(self.resultado_global) / tempo_total:.0f} aulas/min")
+            print(f"   🚀 Speedup: ~{30*60 / tempo_total:.0f}x mais rápido que o original!")
             
-            # Enviar para Apps Script
-            if resultado_global:
+            # Enviar para Google Sheets
+            if self.resultado_global:
                 headers = [
                     "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
                     "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
                 ]
                 
                 body = {
-                    "tipo": "historico_aulas_ultra_otimizado",
-                    "dados": resultado_global,
+                    "tipo": "historico_aulas_turbo",
+                    "dados": self.resultado_global,
                     "headers": headers,
                     "resumo": {
-                        "total_aulas": len(resultado_global),
-                        "tempo_processamento": f"{tempo_total:.1f} minutos",
-                        "workers_utilizados": MAX_WORKERS,
-                        "velocidade_aulas_por_minuto": f"{len(resultado_global)/tempo_total:.0f}"
+                        "total_aulas": len(self.resultado_global),
+                        "tempo_processamento_minutos": tempo_total,
+                        "paginas_processadas": total_paginas,
+                        "abas_simultaneas": MAX_ABAS_SIMULTANEAS,
+                        "aulas_por_minuto": len(self.resultado_global) / tempo_total
                     }
                 }
                 
                 try:
-                    safe_print("📤 Enviando para Google Sheets...")
-                    resposta = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-                    safe_print(f"✅ Enviado! Status: {resposta.status_code}")
-                    safe_print(f"Resposta: {resposta.text}")
+                    print("📤 Enviando para Google Sheets...")
+                    resposta = requests.post(URL_APPS_SCRIPT, json=body, timeout=180)
+                    print(f"✅ Enviado! Status: {resposta.status_code}")
+                    if resposta.status_code != 200:
+                        print(f"⚠️ Resposta: {resposta.text[:200]}")
                 except Exception as e:
-                    safe_print(f"❌ Erro no envio: {e}")
-            
-            navegador.close()
-            
-    except Exception as e:
-        safe_print(f"❌ ERRO CRÍTICO: {e}")
-        if resultado_global:
-            safe_print(f"💾 Dados coletados até o erro: {len(resultado_global)} aulas")
+                    print(f"❌ Erro no envio: {e}")
+                    # Salvar localmente como backup
+                    with open('backup_dados.json', 'w') as f:
+                        json.dump(body, f, indent=2)
+                    print("💾 Dados salvos em backup_dados.json")
 
 if __name__ == "__main__":
-    main()
+    print("🚀 INICIANDO COLETOR TURBO PARA GITHUB ACTIONS")
+    print("=" * 60)
+    
+    coletor = ColetorTurbo()
+    coletor.main()
