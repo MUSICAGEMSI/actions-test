@@ -16,8 +16,8 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
 # PERÍODO DO SEGUNDO SEMESTRE 2025
-DATA_INICIO = "04/07/2025"
-DATA_FIM = "31/12/2025"
+DATA_INICIO = "04-07-2025"
+DATA_FIM = "31-12-2025"
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
