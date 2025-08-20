@@ -548,34 +548,45 @@ def main():
     
     safe_print("🚀 Iniciando processamento paralelo...")
     safe_print(f"📄 Processaremos até {total_paginas} páginas ou até encontrar 2024")
+    safe_print(f"⚙️ Usando {min(3, total_paginas)} threads simultâneas")
     
-    # Processar páginas em paralelo
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        # Submeter páginas para processamento
-        futures = []
+    # Resetar flag de parada
+    stop_processing.clear()
+    
+    # Processar páginas em paralelo - ESTRATÉGIA MELHORADA
+    with ThreadPoolExecutor(max_workers=min(3, total_paginas)) as executor:
+        # Submeter TODAS as páginas de uma vez (sem delay entre submissões)
+        futures = {}
+        
+        safe_print(f"📤 Submetendo {total_paginas} páginas para processamento...")
         
         for pagina_num in range(1, total_paginas + 1):
-            # Verificar se deve parar antes de submeter nova tarefa
-            if stop_processing.is_set():
-                safe_print(f"🛑 Não submetendo página {pagina_num} - parada solicitada")
-                break
-                
             future = executor.submit(processar_pagina_worker, pagina_num)
-            futures.append((pagina_num, future))
-            
-            # Adicionar delay entre submissões para não sobrecarregar
-            time.sleep(5)  # 5 segundos entre cada nova thread
+            futures[future] = pagina_num
         
-        # Coletar resultados conforme ficam prontos
-        for pagina_num, future in futures:
+        safe_print(f"✅ Todas as {len(futures)} páginas submetidas! Aguardando resultados...")
+        
+        # Coletar resultados conforme ficam prontos usando as_completed
+        paginas_processadas = 0
+        for future in as_completed(futures):
+            pagina_num = futures[future]
             try:
-                resultado_pagina = future.result(timeout=600)  # 10 minutos timeout por página
+                resultado_pagina = future.result(timeout=10)  # Resultado já processado
                 if resultado_pagina:
                     adicionar_resultado(resultado_pagina)
-                    safe_print(f"📊 Página {pagina_num} adicionada ao resultado global: {len(resultado_pagina)} aulas")
+                    paginas_processadas += 1
+                    safe_print(f"📊 [{paginas_processadas}/{len(futures)}] Página {pagina_num}: {len(resultado_pagina)} aulas coletadas")
+                else:
+                    paginas_processadas += 1
+                    safe_print(f"📊 [{paginas_processadas}/{len(futures)}] Página {pagina_num}: 0 aulas")
+                
+                # Se encontrou 2024, avisar mas continuar coletando resultados das threads já em execução
+                if stop_processing.is_set():
+                    safe_print(f"🛑 Página {pagina_num} solicitou parada global - continuando coleta de threads ativas...")
                 
             except Exception as e:
-                safe_print(f"⚠️ Erro ao processar página {pagina_num}: {e}")
+                paginas_processadas += 1
+                safe_print(f"⚠️ [{paginas_processadas}/{len(futures)}] Erro na página {pagina_num}: {e}")
     
     safe_print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado_global)}")
     
