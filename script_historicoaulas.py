@@ -19,7 +19,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
 # Configurações de paralelização
-MAX_PROCESSOS_SIMULTANEOS = 30  # Número máximo de processos ao mesmo tempo
+MAX_PROCESSOS_SIMULTANEOS = 1  # Número máximo de processos ao mesmo tempo
 TIMEOUT_POR_PAGINA = 900  # Timeout máximo por página (15 minutos)
 
 if not EMAIL or not SENHA:
