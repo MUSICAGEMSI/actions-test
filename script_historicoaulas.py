@@ -454,143 +454,172 @@ def processar_pagina_worker(contexto, numero_pagina, cookies_dict):
 def main():
     tempo_inicio = time.time()
     
-    with sync_playwright() as p:
-        # CRIAR UM ÚNICO NAVEGADOR E FAZER LOGIN UMA VEZ
-        safe_print("🚀 Iniciando navegador único...")
-        navegador = p.chromium.launch(headless=False)  # Visível para debug
-        contexto = navegador.new_context()
-        pagina_principal = contexto.new_page()
-        
-        pagina_principal.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        })
-        
-        # FAZER LOGIN UMA ÚNICA VEZ
-        safe_print("🔐 Fazendo login único...")
-        pagina_principal.goto(URL_INICIAL)
-        
-        pagina_principal.fill('input[name="login"]', EMAIL)
-        pagina_principal.fill('input[name="password"]', SENHA)
-        pagina_principal.click('button[type="submit"]')
-        
-        try:
-            pagina_principal.wait_for_selector("nav", timeout=15000)
-            safe_print("✅ Login realizado com sucesso!")
-        except PlaywrightTimeoutError:
-            safe_print("❌ Falha no login. Verifique suas credenciais.")
-            navegador.close()
-            return
-        
-        # Navegar para histórico na página principal para descobrir total de páginas
-        if not navegar_para_historico_aulas(pagina_principal):
-            safe_print("❌ Falha na navegação para histórico de aulas.")
-            navegador.close()
-            return
-        
-        # Configurar para 100 registros na página principal
-        try:
-            pagina_principal.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            pagina_principal.select_option('select[name="listagem_length"]', "100")
-            time.sleep(3)
-            pagina_principal.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-            safe_print("✅ Página principal configurada para 100 registros")
-        except Exception as e:
-            safe_print(f"⚠️ Erro ao configurar registros: {e}")
-        
-        # Descobrir total de páginas
-        total_paginas = descobrir_total_paginas(pagina_principal)
-        
-        # Extrair cookies para requests
-        cookies_dict = extrair_cookies_playwright(pagina_principal)
-        
-        safe_print(f"🚀 Iniciando processamento com {total_paginas} abas simultâneas...")
-        safe_print(f"📄 Uma aba para cada página (1 até {total_paginas})")
-        
-        # Resetar flag de parada
-        stop_processing.clear()
-        
-        # CRIAR UMA ABA PARA CADA PÁGINA E PROCESSAR EM PARALELO
-        with ThreadPoolExecutor(max_workers=total_paginas) as executor:
-            # Submeter uma tarefa para cada página
-            futures = {}
+    try:
+        with sync_playwright() as p:
+            # CRIAR UM ÚNICO NAVEGADOR E FAZER LOGIN UMA VEZ
+            safe_print("🚀 Iniciando navegador único...")
+            navegador = p.chromium.launch(
+                headless=True,  # Sem interface gráfica
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--single-process'  # Para ambientes com limitações de recursos
+                ]
+            )
+            contexto = navegador.new_context()
+            pagina_principal = contexto.new_page()
             
-            safe_print(f"📤 Criando {total_paginas} abas simultâneas...")
+            pagina_principal.set_extra_http_headers({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+            })
             
-            for pagina_num in range(1, total_paginas + 1):
-                future = executor.submit(processar_pagina_worker, contexto, pagina_num, cookies_dict)
-                futures[future] = pagina_num
+            # FAZER LOGIN UMA ÚNICA VEZ
+            safe_print("🔐 Fazendo login único...")
+            pagina_principal.goto(URL_INICIAL, timeout=30000)
             
-            safe_print(f"✅ Todas as {len(futures)} abas criadas! Aguardando resultados...")
+            pagina_principal.fill('input[name="login"]', EMAIL)
+            pagina_principal.fill('input[name="password"]', SENHA)
+            pagina_principal.click('button[type="submit"]')
             
-            # Coletar resultados conforme ficam prontos
-            abas_processadas = 0
-            for future in as_completed(futures):
-                pagina_num = futures[future]
-                try:
-                    resultado_pagina = future.result(timeout=10)  # Resultado já processado
-                    if resultado_pagina:
-                        adicionar_resultado(resultado_pagina)
-                        abas_processadas += 1
-                        safe_print(f"📊 [{abas_processadas}/{len(futures)}] Aba-{pagina_num}: {len(resultado_pagina)} aulas coletadas")
-                    else:
-                        abas_processadas += 1
-                        safe_print(f"📊 [{abas_processadas}/{len(futures)}] Aba-{pagina_num}: 0 aulas")
-                    
-                    # Se encontrou 2024, avisar mas continuar coletando resultados das abas já em execução
-                    if stop_processing.is_set():
-                        safe_print(f"🛑 Aba-{pagina_num} encontrou 2024 - aguardando finalização das demais abas...")
-                    
-                except Exception as e:
-                    abas_processadas += 1
-                    safe_print(f"⚠️ [{abas_processadas}/{len(futures)}] Erro na Aba-{pagina_num}: {e}")
-        
-        safe_print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado_global)}")
-        
-        # Preparar dados para envio
-        headers = [
-            "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
-            "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
-        ]
-        
-        body = {
-            "tipo": "historico_aulas_single_login",
-            "dados": resultado_global,
-            "headers": headers,
-            "resumo": {
-                "total_aulas": len(resultado_global),
-                "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
-                "abas_utilizadas": total_paginas
-            }
-        }
-        
-        # Enviar dados para Apps Script
-        if resultado_global:
             try:
-                safe_print("📤 Enviando dados para Google Sheets...")
-                resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-                safe_print("✅ Dados enviados!")
-                safe_print("Status code:", resposta_post.status_code)
-                safe_print("Resposta do Apps Script:", resposta_post.text)
-            except Exception as e:
-                safe_print(f"❌ Erro ao enviar para Apps Script: {e}")
-        
-        # Resumo final
-        safe_print("\n📈 RESUMO DA COLETA COM ABAS MÚLTIPLAS:")
-        safe_print(f"   🎯 Total de aulas: {len(resultado_global)}")
-        safe_print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
-        safe_print(f"   🗂️ Abas utilizadas: {total_paginas}")
-        
-        if resultado_global:
-            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado_global)
-            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado_global)
-            aulas_com_ata = sum(1 for linha in resultado_global if linha[9] == "OK")
+                pagina_principal.wait_for_selector("nav", timeout=15000)
+                safe_print("✅ Login realizado com sucesso!")
+            except PlaywrightTimeoutError:
+                safe_print("❌ Falha no login. Verifique suas credenciais.")
+                navegador.close()
+                return
             
-            safe_print(f"   👥 Total de presenças registradas: {total_presentes}")
-            safe_print(f"   ❌ Total de ausências registradas: {total_ausentes}")
-            safe_print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado_global)}")
+            # Navegar para histórico na página principal para descobrir total de páginas
+            if not navegar_para_historico_aulas(pagina_principal):
+                safe_print("❌ Falha na navegação para histórico de aulas.")
+                navegador.close()
+                return
+            
+            # Configurar para 100 registros na página principal
+            try:
+                pagina_principal.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+                pagina_principal.select_option('select[name="listagem_length"]', "100")
+                time.sleep(3)
+                pagina_principal.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
+                safe_print("✅ Página principal configurada para 100 registros")
+            except Exception as e:
+                safe_print(f"⚠️ Erro ao configurar registros: {e}")
+            
+            # Descobrir total de páginas
+            total_paginas = descobrir_total_paginas(pagina_principal)
+            
+            # Extrair cookies para requests
+            cookies_dict = extrair_cookies_playwright(pagina_principal)
+            
+            safe_print(f"🚀 Iniciando processamento paralelo...")
+            safe_print(f"📄 Total de páginas para processar: {total_paginas}")
+            
+            # Resetar flag de parada
+            stop_processing.clear()
+            
+            # CRIAR UMA ABA PARA CADA PÁGINA E PROCESSAR EM PARALELO
+            # Limitar número de workers para não sobrecarregar o sistema
+            max_workers = min(total_paginas, 5)  # Máximo 5 abas simultâneas
+            safe_print(f"⚙️ Usando {max_workers} workers para {total_paginas} páginas")
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submeter uma tarefa para cada página
+                futures = {}
+                
+                safe_print(f"📤 Processando {total_paginas} páginas com {max_workers} abas simultâneas...")
+                
+                for pagina_num in range(1, total_paginas + 1):
+                    future = executor.submit(processar_pagina_worker, contexto, pagina_num, cookies_dict)
+                    futures[future] = pagina_num
+                    
+                    # Pequeno delay para não abrir todas as abas de uma vez
+                    time.sleep(0.5)
+                
+                safe_print(f"✅ Todas as {len(futures)} tarefas submetidas! Aguardando resultados...")
+                
+                # Coletar resultados conforme ficam prontos
+                abas_processadas = 0
+                for future in as_completed(futures):
+                    pagina_num = futures[future]
+                    try:
+                        resultado_pagina = future.result(timeout=600)  # 10 minutos timeout
+                        if resultado_pagina:
+                            adicionar_resultado(resultado_pagina)
+                            abas_processadas += 1
+                            safe_print(f"📊 [{abas_processadas}/{len(futures)}] Aba-{pagina_num}: {len(resultado_pagina)} aulas coletadas")
+                        else:
+                            abas_processadas += 1
+                            safe_print(f"📊 [{abas_processadas}/{len(futures)}] Aba-{pagina_num}: 0 aulas")
+                        
+                        # Se encontrou 2024, avisar mas continuar coletando resultados das abas já em execução
+                        if stop_processing.is_set():
+                            safe_print(f"🛑 Aba-{pagina_num} encontrou 2024 - aguardando finalização das demais abas...")
+                        
+                    except Exception as e:
+                        abas_processadas += 1
+                        safe_print(f"⚠️ [{abas_processadas}/{len(futures)}] Erro na Aba-{pagina_num}: {e}")
+            
+            safe_print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado_global)}")
+            
+            # Preparar dados para envio
+            headers = [
+                "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+                "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+            ]
+            
+            body = {
+                "tipo": "historico_aulas_single_login",
+                "dados": resultado_global,
+                "headers": headers,
+                "resumo": {
+                    "total_aulas": len(resultado_global),
+                    "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
+                    "abas_utilizadas": max_workers,
+                    "paginas_processadas": total_paginas
+                }
+            }
+            
+            # Enviar dados para Apps Script
+            if resultado_global:
+                try:
+                    safe_print("📤 Enviando dados para Google Sheets...")
+                    resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+                    safe_print("✅ Dados enviados!")
+                    safe_print("Status code:", resposta_post.status_code)
+                    safe_print("Resposta do Apps Script:", resposta_post.text)
+                except Exception as e:
+                    safe_print(f"❌ Erro ao enviar para Apps Script: {e}")
+            
+            # Resumo final
+            safe_print("\n📈 RESUMO DA COLETA COM ABAS MÚLTIPLAS:")
+            safe_print(f"   🎯 Total de aulas: {len(resultado_global)}")
+            safe_print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
+            safe_print(f"   🗂️ Workers utilizados: {max_workers}")
+            safe_print(f"   📄 Páginas processadas: {total_paginas}")
+            
+            if resultado_global:
+                total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado_global)
+                total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado_global)
+                aulas_com_ata = sum(1 for linha in resultado_global if linha[9] == "OK")
+                
+                safe_print(f"   👥 Total de presenças registradas: {total_presentes}")
+                safe_print(f"   ❌ Total de ausências registradas: {total_ausentes}")
+                safe_print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado_global)}")
+            
+            # FECHAR O NAVEGADOR ÚNICO NO FINAL
+            navegador.close()
+            
+    except Exception as e:
+        safe_print(f"❌ Erro crítico: {e}")
+        safe_print(f"⏱️ Tempo decorrido antes do erro: {(time.time() - tempo_inicio) / 60:.1f} minutos")
         
-        # FECHAR O NAVEGADOR ÚNICO NO FINAL
-        navegador.close()
+        # Tentar salvar dados coletados até o momento do erro
+        if resultado_global:
+            safe_print(f"💾 Tentando salvar {len(resultado_global)} aulas coletadas antes do erro...")
+            # Aqui você pode adicionar lógica para salvar em arquivo local se necessário
 
 if __name__ == "__main__":
     main()
