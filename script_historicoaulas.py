@@ -1,3 +1,4 @@
+# script_historico_aulas_corrigido.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -9,23 +10,15 @@ import time
 import json
 from bs4 import BeautifulSoup
 from datetime import datetime
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import queue
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_PAINEL = "https://musical.congregacao.org.br/painel"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
-
-# Queue thread-safe para coletar resultados
-resultado_global = queue.Queue()
-lock = threading.Lock()
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright para usar em requests"""
@@ -44,6 +37,7 @@ def extrair_detalhes_aula(session, aula_id):
         resp = session.get(url_detalhes, headers=headers, timeout=10)
         
         if resp.status_code == 200:
+            # Buscar por "ATA DA AULA" no conteúdo
             if "ATA DA AULA" in resp.text:
                 return "OK"
             else:
@@ -52,6 +46,7 @@ def extrair_detalhes_aula(session, aula_id):
         return "ERRO"
         
     except Exception as e:
+        print(f"⚠️ Erro ao extrair detalhes da aula {aula_id}: {e}")
         return "ERRO"
 
 def processar_frequencia_modal(pagina, aula_id, professor_id):
@@ -111,6 +106,7 @@ def processar_frequencia_modal(pagina, aula_id, professor_id):
         }
         
     except Exception as e:
+        print(f"⚠️ Erro ao processar frequência: {e}")
         return {
             'presentes_ids': [],
             'presentes_nomes': [],
@@ -120,8 +116,9 @@ def processar_frequencia_modal(pagina, aula_id, professor_id):
         }
 
 def extrair_dados_de_linha_por_indice(pagina, indice_linha):
-    """Extrai dados de uma linha específica pelo índice"""
+    """Extrai dados de uma linha específica pelo índice, evitando referências antigas"""
     try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
         linhas = pagina.query_selector_all("table tbody tr")
         
         if indice_linha >= len(linhas):
@@ -147,6 +144,7 @@ def extrair_dados_de_linha_por_indice(pagina, indice_linha):
             btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
             if btn_freq:
                 onclick = btn_freq.get_attribute("onclick")
+                # Extrair os dois IDs: visualizarFrequencias(aula_id, professor_id)
                 match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
                 if match:
                     aula_id = match.group(1)
@@ -164,11 +162,13 @@ def extrair_dados_de_linha_por_indice(pagina, indice_linha):
         return None, False
         
     except Exception as e:
+        print(f"⚠️ Erro ao extrair dados da linha {indice_linha}: {e}")
         return None, False
 
 def clicar_botao_frequencia_por_indice(pagina, indice_linha):
     """Clica no botão de frequência de uma linha específica pelo índice"""
     try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
         linhas = pagina.query_selector_all("table tbody tr")
         
         if indice_linha >= len(linhas):
@@ -184,6 +184,7 @@ def clicar_botao_frequencia_por_indice(pagina, indice_linha):
         return False
         
     except Exception as e:
+        print(f"⚠️ Erro ao clicar no botão da linha {indice_linha}: {e}")
         return False
 
 def contar_linhas_na_pagina(pagina):
@@ -195,14 +196,14 @@ def contar_linhas_na_pagina(pagina):
         return 0
 
 def navegar_para_historico_aulas(pagina):
-    """Navega para o histórico de aulas"""
+    """Navega pelos menus para chegar ao histórico de aulas"""
     try:
-        print(f"🔍 [Thread] Navegando para G.E.M...")
+        print("🔍 Navegando para G.E.M...")
         
-        # Aguardar o menu carregar
+        # Aguardar o menu carregar após login
         pagina.wait_for_selector("nav", timeout=15000)
         
-        # Estratégias para encontrar menu G.E.M
+        # Buscar e clicar no menu G.E.M
         seletores_gem = [
             'a:has-text("G.E.M")',
             'a:has(.fa-graduation-cap)',
@@ -215,392 +216,361 @@ def navegar_para_historico_aulas(pagina):
             try:
                 elemento_gem = pagina.query_selector(seletor)
                 if elemento_gem:
+                    print(f"✅ Menu G.E.M encontrado: {seletor}")
                     elemento_gem.click()
                     menu_gem_clicado = True
                     break
-            except:
+            except Exception as e:
+                print(f"⚠️ Tentativa com seletor {seletor} falhou: {e}")
                 continue
         
         if not menu_gem_clicado:
+            print("❌ Não foi possível encontrar o menu G.E.M")
             return False
         
-        time.sleep(2)
+        # Aguardar mais tempo para o submenu aparecer e tentar múltiplas estratégias
+        print("⏳ Aguardando submenu expandir...")
+        time.sleep(3)
         
-        # Tentar clicar em Histórico de Aulas
+        print("🔍 Procurando por Histórico de Aulas...")
+        
+        # Estratégia 1: Tentar aguardar elemento ficar visível
         historico_clicado = False
         try:
+            # Aguardar elemento aparecer e ficar visível
             historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', 
                                                      state="visible", timeout=10000)
             if historico_link:
+                print("✅ Histórico de Aulas visível - clicando...")
                 historico_link.click()
                 historico_clicado = True
-        except:
+        except Exception as e:
+            print(f"⚠️ Estratégia 1 falhou: {e}")
+        
+        # Estratégia 2: Forçar visibilidade com JavaScript
+        if not historico_clicado:
             try:
-                # Forçar com JavaScript
+                print("🔧 Tentando forçar clique com JavaScript...")
+                # Buscar elemento mesmo que não visível
                 elemento = pagina.query_selector('a:has-text("Histórico de Aulas")')
                 if elemento:
+                    # Forçar clique via JavaScript
                     pagina.evaluate("element => element.click()", elemento)
                     historico_clicado = True
-            except:
-                # Navegação direta
+                    print("✅ Clique forçado com JavaScript")
+            except Exception as e:
+                print(f"⚠️ Estratégia 2 falhou: {e}")
+        
+        # Estratégia 3: Navegar diretamente via URL
+        if not historico_clicado:
+            try:
+                print("🌐 Navegando diretamente para URL do histórico...")
                 pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
                 historico_clicado = True
+                print("✅ Navegação direta bem-sucedida")
+            except Exception as e:
+                print(f"⚠️ Estratégia 3 falhou: {e}")
         
         if not historico_clicado:
+            print("❌ Todas as estratégias falharam")
             return False
         
-        # Aguardar tabela carregar
+        print("⏳ Aguardando página do histórico carregar...")
+        
+        # Aguardar indicador de carregamento da tabela
         try:
+            # Aguardar pelo menos um checkbox aparecer (indica que a tabela carregou)
             pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
+            print("✅ Tabela do histórico carregada!")
             return True
-        except:
+        except PlaywrightTimeoutError:
+            print("⚠️ Timeout aguardando tabela - tentando continuar...")
+            # Verificar se pelo menos temos uma tabela
             try:
                 pagina.wait_for_selector("table", timeout=5000)
+                print("✅ Tabela encontrada (sem checkboxes)")
                 return True
             except:
+                print("❌ Nenhuma tabela encontrada")
                 return False
                 
     except Exception as e:
+        print(f"❌ Erro durante navegação: {e}")
         return False
-
-def processar_pagina_especifica(navegador, numero_pagina, cookies_compartilhados):
-    """Processa uma página específica do histórico"""
-    print(f"🚀 [Página {numero_pagina}] Iniciando processamento...")
-    
-    try:
-        # Criar nova aba
-        contexto = navegador.new_context()
-        
-        # Aplicar cookies compartilhados se disponíveis
-        if cookies_compartilhados:
-            contexto.add_cookies(cookies_compartilhados)
-        
-        pagina = contexto.new_page()
-        pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-        })
-        
-        # Ir direto para o painel (já logado via cookies)
-        print(f"🌐 [Página {numero_pagina}] Navegando para painel...")
-        pagina.goto(URL_PAINEL)
-        
-        # Aguardar um pouco para carregar
-        time.sleep(2)
-        
-        # Navegar para histórico
-        if not navegar_para_historico_aulas(pagina):
-            print(f"❌ [Página {numero_pagina}] Falha na navegação")
-            contexto.close()
-            return [], False
-        
-        # Configurar para 100 registros
-        print(f"⚙️ [Página {numero_pagina}] Configurando para 100 registros...")
-        try:
-            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            pagina.select_option('select[name="listagem_length"]', "100")
-            time.sleep(3)
-        except Exception as e:
-            print(f"⚠️ [Página {numero_pagina}] Erro ao configurar registros: {e}")
-        
-        # Aguardar recarregamento
-        try:
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-        except:
-            pass
-        
-        # Ir para página específica (se não for a primeira)
-        if numero_pagina > 1:
-            print(f"➡️ [Página {numero_pagina}] Navegando para página {numero_pagina}...")
-            try:
-                # Buscar link da página específica
-                link_pagina = pagina.query_selector(f'a:has-text("{numero_pagina}")')
-                if link_pagina:
-                    link_pagina.click()
-                    time.sleep(3)
-                    
-                    # Aguardar nova página carregar
-                    try:
-                        pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
-                    except:
-                        pass
-                else:
-                    print(f"⚠️ [Página {numero_pagina}] Link da página não encontrado")
-                    contexto.close()
-                    return [], False
-            except Exception as e:
-                print(f"⚠️ [Página {numero_pagina}] Erro ao navegar: {e}")
-                contexto.close()
-                return [], False
-        
-        # Criar sessão requests com cookies para ATA
-        cookies_dict = extrair_cookies_playwright(pagina)
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-        
-        # Processar aulas desta página
-        resultado_pagina = []
-        total_linhas = contar_linhas_na_pagina(pagina)
-        
-        if total_linhas == 0:
-            print(f"📭 [Página {numero_pagina}] Não há linhas para processar")
-            contexto.close()
-            return [], False
-        
-        print(f"📊 [Página {numero_pagina}] Encontradas {total_linhas} aulas")
-        
-        # Verificar se chegamos em 2024 logo de cara
-        dados_primeira_aula, deve_parar_ano = extrair_dados_de_linha_por_indice(pagina, 0)
-        if deve_parar_ano:
-            print(f"🛑 [Página {numero_pagina}] Encontrado 2024 - finalizando!")
-            contexto.close()
-            return [], True
-        
-        # Processar cada linha
-        for i in range(total_linhas):
-            dados_aula, deve_parar_ano = extrair_dados_de_linha_por_indice(pagina, i)
-            
-            if deve_parar_ano:
-                print(f"🛑 [Página {numero_pagina}] Encontrado 2024 - finalizando coleta!")
-                contexto.close()
-                return resultado_pagina, True
-            
-            if not dados_aula:
-                continue
-            
-            print(f"   🎯 [Página {numero_pagina}] Aula {i+1}/{total_linhas}: {dados_aula['data']} - {dados_aula['curso']}")
-            
-            try:
-                # Fechar modal anterior se existir
-                try:
-                    pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=2000)
-                except:
-                    try:
-                        btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
-                        if btn_fechar:
-                            btn_fechar.click()
-                        else:
-                            pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
-                    except:
-                        pagina.keyboard.press("Escape")
-                        time.sleep(1)
-                
-                # Clicar no botão de frequência
-                if clicar_botao_frequencia_por_indice(pagina, i):
-                    time.sleep(1)
-                    
-                    # Processar dados de frequência
-                    freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
-                    
-                    # Fechar modal
-                    try:
-                        fechou = False
-                        
-                        btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
-                        if btn_fechar:
-                            btn_fechar.click()
-                            fechou = True
-                        
-                        if not fechou:
-                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
-                            if btn_fechar:
-                                btn_fechar.click()
-                                fechou = True
-                        
-                        if not fechou:
-                            pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                        
-                        try:
-                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
-                        except:
-                            pass
-                            
-                    except:
-                        pagina.keyboard.press("Escape")
-                    
-                    time.sleep(0.5)
-                    
-                    # Obter detalhes da ATA
-                    ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
-                    
-                    # Montar linha de resultado
-                    linha_resultado = [
-                        dados_aula['congregacao'],
-                        dados_aula['curso'],
-                        dados_aula['turma'],
-                        dados_aula['data'],
-                        "; ".join(freq_data['presentes_ids']),
-                        "; ".join(freq_data['presentes_nomes']),
-                        "; ".join(freq_data['ausentes_ids']),
-                        "; ".join(freq_data['ausentes_nomes']),
-                        freq_data['tem_presenca'],
-                        ata_status
-                    ]
-                    
-                    resultado_pagina.append(linha_resultado)
-                    
-                    # Resumo da aula
-                    total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
-                    print(f"      ✓ [Página {numero_pagina}] {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
-                
-            except Exception as e:
-                print(f"⚠️ [Página {numero_pagina}] Erro ao processar aula: {e}")
-                continue
-            
-            # Pequena pausa entre aulas
-            time.sleep(0.3)
-        
-        print(f"✅ [Página {numero_pagina}] Concluída! {len(resultado_pagina)} aulas processadas")
-        contexto.close()
-        return resultado_pagina, False
-        
-    except Exception as e:
-        print(f"❌ [Página {numero_pagina}] Erro geral: {e}")
-        if 'contexto' in locals():
-            contexto.close()
-        return [], False
 
 def main():
     tempo_inicio = time.time()
     
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
         
-        # PRIMEIRA FASE: Login e descobrir quantas páginas existem
-        print("🔐 Fase 1: Fazendo login e descobrindo estrutura...")
-        pagina_principal = navegador.new_page()
-        pagina_principal.set_extra_http_headers({
+        # Configurações do navegador
+        pagina.set_extra_http_headers({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
         })
         
+        print("🔐 Fazendo login...")
+        pagina.goto(URL_INICIAL)
+        
         # Login
-        pagina_principal.goto(URL_INICIAL)
-        pagina_principal.fill('input[name="login"]', EMAIL)
-        pagina_principal.fill('input[name="password"]', SENHA)
-        pagina_principal.click('button[type="submit"]')
+        pagina.fill('input[name="login"]', EMAIL)
+        pagina.fill('input[name="password"]', SENHA)
+        pagina.click('button[type="submit"]')
         
         try:
-            pagina_principal.wait_for_selector("nav", timeout=15000)
+            pagina.wait_for_selector("nav", timeout=15000)
             print("✅ Login realizado com sucesso!")
         except PlaywrightTimeoutError:
             print("❌ Falha no login. Verifique suas credenciais.")
             navegador.close()
             return
         
-        # Navegar para histórico de aulas
-        if not navegar_para_historico_aulas(pagina_principal):
+        # Navegar pelos menus para histórico de aulas
+        if not navegar_para_historico_aulas(pagina):
             print("❌ Falha na navegação para histórico de aulas.")
             navegador.close()
             return
         
-        # Configurar para 100 registros na página principal
-        print("⚙️ Configurando para 100 registros...")
+        # Configurar para mostrar 2000 registros
+        print("⚙️ Configurando para mostrar 2000 registros...")
         try:
-            pagina_principal.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            pagina_principal.select_option('select[name="listagem_length"]', "100")
+            # Aguardar o seletor de quantidade aparecer
+            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+            pagina.select_option('select[name="listagem_length"]', "2000")
+            print("✅ Configurado para 2000 registros")
+            
+            # Aguardar a página recarregar com 2000 registros
             time.sleep(3)
             
-            # Aguardar recarregamento
-            pagina_principal.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
         except Exception as e:
             print(f"⚠️ Erro ao configurar registros: {e}")
+            print("📋 Continuando com configuração padrão...")
         
-        # Descobrir quantas páginas existem
-        print("🔍 Descobrindo quantas páginas existem...")
-        numero_paginas = 1
+        # Aguardar carregamento da tabela após mudança de quantidade
+        print("⏳ Aguardando nova configuração carregar...")
         try:
-            # Procurar por links de paginação
-            links_paginacao = pagina_principal.query_selector_all("ul.pagination li a")
-            numeros = []
+            # Aguardar pelo menos um checkbox aparecer novamente
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
+            print("✅ Tabela recarregada com nova configuração!")
+        except:
+            print("⚠️ Timeout aguardando recarregamento - continuando...")
+        
+        # Criar sessão requests com cookies para detalhes das aulas
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+        
+        resultado = []
+        pagina_atual = 1
+        deve_parar = False
+        
+        while not deve_parar:
+            print(f"📖 Processando página {pagina_atual}...")
             
-            for link in links_paginacao:
-                texto = link.inner_text().strip()
-                if texto.isdigit():
-                    numeros.append(int(texto))
+            # Aguardar linhas carregarem
+            try:
+                # Aguardar checkboxes que indicam linhas carregadas
+                pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                time.sleep(2)  # Aguardar estabilização
+            except:
+                print("⚠️ Timeout aguardando linhas - tentando continuar...")
             
-            if numeros:
-                numero_paginas = max(numeros)
+            # Contar quantas linhas temos na página atual
+            total_linhas = contar_linhas_na_pagina(pagina)
             
-            print(f"📊 Encontradas {numero_paginas} páginas para processar")
-        except Exception as e:
-            print(f"⚠️ Erro ao descobrir páginas: {e} - assumindo 10 páginas")
-            numero_paginas = 10
-        
-        # Extrair cookies para compartilhar com outras abas
-        cookies_compartilhados = pagina_principal.context.cookies()
-        pagina_principal.close()
-        
-        print(f"\n🚀 Fase 2: Processamento paralelo de {numero_paginas} páginas...")
-        print("💡 Cada página será processada em uma aba separada!")
-        
-        # SEGUNDA FASE: Processamento paralelo
-        resultado_final = []
-        deve_parar_global = False
-        
-        # Função para processar com delay escalonado
-        def processar_com_delay(numero_pagina):
-            # Delay escalonado: página 1 = 0s, página 2 = 5s, página 3 = 10s, etc.
-            delay = (numero_pagina - 1) * 5
-            if delay > 0:
-                print(f"⏰ [Página {numero_pagina}] Aguardando {delay}s antes de iniciar...")
-                time.sleep(delay)
+            if total_linhas == 0:
+                print("🏁 Não há mais linhas para processar.")
+                break
             
-            return processar_pagina_especifica(navegador, numero_pagina, cookies_compartilhados)
-        
-        # Usar ThreadPoolExecutor para controlar concorrência
-        max_workers = min(5, numero_paginas)  # Máximo 5 abas simultâneas
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submeter todas as tarefas
-            futures = {}
-            for num_pag in range(1, numero_paginas + 1):
-                future = executor.submit(processar_com_delay, num_pag)
-                futures[future] = num_pag
+            print(f"   📊 Encontradas {total_linhas} aulas nesta página")
             
-            # Coletar resultados conforme vão terminando
-            for future in as_completed(futures):
-                numero_pagina = futures[future]
+            # Processar cada linha POR ÍNDICE (evita referências antigas)
+            for i in range(total_linhas):
+                # Extrair dados da linha atual pelo índice
+                dados_aula, deve_parar_ano = extrair_dados_de_linha_por_indice(pagina, i)
+                
+                if deve_parar_ano:
+                    print("🛑 Encontrado ano 2024 - finalizando coleta!")
+                    deve_parar = True
+                    break
+                
+                if not dados_aula:
+                    continue
+                
+                print(f"      🎯 Aula {i+1}/{total_linhas}: {dados_aula['data']} - {dados_aula['curso']}")
+                
+                # Clicar no botão de frequência para abrir modal
                 try:
-                    resultado_pagina, deve_parar = future.result()
+                    # Aguardar que não haja modal aberto antes de clicar
+                    try:
+                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=3000)
+                    except:
+                        # Se ainda há modal, forçar fechamento
+                        print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
+                        try:
+                            # Tentar múltiplas formas de fechar modal
+                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
+                            if btn_fechar:
+                                btn_fechar.click()
+                            else:
+                                # Forçar fechamento via JavaScript
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                            
+                            # Aguardar fechar
+                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
+                        except:
+                            # Último recurso: recarregar página
+                            print("⚠️ Forçando escape...")
+                            pagina.keyboard.press("Escape")
+                            time.sleep(1)
                     
-                    with lock:
-                        resultado_final.extend(resultado_pagina)
-                        if deve_parar:
-                            deve_parar_global = True
+                    # Agora clicar no botão de frequência PELO ÍNDICE
+                    print(f"         🖱️ Clicando em frequência...")
+                    if clicar_botao_frequencia_por_indice(pagina, i):
+                        # Aguardar modal carregar
+                        time.sleep(1)
+                        
+                        # Processar dados de frequência
+                        freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
+                        
+                        # Fechar modal de forma mais robusta
+                        print(f"         🚪 Fechando modal...")
+                        try:
+                            # Tentar diferentes formas de fechar
+                            fechou = False
+                            
+                            # 1. Botão Fechar específico
+                            btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
+                            if btn_fechar:
+                                btn_fechar.click()
+                                fechou = True
+                            
+                            # 2. Qualquer botão de fechar modal
+                            if not fechou:
+                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
+                                if btn_fechar:
+                                    btn_fechar.click()
+                                    fechou = True
+                            
+                            # 3. Via JavaScript
+                            if not fechou:
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                                fechou = True
+                            
+                            # 4. ESC como último recurso
+                            if not fechou:
+                                pagina.keyboard.press("Escape")
+                            
+                            # Aguardar modal fechar completamente
+                            try:
+                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=5000)
+                                print(f"         ✅ Modal fechado com sucesso")
+                            except:
+                                print(f"         ⚠️ Modal pode não ter fechado completamente")
+                                
+                        except Exception as close_error:
+                            print(f"         ⚠️ Erro ao fechar modal: {close_error}")
+                            pagina.keyboard.press("Escape")
+                        
+                        # Pausa adicional para estabilizar
+                        time.sleep(1)
+                        
+                        # Obter detalhes da ATA via requests
+                        ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
+                        
+                        # Montar linha de resultado
+                        linha_resultado = [
+                            dados_aula['congregacao'],
+                            dados_aula['curso'],
+                            dados_aula['turma'],
+                            dados_aula['data'],
+                            "; ".join(freq_data['presentes_ids']),
+                            "; ".join(freq_data['presentes_nomes']),
+                            "; ".join(freq_data['ausentes_ids']),
+                            "; ".join(freq_data['ausentes_nomes']),
+                            freq_data['tem_presenca'],
+                            ata_status
+                        ]
+                        
+                        resultado.append(linha_resultado)
+                        
+                        # Mostrar resumo da aula
+                        total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
+                        print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
                     
-                    print(f"✅ [Página {numero_pagina}] Finalizada: {len(resultado_pagina)} aulas coletadas")
-                    
-                    # Se encontrou 2024, cancelar tarefas restantes
-                    if deve_parar_global:
-                        print("🛑 Ano 2024 encontrado - cancelando páginas restantes...")
-                        for f in futures:
-                            if not f.done():
-                                f.cancel()
-                        break
+                    else:
+                        print(f"         ❌ Falha ao clicar no botão de frequência")
                         
                 except Exception as e:
-                    print(f"❌ [Página {numero_pagina}] Erro: {e}")
-        
-        print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado_final)}")
-        
-        # Preparar e enviar dados
-        if resultado_final:
-            headers = [
-                "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
-                "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
-            ]
+                    print(f"⚠️ Erro ao processar aula: {e}")
+                    continue
+                
+                # Pequena pausa entre aulas
+                time.sleep(0.5)
             
-            body = {
-                "tipo": "historico_aulas_paralelo",
-                "dados": resultado_final,
-                "headers": headers,
-                "resumo": {
-                    "total_aulas": len(resultado_final),
-                    "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
-                    "paginas_processadas": numero_paginas
-                }
+            if deve_parar:
+                break
+            
+            # Tentar avançar para próxima página
+            try:
+                # Aguardar um pouco para garantir que a página atual está estável
+                time.sleep(2)
+                
+                # Buscar botão próximo
+                btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
+                
+                if btn_proximo:
+                    # Verificar se o botão não está desabilitado
+                    parent = btn_proximo.query_selector("..")
+                    parent_class = parent.get_attribute("class") if parent else ""
+                    
+                    if "disabled" not in parent_class:
+                        print("➡️ Avançando para próxima página...")
+                        btn_proximo.click()
+                        pagina_atual += 1
+                        
+                        # Aguardar nova página carregar
+                        time.sleep(3)
+                        
+                        # Aguardar checkboxes da nova página
+                        try:
+                            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                        except:
+                            print("⚠️ Timeout aguardando nova página")
+                        
+                    else:
+                        print("🏁 Botão próximo desabilitado - não há mais páginas.")
+                        break
+                else:
+                    print("🏁 Botão próximo não encontrado - não há mais páginas.")
+                    break
+                    
+            except Exception as e:
+                print(f"⚠️ Erro ao navegar para próxima página: {e}")
+                break
+        
+        print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado)}")
+        
+        # Preparar dados para envio
+        headers = [
+            "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+            "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+        ]
+        
+        body = {
+            "tipo": "historico_aulas",
+            "dados": resultado,
+            "headers": headers,
+            "resumo": {
+                "total_aulas": len(resultado),
+                "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
+                "paginas_processadas": pagina_atual
             }
-            
+        }
+        
+        # Enviar dados para Apps Script
+        if resultado:
             try:
                 print("📤 Enviando dados para Google Sheets...")
                 resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
@@ -611,20 +581,19 @@ def main():
                 print(f"❌ Erro ao enviar para Apps Script: {e}")
         
         # Resumo final
-        print("\n🎉 RESUMO DA COLETA PARALELA:")
-        print(f"   🎯 Total de aulas: {len(resultado_final)}")
-        print(f"   📄 Páginas processadas: {numero_paginas}")
+        print("\n📈 RESUMO DA COLETA:")
+        print(f"   🎯 Total de aulas: {len(resultado)}")
+        print(f"   📄 Páginas processadas: {pagina_atual}")
         print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
-        print(f"   🚀 Velocidade: ~{len(resultado_final) / ((time.time() - tempo_inicio) / 60):.1f} aulas/min")
         
-        if resultado_final:
-            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado_final)
-            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado_final)
-            aulas_com_ata = sum(1 for linha in resultado_final if linha[9] == "OK")
+        if resultado:
+            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado)
+            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado)
+            aulas_com_ata = sum(1 for linha in resultado if linha[9] == "OK")
             
             print(f"   👥 Total de presenças registradas: {total_presentes}")
             print(f"   ❌ Total de ausências registradas: {total_ausentes}")
-            print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado_final)}")
+            print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado)}")
         
         navegador.close()
 
