@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import concurrent.futures
 from threading import Lock
+import asyncio
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -21,95 +22,30 @@ if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-class ColetorSuperRapido:
-    def __init__(self):
-        self.session = None
-        self.lock = Lock()
-        self.contador_processadas = 0
-        
-    def extrair_cookies_playwright(self, pagina):
-        """Extrai cookies do Playwright para usar em requests"""
-        cookies = pagina.context.cookies()
-        return {cookie['name']: cookie['value'] for cookie in cookies}
+# Lock para thread safety
+resultado_lock = Lock()
 
-    def extrair_todas_aulas_js(self, pagina):
-        """Extrai dados de todas as aulas usando JavaScript puro - SUPER OTIMIZADO"""
-        script = """
-        () => {
-            const aulas = [];
-            const linhas = document.querySelectorAll('table tbody tr');
-            
-            for (let i = 0; i < linhas.length; i++) {
-                const linha = linhas[i];
-                const colunas = linha.querySelectorAll('td');
-                
-                if (colunas.length >= 6) {
-                    const btn = linha.querySelector('button[onclick*="visualizarFrequencias"]');
-                    if (btn) {
-                        const onclick = btn.getAttribute('onclick');
-                        const match = onclick.match(/visualizarFrequencias\\((\\d+),\\s*(\\d+)\\)/);
-                        if (match) {
-                            const data = colunas[4]?.innerText?.trim() || '';
-                            
-                            // Parar se for 2024
-                            if (data.includes('2024')) {
-                                return { parar: true, aulas: aulas };
-                            }
-                            
-                            aulas.push({
-                                aula_id: match[1],
-                                professor_id: match[2],
-                                data: data,
-                                congregacao: colunas[1]?.innerText?.trim() || '',
-                                curso: colunas[2]?.innerText?.trim() || '',
-                                turma: colunas[3]?.innerText?.trim() || ''
-                            });
-                        }
-                    }
-                }
-            }
-            return { parar: false, aulas: aulas };
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright para usar em requests"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def extrair_frequencia_via_request(session, aula_id, professor_id):
+    """Extrai frequência diretamente via requisição HTTP (mais rápido que modal)"""
+    try:
+        # URL que o modal usa para carregar os dados
+        url_frequencia = f"https://musical.congregacao.org.br/aulas_abertas/ajax_listar_frequencias/{aula_id}/{professor_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'X-Requested-With': 'XMLHttpRequest',  # Importante para requisições AJAX
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas',
         }
-        """
-        return pagina.evaluate(script)
-
-    def extrair_frequencia_direta(self, aula_id, professor_id):
-        """FAZ REQUISIÇÃO DIRETA - SEM MODAL! Muito mais rápido"""
-        try:
-            url_freq = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_frequencias/{aula_id}/{professor_id}"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
-                'X-Requested-With': 'XMLHttpRequest'  # Simula requisição AJAX
-            }
-            
-            response = self.session.get(url_freq, headers=headers, timeout=8)
-            
-            if response.status_code == 200:
-                return self.processar_html_frequencia(response.text)
-            else:
-                return {
-                    'presentes_ids': [],
-                    'presentes_nomes': [],
-                    'ausentes_ids': [],
-                    'ausentes_nomes': [],
-                    'tem_presenca': "ERRO"
-                }
-                
-        except Exception as e:
-            return {
-                'presentes_ids': [],
-                'presentes_nomes': [],
-                'ausentes_ids': [],
-                'ausentes_nomes': [],
-                'tem_presenca': "ERRO"
-            }
-
-    def processar_html_frequencia(self, html_content):
-        """Processa o HTML da frequência diretamente"""
-        try:
-            soup = BeautifulSoup(html_content, 'html.parser')
+        
+        resp = session.get(url_frequencia, headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            # Parse do HTML retornado
+            soup = BeautifulSoup(resp.text, 'html.parser')
             
             presentes_ids = []
             presentes_nomes = []
@@ -120,534 +56,411 @@ class ColetorSuperRapido:
             linhas = soup.find_all('tr')
             
             for linha in linhas:
-                # Buscar nome na primeira célula
-                nome_cell = linha.find('td')
-                if not nome_cell:
-                    continue
+                colunas = linha.find_all('td')
+                if len(colunas) >= 2:  # Nome + Status
+                    nome_completo = colunas[0].get_text(strip=True)
                     
-                nome_completo = nome_cell.get_text(strip=True)
-                
-                # Ignorar linhas vazias ou sem nome
-                if not nome_completo:
-                    continue
-                
-                # Buscar link de presença
-                link_presenca = linha.find('a', {'data-id-membro': True})
-                
-                if link_presenca:
-                    id_membro = link_presenca.get('data-id-membro')
-                    
-                    # Ignorar se não tem ID válido
-                    if not id_membro:
+                    # Ignorar linhas vazias
+                    if not nome_completo:
                         continue
                     
-                    # Verificar se está presente ou ausente pelo ícone
-                    icone = link_presenca.find('i')
-                    if icone:
-                        classes = icone.get('class', [])
-                        classes_str = ' '.join(classes)
+                    # Buscar link de presença
+                    link_presenca = colunas[-1].find('a')
+                    if link_presenca:
+                        id_membro = link_presenca.get('data-id-membro')
                         
-                        if 'fa-check' in classes_str and 'text-success' in classes_str:
-                            # Presente
-                            presentes_ids.append(id_membro)
-                            presentes_nomes.append(nome_completo)
-                        elif 'fa-remove' in classes_str and 'text-danger' in classes_str:
-                            # Ausente
-                            ausentes_ids.append(id_membro)
-                            ausentes_nomes.append(nome_completo)
+                        if not id_membro:
+                            continue
+                        
+                        # Verificar ícone de presença
+                        icone = link_presenca.find('i')
+                        if icone:
+                            classes = icone.get('class', [])
+                            classes_str = ' '.join(classes)
+                            
+                            if 'fa-check' in classes_str and 'text-success' in classes_str:
+                                presentes_ids.append(id_membro)
+                                presentes_nomes.append(nome_completo)
+                            elif 'fa-remove' in classes_str and 'text-danger' in classes_str:
+                                ausentes_ids.append(id_membro)
+                                ausentes_nomes.append(nome_completo)
             
             return {
                 'presentes_ids': presentes_ids,
                 'presentes_nomes': presentes_nomes,
                 'ausentes_ids': ausentes_ids,
                 'ausentes_nomes': ausentes_nomes,
-                'tem_presenca': "OK" if presentes_ids or ausentes_ids else "FANTASMA"
+                'tem_presenca': "OK" if presentes_ids else "FANTASMA"
             }
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao processar HTML: {e}")
-            return {
-                'presentes_ids': [],
-                'presentes_nomes': [],
-                'ausentes_ids': [],
-                'ausentes_nomes': [],
-                'tem_presenca': "ERRO"
-            }
-
-    def extrair_ata_direta(self, aula_id):
-        """Versão ultra-rápida para verificar ATA"""
-        try:
-            url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
-            }
-            
-            response = self.session.get(url_detalhes, headers=headers, timeout=6)
-            
-            if response.status_code == 200:
-                return "OK" if "ATA DA AULA" in response.text else "FANTASMA"
-            else:
-                return "ERRO"
-                
-        except Exception as e:
-            return "ERRO"
-
-    def processar_aula_completa(self, aula):
-        """Processa uma aula completa - frequência + ATA"""
-        try:
-            # Obter frequência via requisição direta
-            freq_data = self.extrair_frequencia_direta(aula['aula_id'], aula['professor_id'])
-            
-            # Obter ATA via requisição direta
-            ata_status = self.extrair_ata_direta(aula['aula_id'])
-            
-            # Montar resultado
-            linha_resultado = [
-                aula['congregacao'],
-                aula['curso'],
-                aula['turma'],
-                aula['data'],
-                "; ".join(freq_data['presentes_ids']),
-                "; ".join(freq_data['presentes_nomes']),
-                "; ".join(freq_data['ausentes_ids']),
-                "; ".join(freq_data['ausentes_nomes']),
-                freq_data['tem_presenca'],
-                ata_status
-            ]
-            
-            # Log thread-safe
-            with self.lock:
-                self.contador_processadas += 1
-                total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
-                print(f"✓ [{self.contador_processadas:03d}] {aula['data']} - {aula['curso'][:30]:<30} | "
-                      f"{len(freq_data['presentes_ids']):2d}P {len(freq_data['ausentes_ids']):2d}A | ATA:{ata_status}")
-            
-            return linha_resultado
-            
-        except Exception as e:
-            with self.lock:
-                print(f"❌ Erro processando aula {aula['aula_id']}: {e}")
-            return None
-
-    def processar_lote_paralelo(self, aulas_lote, max_workers=8):
-        """Processa um lote de aulas EM PARALELO - MUITO MAIS RÁPIDO"""
-        resultado_lote = []
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Enviar todas as tarefas
-            futures = {executor.submit(self.processar_aula_completa, aula): aula for aula in aulas_lote}
-            
-            # Coletar resultados conforme completam
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    resultado = future.result(timeout=15)
-                    if resultado:
-                        resultado_lote.append(resultado)
-                except Exception as e:
-                    aula = futures[future]
-                    print(f"⚠️ Timeout/erro na aula {aula['aula_id']}: {e}")
-        
-        return resultado_lote
-
-def navegar_para_historico_rapido(pagina):
-    """Navegação ultra-otimizada com múltiplas estratégias"""
-    try:
-        print("🚀 Tentando navegação direta...")
-        
-        # ESTRATÉGIA 1: URL direta (mais rápida)
-        try:
-            pagina.goto("https://musical.congregacao.org.br/aulas_abertas", wait_until="domcontentloaded")
-            time.sleep(2)  # Aguardar um pouco mais
-            
-            # Verificar se chegou na página certa
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
-            print("✅ Navegação direta bem-sucedida!")
-            return True
-            
-        except Exception as e1:
-            print(f"⚠️ Navegação direta falhou: {e1}")
-        
-        print("🔄 Tentando via menus...")
-        
-        # ESTRATÉGIA 2: Via menus (fallback)
-        try:
-            # Voltar para página inicial se necessário
-            pagina.goto("https://musical.congregacao.org.br/painel", wait_until="domcontentloaded")
-            time.sleep(2)
-            
-            # Aguardar menu aparecer com timeout maior
-            pagina.wait_for_selector("nav, .navbar, [role='navigation']", timeout=15000)
-            
-            # Tentar encontrar G.E.M de múltiplas formas
-            seletores_gem = [
-                'a:has-text("G.E.M")',
-                'a[href*="gem"]',
-                'a:has(.fa-graduation-cap)',
-                'li:has-text("G.E.M") a',
-                '.menu-item:has-text("G.E.M")'
-            ]
-            
-            menu_gem_encontrado = False
-            for seletor in seletores_gem:
-                try:
-                    elemento = pagina.query_selector(seletor)
-                    if elemento and elemento.is_visible():
-                        print(f"✅ G.E.M encontrado: {seletor}")
-                        elemento.click()
-                        menu_gem_encontrado = True
-                        break
-                except:
-                    continue
-            
-            if not menu_gem_encontrado:
-                print("❌ Menu G.E.M não encontrado")
-                return False
-            
-            time.sleep(3)  # Aguardar submenu expandir
-            
-            # Tentar encontrar "Histórico de Aulas"
-            seletores_historico = [
-                'a:has-text("Histórico de Aulas")',
-                'a[href*="aulas_abertas"]',
-                'li:has-text("Histórico") a',
-                '.submenu-item:has-text("Histórico")'
-            ]
-            
-            historico_encontrado = False
-            for seletor in seletores_historico:
-                try:
-                    elemento = pagina.query_selector(seletor)
-                    if elemento:
-                        print(f"✅ Histórico encontrado: {seletor}")
-                        elemento.click()
-                        historico_encontrado = True
-                        break
-                except:
-                    continue
-            
-            if not historico_encontrado:
-                # Tentar força bruta via JavaScript
-                print("🔧 Tentando clique forçado...")
-                resultado_js = pagina.evaluate("""
-                () => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    const historico = links.find(link => 
-                        link.textContent.includes('Histórico') || 
-                        link.href.includes('aulas_abertas')
-                    );
-                    if (historico) {
-                        historico.click();
-                        return true;
-                    }
-                    return false;
-                }
-                """)
-                
-                if not resultado_js:
-                    print("❌ Histórico não encontrado de forma alguma")
-                    return False
-            
-            # Aguardar página do histórico carregar
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
-            print("✅ Navegação por menus bem-sucedida!")
-            return True
-            
-        except Exception as e2:
-            print(f"⚠️ Navegação por menus falhou: {e2}")
-        
-        # ESTRATÉGIA 3: Força bruta total
-        print("🔨 Última tentativa - força bruta...")
-        try:
-            urls_possíveis = [
-                "https://musical.congregacao.org.br/aulas_abertas/listagem",
-                "https://musical.congregacao.org.br/aulas_abertas/index",
-                "https://musical.congregacao.org.br/gem/aulas_abertas"
-            ]
-            
-            for url in urls_possíveis:
-                try:
-                    print(f"   Tentando: {url}")
-                    pagina.goto(url, wait_until="domcontentloaded")
-                    time.sleep(2)
-                    
-                    # Verificar se chegou
-                    pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=8000)
-                    print("✅ Força bruta bem-sucedida!")
-                    return True
-                except:
-                    continue
-            
-            return False
-            
-        except Exception as e3:
-            print(f"❌ Todas as estratégias falharam: {e3}")
-            return False
+        return {
+            'presentes_ids': [],
+            'presentes_nomes': [],
+            'ausentes_ids': [],
+            'ausentes_nomes': [],
+            'tem_presenca': "ERRO"
+        }
         
     except Exception as e:
-        print(f"❌ Erro geral na navegação: {e}")
+        print(f"⚠️ Erro ao extrair frequência da aula {aula_id}: {e}")
+        return {
+            'presentes_ids': [],
+            'presentes_nomes': [],
+            'ausentes_ids': [],
+            'ausentes_nomes': [],
+            'tem_presenca': "ERRO"
+        }
+
+def extrair_detalhes_aula(session, aula_id):
+    """Extrai detalhes da aula via requests para verificar ATA"""
+    try:
+        url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
+        }
+        
+        resp = session.get(url_detalhes, headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            if "ATA DA AULA" in resp.text:
+                return "OK"
+            else:
+                return "FANTASMA"
+        
+        return "ERRO"
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair detalhes da aula {aula_id}: {e}")
+        return "ERRO"
+
+def processar_aula_completa(session, dados_aula):
+    """Processa uma aula completa (frequência + ATA) via requests"""
+    try:
+        # Extrair frequência
+        freq_data = extrair_frequencia_via_request(session, dados_aula['aula_id'], dados_aula['professor_id'])
+        
+        # Extrair ATA
+        ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
+        
+        # Montar linha de resultado
+        linha_resultado = [
+            dados_aula['congregacao'],
+            dados_aula['curso'],
+            dados_aula['turma'],
+            dados_aula['data'],
+            "; ".join(freq_data['presentes_ids']),
+            "; ".join(freq_data['presentes_nomes']),
+            "; ".join(freq_data['ausentes_ids']),
+            "; ".join(freq_data['ausentes_nomes']),
+            freq_data['tem_presenca'],
+            ata_status
+        ]
+        
+        return linha_resultado
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao processar aula {dados_aula['aula_id']}: {e}")
+        return None
+
+def extrair_todas_aulas_da_pagina_html(html_content):
+    """Extrai dados de todas as aulas de uma página usando BeautifulSoup"""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    aulas = []
+    
+    # Buscar todas as linhas da tabela
+    linhas = soup.find('table').find('tbody').find_all('tr')
+    
+    for linha in linhas:
+        colunas = linha.find_all('td')
+        
+        if len(colunas) >= 6:
+            # Extrair dados básicos
+            data_aula = colunas[1].get_text(strip=True)
+            
+            # Verificar se é 2024 - parar processamento
+            if "2024" in data_aula:
+                return aulas, True  # Retorna aulas coletadas + sinal de parada
+            
+            congregacao = colunas[2].get_text(strip=True)
+            curso = colunas[3].get_text(strip=True)
+            turma = colunas[4].get_text(strip=True)
+            
+            # Extrair IDs do botão de frequência
+            btn_freq = linha.find('button', {'onclick': re.compile(r'visualizarFrequencias')})
+            if btn_freq:
+                onclick = btn_freq.get('onclick')
+                match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
+                if match:
+                    aula_id = match.group(1)
+                    professor_id = match.group(2)
+                    
+                    aulas.append({
+                        'aula_id': aula_id,
+                        'professor_id': professor_id,
+                        'data': data_aula,
+                        'congregacao': congregacao,
+                        'curso': curso,
+                        'turma': turma
+                    })
+    
+    return aulas, False
+
+def processar_lote_aulas(session, aulas_lote, thread_id):
+    """Processa um lote de aulas em thread separada"""
+    resultados_lote = []
+    
+    for i, aula in enumerate(aulas_lote):
+        print(f"   [Thread {thread_id}] Processando {i+1}/{len(aulas_lote)}: {aula['data']} - {aula['curso']}")
+        
+        resultado = processar_aula_completa(session, aula)
+        if resultado:
+            resultados_lote.append(resultado)
+            
+            # Log do resultado
+            total_presentes = len(resultado[4].split('; ')) if resultado[4] else 0
+            total_ausentes = len(resultado[6].split('; ')) if resultado[6] else 0
+            print(f"     ✓ {total_presentes} presentes, {total_ausentes} ausentes - ATA: {resultado[9]}")
+        
+        # Pequena pausa para não sobrecarregar servidor
+        time.sleep(0.1)
+    
+    return resultados_lote
+
+def navegar_para_historico_aulas(pagina):
+    """Navega pelos menus para chegar ao histórico de aulas"""
+    try:
+        print("🔍 Navegando para G.E.M...")
+        
+        # Aguardar o menu carregar após login
+        pagina.wait_for_selector("nav", timeout=15000)
+        
+        # Tentar estratégias de navegação
+        estrategias = [
+            lambda: pagina.click('a:has-text("G.E.M")'),
+            lambda: pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
+        ]
+        
+        sucesso = False
+        for i, estrategia in enumerate(estrategias):
+            try:
+                print(f"   Tentativa {i+1}...")
+                estrategia()
+                if i == 0:  # Se clicou no menu
+                    time.sleep(2)
+                    # Tentar clicar em histórico
+                    try:
+                        pagina.wait_for_selector('a:has-text("Histórico de Aulas")', timeout=5000)
+                        pagina.click('a:has-text("Histórico de Aulas")')
+                    except:
+                        # Navegar direto
+                        pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
+                
+                # Verificar se chegou na página certa
+                pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+                sucesso = True
+                break
+                
+            except Exception as e:
+                print(f"     Falhou: {e}")
+                continue
+        
+        if not sucesso:
+            return False
+            
+        print("✅ Navegação bem-sucedida!")
+        return True
+                
+    except Exception as e:
+        print(f"❌ Erro durante navegação: {e}")
         return False
 
 def main():
     tempo_inicio = time.time()
-    coletor = ColetorSuperRapido()
     
     with sync_playwright() as p:
-        # Configurar navegador com mais estabilidade
-        navegador = p.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-gpu',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding'
-            ]
-        )
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
         
-        # Criar contexto com configurações otimizadas
-        context = navegador.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
-        
-        pagina = context.new_page()
-        
-        # Bloquear recursos apenas se não for crítico para navegação
-        pagina.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2}", lambda route: route.abort())
+        # Configurações do navegador
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
         
         print("🔐 Fazendo login...")
-        try:
-            pagina.goto(URL_INICIAL, wait_until="networkidle", timeout=30000)
-        except:
-            pagina.goto(URL_INICIAL, wait_until="domcontentloaded")
+        pagina.goto(URL_INICIAL)
         
+        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
         
-        # Aguardar redirect pós-login com mais tempo
         try:
-            pagina.wait_for_url("**/painel", timeout=20000)
-            print("✅ Login realizado - redirecionado para painel!")
-        except:
-            try:
-                # Aguardar qualquer elemento que indique login bem-sucedido
-                pagina.wait_for_selector("nav, .navbar, .menu, .header-menu", timeout=15000)
-                print("✅ Login realizado - menu detectado!")
-            except PlaywrightTimeoutError:
-                print("❌ Falha no login - timeout aguardando elementos.")
-                navegador.close()
-                return
-        
-        if not navegar_para_historico_rapido(pagina):
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login. Verifique suas credenciais.")
             navegador.close()
             return
         
-        # Configurar 2000 registros com debug melhorado
-        print("⚙️ Configurando para 2000 registros...")
+        # Navegar para histórico de aulas
+        if not navegar_para_historico_aulas(pagina):
+            print("❌ Falha na navegação para histórico de aulas.")
+            navegador.close()
+            return
+        
+        # Configurar para mostrar 2000 registros
+        print("⚙️ Configurando para mostrar 2000 registros...")
         try:
-            # Primeiro verificar se o seletor existe
-            selector_found = pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            if selector_found:
-                print("✅ Seletor de quantidade encontrado")
-                
-                # Verificar opções disponíveis
-                opcoes = pagina.evaluate("""
-                () => {
-                    const select = document.querySelector('select[name="listagem_length"]');
-                    if (select) {
-                        return Array.from(select.options).map(opt => opt.value);
-                    }
-                    return [];
-                }
-                """)
-                print(f"   Opções disponíveis: {opcoes}")
-                
-                # Selecionar 2000 ou a maior opção disponível
-                if "2000" in opcoes:
-                    pagina.select_option('select[name="listagem_length"]', "2000")
-                    print("✅ 2000 registros selecionados")
-                elif opcoes:
-                    maior_opcao = max(opcoes, key=lambda x: int(x) if x.isdigit() else 0)
-                    pagina.select_option('select[name="listagem_length"]', maior_opcao)
-                    print(f"✅ {maior_opcao} registros selecionados (máximo disponível)")
-                
-                # Aguardar recarregamento
-                time.sleep(3)
-                
-                # Verificar se recarregou
-                try:
-                    pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-                    
-                    # Contar quantos registros estão sendo mostrados
-                    total_info = pagina.query_selector('.dataTables_info')
-                    if total_info:
-                        info_text = total_info.inner_text()
-                        print(f"✅ Configuração aplicada: {info_text}")
-                    else:
-                        print("✅ Tabela recarregada com nova configuração")
-                        
-                except Exception as e:
-                    print(f"⚠️ Timeout aguardando recarregamento: {e}")
-                    print("   Continuando com a configuração atual...")
-            else:
-                print("⚠️ Seletor de quantidade não encontrado")
-                
+            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+            pagina.select_option('select[name="listagem_length"]', "2000")
+            print("✅ Configurado para 2000 registros")
+            time.sleep(3)
         except Exception as e:
-            print(f"⚠️ Erro na configuração de registros: {e}")
-            print("   Continuando com configuração padrão...")
-            
-            # Tentar verificar se pelo menos temos uma tabela funcional
-            try:
-                tabela_ok = pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=5000)
-                if tabela_ok:
-                    print("✅ Tabela básica encontrada - continuando...")
-                else:
-                    print("❌ Nenhuma tabela funcional encontrada")
-                    navegador.close()
-                    return
-            except:
-                print("❌ Falha crítica - sem tabela de dados")
-                navegador.close()
-                return
+            print(f"⚠️ Erro ao configurar registros: {e}")
         
         # Criar sessão requests com cookies
-        cookies_dict = coletor.extrair_cookies_playwright(pagina)
-        coletor.session = requests.Session()
-        coletor.session.cookies.update(cookies_dict)
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
         
-        # Configurar sessão para máxima performance
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=20,
-            pool_maxsize=20,
-            max_retries=1
-        )
-        coletor.session.mount('http://', adapter)
-        coletor.session.mount('https://', adapter)
-        
-        resultado_final = []
+        resultado = []
         pagina_atual = 1
+        deve_parar = False
         
-        print("🚀 INICIANDO COLETA SUPER-RÁPIDA...")
-        print("=" * 80)
-        
-        while True:
-            print(f"\n📖 PÁGINA {pagina_atual}")
-            print("-" * 40)
+        # OTIMIZAÇÃO PRINCIPAL: Extrair todas as aulas por página e processar em lotes
+        while not deve_parar:
+            print(f"📖 Processando página {pagina_atual}...")
             
-            # Extrair todas as aulas da página via JavaScript
-            tempo_extracao = time.time()
-            resultado_js = coletor.extrair_todas_aulas_js(pagina)
-            print(f"   ⚡ Extração JS: {time.time() - tempo_extracao:.1f}s")
+            # Aguardar página carregar
+            try:
+                pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                time.sleep(2)
+            except:
+                print("⚠️ Timeout aguardando página carregar")
             
-            if resultado_js['parar']:
-                print("🛑 Encontrado 2024 - PARANDO!")
-                break
+            # Extrair TODAS as aulas da página atual usando HTML
+            html_content = pagina.content()
+            aulas_pagina, deve_parar_ano = extrair_todas_aulas_da_pagina_html(html_content)
             
-            aulas_pagina = resultado_js['aulas']
+            if deve_parar_ano:
+                print("🛑 Encontrado ano 2024 - finalizando coleta!")
+                deve_parar = True
             
             if not aulas_pagina:
-                print("🏁 Sem mais aulas na página")
+                print("🏁 Não há mais aulas para processar.")
                 break
             
-            print(f"   📊 {len(aulas_pagina)} aulas encontradas")
+            print(f"   📊 Encontradas {len(aulas_pagina)} aulas nesta página")
             
-            # Processar aulas em lotes paralelos - AQUI ESTÁ A MÁGICA!
-            TAMANHO_LOTE = 20  # Processar 20 aulas simultâneas
-            tempo_processamento = time.time()
+            # PROCESSAR EM PARALELO COM THREADS
+            num_threads = 4  # Ajuste conforme necessário
+            tamanho_lote = max(1, len(aulas_pagina) // num_threads)
             
-            for i in range(0, len(aulas_pagina), TAMANHO_LOTE):
-                lote = aulas_pagina[i:i+TAMANHO_LOTE]
-                print(f"   🔄 Processando lote {i//TAMANHO_LOTE + 1} ({len(lote)} aulas)...")
+            # Dividir aulas em lotes
+            lotes = []
+            for i in range(0, len(aulas_pagina), tamanho_lote):
+                lotes.append(aulas_pagina[i:i + tamanho_lote])
+            
+            print(f"   🚀 Processando {len(lotes)} lotes em paralelo...")
+            
+            # Processar lotes em paralelo
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                # Criar sessão para cada thread
+                futures = []
+                for i, lote in enumerate(lotes):
+                    # Criar nova sessão com os mesmos cookies
+                    thread_session = requests.Session()
+                    thread_session.cookies.update(cookies_dict)
+                    
+                    future = executor.submit(processar_lote_aulas, thread_session, lote, i+1)
+                    futures.append(future)
                 
-                resultado_lote = coletor.processar_lote_paralelo(lote, max_workers=10)
-                resultado_final.extend(resultado_lote)
+                # Coletar resultados
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        resultados_lote = future.result()
+                        with resultado_lock:
+                            resultado.extend(resultados_lote)
+                    except Exception as e:
+                        print(f"⚠️ Erro em thread: {e}")
             
-            tempo_lote = time.time() - tempo_processamento
-            velocidade = len(aulas_pagina) / tempo_lote if tempo_lote > 0 else 0
-            print(f"   ⚡ Página processada em {tempo_lote:.1f}s ({velocidade:.1f} aulas/s)")
+            print(f"   ✅ Página {pagina_atual} processada! Total coletado: {len(resultado)} aulas")
             
-            # Navegar para próxima página
+            if deve_parar:
+                break
+            
+            # Tentar avançar para próxima página
             try:
+                time.sleep(2)
                 btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
+                
                 if btn_proximo:
                     parent = btn_proximo.query_selector("..")
-                    if parent and "disabled" not in (parent.get_attribute("class") or ""):
-                        print("   ➡️ Avançando...")
+                    parent_class = parent.get_attribute("class") if parent else ""
+                    
+                    if "disabled" not in parent_class:
+                        print("➡️ Avançando para próxima página...")
                         btn_proximo.click()
                         pagina_atual += 1
-                        time.sleep(1)  # Pausa mínima
-                        continue
-                
-                print("🏁 Última página alcançada")
-                break
-                
-            except Exception as e:
-                print(f"⚠️ Erro na navegação: {e}")
-                break
-        
-        # Finalização
-        tempo_total = time.time() - tempo_inicio
-        
-        print(f"\n" + "=" * 80)
-        print(f"🎉 COLETA FINALIZADA!")
-        print(f"📊 {len(resultado_final)} aulas processadas")
-        print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} minutos)")
-        print(f"🚀 Velocidade média: {len(resultado_final)/tempo_total:.1f} aulas/segundo")
-        print(f"📄 {pagina_atual} páginas processadas")
-        
-        # Enviar para Google Sheets
-        if resultado_final:
-            headers = [
-                "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
-                "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
-            ]
-            
-            body = {
-                "tipo": "historico_aulas",
-                "dados": resultado_final,
-                "headers": headers,
-                "resumo": {
-                    "total_aulas": len(resultado_final),
-                    "tempo_processamento": f"{tempo_total/60:.1f} minutos",
-                    "velocidade": f"{len(resultado_final)/tempo_total:.1f} aulas/s",
-                    "paginas_processadas": pagina_atual
-                }
-            }
-            
-            try:
-                print("\n📤 Enviando para Google Sheets...")
-                tempo_envio = time.time()
-                resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=180)
-                tempo_envio = time.time() - tempo_envio
-                print(f"✅ Enviado em {tempo_envio:.1f}s! Status: {resposta_post.status_code}")
-                
-                if resposta_post.text:
-                    print(f"📋 Resposta: {resposta_post.text[:200]}...")
+                        time.sleep(3)
+                    else:
+                        print("🏁 Última página alcançada.")
+                        break
+                else:
+                    print("🏁 Botão próximo não encontrado.")
+                    break
                     
             except Exception as e:
-                print(f"❌ Erro no envio: {e}")
-                # Salvar localmente como backup
-                with open(f'backup_aulas_{int(time.time())}.json', 'w') as f:
-                    json.dump(body, f, ensure_ascii=False, indent=2)
-                print("💾 Dados salvos localmente como backup")
+                print(f"⚠️ Erro ao navegar: {e}")
+                break
         
-        # Estatísticas finais
-        if resultado_final:
-            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado_final)
-            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado_final)
-            aulas_com_ata = sum(1 for linha in resultado_final if linha[9] == "OK")
+        print(f"\n📊 Coleta finalizada! Total de aulas processadas: {len(resultado)}")
+        
+        # Preparar dados para envio
+        headers = [
+            "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+            "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+        ]
+        
+        body = {
+            "tipo": "historico_aulas",
+            "dados": resultado,
+            "headers": headers,
+            "resumo": {
+                "total_aulas": len(resultado),
+                "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
+                "paginas_processadas": pagina_atual
+            }
+        }
+        
+        # Enviar dados para Apps Script
+        if resultado:
+            try:
+                print("📤 Enviando dados para Google Sheets...")
+                resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+                print("✅ Dados enviados!")
+                print("Status code:", resposta_post.status_code)
+                print("Resposta do Apps Script:", resposta_post.text)
+            except Exception as e:
+                print(f"❌ Erro ao enviar para Apps Script: {e}")
+        
+        # Resumo final
+        tempo_total = (time.time() - tempo_inicio) / 60
+        print("\n📈 RESUMO DA COLETA:")
+        print(f"   🎯 Total de aulas: {len(resultado)}")
+        print(f"   📄 Páginas processadas: {pagina_atual}")
+        print(f"   ⏱️ Tempo total: {tempo_total:.1f} minutos")
+        print(f"   ⚡ Velocidade: {len(resultado)/tempo_total:.1f} aulas/minuto")
+        
+        if resultado:
+            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado)
+            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado)
+            aulas_com_ata = sum(1 for linha in resultado if linha[9] == "OK")
             
-            print(f"\n📈 ESTATÍSTICAS:")
-            print(f"   👥 {total_presentes} presenças registradas")
-            print(f"   ❌ {total_ausentes} ausências registradas")
-            print(f"   📝 {aulas_com_ata}/{len(resultado_final)} aulas com ATA")
-            print(f"   ⚡ Melhoria de velocidade: ~10x mais rápido!")
+            print(f"   👥 Total de presenças: {total_presentes}")
+            print(f"   ❌ Total de ausências: {total_ausentes}")
+            print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado)}")
         
         navegador.close()
 
