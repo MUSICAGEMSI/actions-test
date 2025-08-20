@@ -19,8 +19,8 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
 # Configurações de paralelização
-MAX_PROCESSOS_SIMULTANEOS = 4  # Número máximo de processos ao mesmo tempo
-TIMEOUT_POR_PAGINA = 300  # Timeout máximo por página (5 minutos)
+MAX_PROCESSOS_SIMULTANEOS = 30  # Número máximo de processos ao mesmo tempo
+TIMEOUT_POR_PAGINA = 900  # Timeout máximo por página (15 minutos)
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
@@ -262,10 +262,10 @@ def descobrir_total_paginas(pagina):
     try:
         print("🔍 Descobrindo total de páginas...")
         
-        # Configurar para mostrar 2000 registros primeiro
+        # Configurar para mostrar 100 registros primeiro
         try:
             pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-            pagina.select_option('select[name="listagem_length"]', "2000")
+            pagina.select_option('select[name="listagem_length"]', "100")
             time.sleep(3)
             pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
         except Exception as e:
@@ -283,7 +283,7 @@ def descobrir_total_paginas(pagina):
                 match = re.search(r'de\s+(\d+)\s+entradas', texto_info)
                 if match:
                     total_registros = int(match.group(1))
-                    registros_por_pagina = 2000  # Configuramos para 2000
+                    registros_por_pagina = 100  # Configuramos para 100
                     total_paginas = (total_registros + registros_por_pagina - 1) // registros_por_pagina
                     print(f"✅ Total de páginas calculado: {total_paginas}")
                     return total_paginas
@@ -355,10 +355,10 @@ def processar_pagina_especifica(numero_pagina, resultado_queue, erro_queue):
             if not navegar_para_historico_aulas(pagina):
                 raise Exception(f"Falha na navegação para histórico no processo {numero_pagina}")
             
-            # Configurar para 2000 registros
+            # Configurar para 100 registros
             try:
                 pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
-                pagina.select_option('select[name="listagem_length"]', "2000")
+                pagina.select_option('select[name="listagem_length"]', "100")
                 time.sleep(3)
                 pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
             except Exception as e:
