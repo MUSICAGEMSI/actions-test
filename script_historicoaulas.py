@@ -252,35 +252,141 @@ class ColetorSuperRapido:
         return resultado_lote
 
 def navegar_para_historico_rapido(pagina):
-    """Navegação ultra-otimizada"""
+    """Navegação ultra-otimizada com múltiplas estratégias"""
     try:
-        print("🚀 Navegação direta para histórico...")
+        print("🚀 Tentando navegação direta...")
         
-        # Tentar URL direta primeiro (mais rápido)
-        pagina.goto("https://musical.congregacao.org.br/aulas_abertas", wait_until="domcontentloaded")
-        
-        # Aguardar indicadores de carregamento
+        # ESTRATÉGIA 1: URL direta (mais rápida)
         try:
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-            print("✅ Histórico carregado diretamente!")
+            pagina.goto("https://musical.congregacao.org.br/aulas_abertas", wait_until="domcontentloaded")
+            time.sleep(2)  # Aguardar um pouco mais
+            
+            # Verificar se chegou na página certa
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+            print("✅ Navegação direta bem-sucedida!")
             return True
-        except:
-            # Fallback via menus se necessário
-            pagina.wait_for_selector("nav", timeout=10000)
             
-            menu_gem = pagina.wait_for_selector('a:has-text("G.E.M")', timeout=8000)
-            menu_gem.click()
-            time.sleep(1)
+        except Exception as e1:
+            print(f"⚠️ Navegação direta falhou: {e1}")
+        
+        print("🔄 Tentando via menus...")
+        
+        # ESTRATÉGIA 2: Via menus (fallback)
+        try:
+            # Voltar para página inicial se necessário
+            pagina.goto("https://musical.congregacao.org.br/painel", wait_until="domcontentloaded")
+            time.sleep(2)
             
-            historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', timeout=8000)
-            historico_link.click()
+            # Aguardar menu aparecer com timeout maior
+            pagina.wait_for_selector("nav, .navbar, [role='navigation']", timeout=15000)
             
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
-            print("✅ Navegação por menus OK!")
+            # Tentar encontrar G.E.M de múltiplas formas
+            seletores_gem = [
+                'a:has-text("G.E.M")',
+                'a[href*="gem"]',
+                'a:has(.fa-graduation-cap)',
+                'li:has-text("G.E.M") a',
+                '.menu-item:has-text("G.E.M")'
+            ]
+            
+            menu_gem_encontrado = False
+            for seletor in seletores_gem:
+                try:
+                    elemento = pagina.query_selector(seletor)
+                    if elemento and elemento.is_visible():
+                        print(f"✅ G.E.M encontrado: {seletor}")
+                        elemento.click()
+                        menu_gem_encontrado = True
+                        break
+                except:
+                    continue
+            
+            if not menu_gem_encontrado:
+                print("❌ Menu G.E.M não encontrado")
+                return False
+            
+            time.sleep(3)  # Aguardar submenu expandir
+            
+            # Tentar encontrar "Histórico de Aulas"
+            seletores_historico = [
+                'a:has-text("Histórico de Aulas")',
+                'a[href*="aulas_abertas"]',
+                'li:has-text("Histórico") a',
+                '.submenu-item:has-text("Histórico")'
+            ]
+            
+            historico_encontrado = False
+            for seletor in seletores_historico:
+                try:
+                    elemento = pagina.query_selector(seletor)
+                    if elemento:
+                        print(f"✅ Histórico encontrado: {seletor}")
+                        elemento.click()
+                        historico_encontrado = True
+                        break
+                except:
+                    continue
+            
+            if not historico_encontrado:
+                # Tentar força bruta via JavaScript
+                print("🔧 Tentando clique forçado...")
+                resultado_js = pagina.evaluate("""
+                () => {
+                    const links = Array.from(document.querySelectorAll('a'));
+                    const historico = links.find(link => 
+                        link.textContent.includes('Histórico') || 
+                        link.href.includes('aulas_abertas')
+                    );
+                    if (historico) {
+                        historico.click();
+                        return true;
+                    }
+                    return false;
+                }
+                """)
+                
+                if not resultado_js:
+                    print("❌ Histórico não encontrado de forma alguma")
+                    return False
+            
+            # Aguardar página do histórico carregar
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
+            print("✅ Navegação por menus bem-sucedida!")
             return True
+            
+        except Exception as e2:
+            print(f"⚠️ Navegação por menus falhou: {e2}")
+        
+        # ESTRATÉGIA 3: Força bruta total
+        print("🔨 Última tentativa - força bruta...")
+        try:
+            urls_possíveis = [
+                "https://musical.congregacao.org.br/aulas_abertas/listagem",
+                "https://musical.congregacao.org.br/aulas_abertas/index",
+                "https://musical.congregacao.org.br/gem/aulas_abertas"
+            ]
+            
+            for url in urls_possíveis:
+                try:
+                    print(f"   Tentando: {url}")
+                    pagina.goto(url, wait_until="domcontentloaded")
+                    time.sleep(2)
+                    
+                    # Verificar se chegou
+                    pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=8000)
+                    print("✅ Força bruta bem-sucedida!")
+                    return True
+                except:
+                    continue
+            
+            return False
+            
+        except Exception as e3:
+            print(f"❌ Todas as estratégias falharam: {e3}")
+            return False
         
     except Exception as e:
-        print(f"❌ Erro na navegação: {e}")
+        print(f"❌ Erro geral na navegação: {e}")
         return False
 
 def main():
@@ -288,46 +394,127 @@ def main():
     coletor = ColetorSuperRapido()
     
     with sync_playwright() as p:
-        # Configurar navegador otimizado
+        # Configurar navegador com mais estabilidade
         navegador = p.chromium.launch(
             headless=True,
-            args=['--disable-images', '--disable-javascript', '--disable-plugins']
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
+            ]
         )
         
-        pagina = navegador.new_page()
+        # Criar contexto com configurações otimizadas
+        context = navegador.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
         
-        # Bloquear recursos desnecessários para máxima velocidade
-        pagina.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2}", lambda route: route.abort())
+        pagina = context.new_page()
         
-        print("🔐 Login rápido...")
-        pagina.goto(URL_INICIAL, wait_until="domcontentloaded")
+        # Bloquear recursos apenas se não for crítico para navegação
+        pagina.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2}", lambda route: route.abort())
+        
+        print("🔐 Fazendo login...")
+        try:
+            pagina.goto(URL_INICIAL, wait_until="networkidle", timeout=30000)
+        except:
+            pagina.goto(URL_INICIAL, wait_until="domcontentloaded")
         
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
         
+        # Aguardar redirect pós-login com mais tempo
         try:
-            pagina.wait_for_selector("nav", timeout=12000)
-            print("✅ Login OK!")
-        except PlaywrightTimeoutError:
-            print("❌ Falha no login.")
-            navegador.close()
-            return
+            pagina.wait_for_url("**/painel", timeout=20000)
+            print("✅ Login realizado - redirecionado para painel!")
+        except:
+            try:
+                # Aguardar qualquer elemento que indique login bem-sucedido
+                pagina.wait_for_selector("nav, .navbar, .menu, .header-menu", timeout=15000)
+                print("✅ Login realizado - menu detectado!")
+            except PlaywrightTimeoutError:
+                print("❌ Falha no login - timeout aguardando elementos.")
+                navegador.close()
+                return
         
         if not navegar_para_historico_rapido(pagina):
             navegador.close()
             return
         
-        # Configurar 2000 registros
-        print("⚙️ Configurando 2000 registros...")
+        # Configurar 2000 registros com debug melhorado
+        print("⚙️ Configurando para 2000 registros...")
         try:
-            pagina.wait_for_selector('select[name="listagem_length"]', timeout=8000)
-            pagina.select_option('select[name="listagem_length"]', "2000")
-            time.sleep(2)
-            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=12000)
-            print("✅ 2000 registros configurados!")
+            # Primeiro verificar se o seletor existe
+            selector_found = pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+            if selector_found:
+                print("✅ Seletor de quantidade encontrado")
+                
+                # Verificar opções disponíveis
+                opcoes = pagina.evaluate("""
+                () => {
+                    const select = document.querySelector('select[name="listagem_length"]');
+                    if (select) {
+                        return Array.from(select.options).map(opt => opt.value);
+                    }
+                    return [];
+                }
+                """)
+                print(f"   Opções disponíveis: {opcoes}")
+                
+                # Selecionar 2000 ou a maior opção disponível
+                if "2000" in opcoes:
+                    pagina.select_option('select[name="listagem_length"]', "2000")
+                    print("✅ 2000 registros selecionados")
+                elif opcoes:
+                    maior_opcao = max(opcoes, key=lambda x: int(x) if x.isdigit() else 0)
+                    pagina.select_option('select[name="listagem_length"]', maior_opcao)
+                    print(f"✅ {maior_opcao} registros selecionados (máximo disponível)")
+                
+                # Aguardar recarregamento
+                time.sleep(3)
+                
+                # Verificar se recarregou
+                try:
+                    pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
+                    
+                    # Contar quantos registros estão sendo mostrados
+                    total_info = pagina.query_selector('.dataTables_info')
+                    if total_info:
+                        info_text = total_info.inner_text()
+                        print(f"✅ Configuração aplicada: {info_text}")
+                    else:
+                        print("✅ Tabela recarregada com nova configuração")
+                        
+                except Exception as e:
+                    print(f"⚠️ Timeout aguardando recarregamento: {e}")
+                    print("   Continuando com a configuração atual...")
+            else:
+                print("⚠️ Seletor de quantidade não encontrado")
+                
         except Exception as e:
-            print(f"⚠️ Usando configuração padrão: {e}")
+            print(f"⚠️ Erro na configuração de registros: {e}")
+            print("   Continuando com configuração padrão...")
+            
+            # Tentar verificar se pelo menos temos uma tabela funcional
+            try:
+                tabela_ok = pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=5000)
+                if tabela_ok:
+                    print("✅ Tabela básica encontrada - continuando...")
+                else:
+                    print("❌ Nenhuma tabela funcional encontrada")
+                    navegador.close()
+                    return
+            except:
+                print("❌ Falha crítica - sem tabela de dados")
+                navegador.close()
+                return
         
         # Criar sessão requests com cookies
         cookies_dict = coletor.extrair_cookies_playwright(pagina)
