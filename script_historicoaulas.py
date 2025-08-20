@@ -39,17 +39,22 @@ def data_esta_no_periodo(data_str):
         
         if not data_obj:
             print(f"⚠️ Formato de data não reconhecido: {data_str}")
-            return False
+            return False, False  # (no_periodo, data_anterior)
         
         # Definir limites do período
         inicio = datetime.strptime("04/07/2025", "%d/%m/%Y")
         fim = datetime.strptime("31/12/2025", "%d/%m/%Y")
         
-        return inicio <= data_obj <= fim
+        if inicio <= data_obj <= fim:
+            return True, False  # Está no período
+        elif data_obj < inicio:
+            return False, True  # Data anterior ao período - PARAR!
+        else:
+            return False, False  # Data posterior ao período
         
     except Exception as e:
         print(f"⚠️ Erro ao verificar data {data_str}: {e}")
-        return False
+        return False, False
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright para usar em requests"""
@@ -211,8 +216,16 @@ def extrair_dados_de_linha_por_indice(pagina, indice_linha):
                 return None, False, False
             
             # NOVA LÓGICA: Verificar se está no período do segundo semestre 2025
-            if not data_esta_no_periodo(data_aula):
-                # Se não está no período, pular esta aula
+            no_periodo, data_anterior = data_esta_no_periodo(data_aula)
+            
+            if data_anterior:
+                # Data anterior ao período - PARAR TUDO!
+                print(f"🛑 FINALIZANDO: Encontrada data anterior ao período ({data_aula})")
+                print("   Todas as próximas aulas serão anteriores. Parando coleta!")
+                return None, True, False  # Sinal para parar tudo
+            
+            if not no_periodo:
+                # Se não está no período (mas não é anterior), pular esta aula
                 return None, False, False
             
             # Extrair IDs do botão de frequência
@@ -443,8 +456,9 @@ def main():
         resultado = []
         pagina_atual = 1
         aulas_ignoradas = 0
+        deve_parar_coleta = False
         
-        while True:
+        while not deve_parar_coleta:
             print(f"📖 Processando página {pagina_atual}...")
             
             # Aguardar linhas carregarem
@@ -465,11 +479,16 @@ def main():
             print(f"   📊 Encontradas {total_linhas} aulas nesta página")
             
             aulas_processadas_pagina = 0
+            aulas_encontradas_periodo = 0  # Contador de aulas no período
             
             # Processar cada linha POR ÍNDICE (evita referências antigas)
             for i in range(total_linhas):
                 # Extrair dados da linha atual pelo índice
-                dados_aula, deve_parar_ano, aula_valida = extrair_dados_de_linha_por_indice(pagina, i)
+                dados_aula, deve_parar_coleta, aula_valida = extrair_dados_de_linha_por_indice(pagina, i)
+                
+                # Se encontrou data anterior ao período, PARAR TUDO!
+                if deve_parar_coleta:
+                    break
                 
                 if not aula_valida:
                     # Aula fora do período - ignorar silenciosamente
@@ -480,6 +499,7 @@ def main():
                     continue
                 
                 aulas_processadas_pagina += 1
+                aulas_encontradas_periodo += 1
                 print(f"      🎯 Aula {aulas_processadas_pagina}: {dados_aula['data']} - {dados_aula['curso']}")
                 
                 # Clicar no botão de frequência para abrir modal
@@ -592,6 +612,17 @@ def main():
                 time.sleep(0.1)
             
             print(f"   ✅ {aulas_processadas_pagina} aulas válidas processadas nesta página")
+            
+            # Se deve parar a coleta, sair do loop principal
+            if deve_parar_coleta:
+                break
+            
+            # 🛑 LÓGICA ANTIGA: Se não encontrou NENHUMA aula no período nesta página, PARAR!
+            # (Mantida como backup, mas agora para na primeira data anterior)
+            if aulas_encontradas_periodo == 0:
+                print("🛑 FINALIZANDO: Nenhuma aula do período encontrada nesta página!")
+                print("   Todas as aulas restantes são anteriores ao período desejado.")
+                break
             
             # Tentar avançar para próxima página
             try:
