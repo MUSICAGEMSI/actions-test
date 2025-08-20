@@ -81,63 +81,59 @@ def extrair_detalhes_aula(session, aula_id):
         return "ERRO"
 
 def processar_frequencia_modal(pagina, aula_id, professor_id):
-    """Processa a frequência após abrir o modal - VERSÃO OTIMIZADA"""
+    """Processa a frequência após abrir o modal"""
     try:
-        # Aguardar modal aparecer rapidamente
-        pagina.wait_for_selector("#modalFrequencia table", timeout=3000)
+        # Aguardar o modal carregar completamente
+        pagina.wait_for_selector("table.table-bordered tbody tr", timeout=5000)
         
-        # Extrair TODOS os dados de uma vez usando JavaScript (muito mais rápido)
-        dados_freq = pagina.evaluate("""
-            () => {
-                const presentes_ids = [];
-                const presentes_nomes = [];
-                const ausentes_ids = [];
-                const ausentes_nomes = [];
+        presentes_ids = []
+        presentes_nomes = []
+        ausentes_ids = []
+        ausentes_nomes = []
+        
+        # Extrair todas as linhas da tabela de frequência
+        linhas = pagina.query_selector_all("table.table-bordered tbody tr")
+        
+        for linha in linhas:
+            # Extrair nome do aluno
+            nome_cell = linha.query_selector("td:first-child")
+            nome_completo = nome_cell.inner_text().strip() if nome_cell else ""
+            
+            # IGNORAR linhas sem nome (vazias)
+            if not nome_completo:
+                continue
+            
+            # Extrair status de presença
+            link_presenca = linha.query_selector("td:last-child a")
+            
+            if link_presenca:
+                # Extrair ID do membro do data-id-membro
+                id_membro = link_presenca.get_attribute("data-id-membro")
                 
-                // Buscar todas as linhas da tabela de frequência
-                const linhas = document.querySelectorAll('#modalFrequencia table.table-bordered tbody tr');
+                # IGNORAR se não tem ID válido
+                if not id_membro:
+                    continue
                 
-                linhas.forEach(linha => {
-                    const nomeCell = linha.querySelector('td:first-child');
-                    const nome = nomeCell ? nomeCell.textContent.trim() : '';
+                # Verificar se está presente ou ausente pelo ícone
+                icone = link_presenca.query_selector("i")
+                if icone:
+                    classes = icone.get_attribute("class")
                     
-                    if (!nome) return; // Pular linhas vazias
-                    
-                    const linkPresenca = linha.querySelector('td:last-child a');
-                    if (linkPresenca) {
-                        const idMembro = linkPresenca.getAttribute('data-id-membro');
-                        if (!idMembro) return;
-                        
-                        const icone = linkPresenca.querySelector('i');
-                        if (icone) {
-                            const classes = icone.getAttribute('class') || '';
-                            
-                            if (classes.includes('fa-check text-success')) {
-                                presentes_ids.push(idMembro);
-                                presentes_nomes.push(nome);
-                            } else if (classes.includes('fa-remove text-danger')) {
-                                ausentes_ids.push(idMembro);
-                                ausentes_nomes.push(nome);
-                            }
-                        }
-                    }
-                });
-                
-                return {
-                    presentes_ids,
-                    presentes_nomes,
-                    ausentes_ids,
-                    ausentes_nomes
-                };
-            }
-        """)
+                    if "fa-check text-success" in classes:
+                        # Presente
+                        presentes_ids.append(id_membro)
+                        presentes_nomes.append(nome_completo)
+                    elif "fa-remove text-danger" in classes:
+                        # Ausente
+                        ausentes_ids.append(id_membro)
+                        ausentes_nomes.append(nome_completo)
         
         return {
-            'presentes_ids': dados_freq['presentes_ids'],
-            'presentes_nomes': dados_freq['presentes_nomes'],
-            'ausentes_ids': dados_freq['ausentes_ids'],
-            'ausentes_nomes': dados_freq['ausentes_nomes'],
-            'tem_presenca': "OK" if dados_freq['presentes_ids'] else "FANTASMA"
+            'presentes_ids': presentes_ids,
+            'presentes_nomes': presentes_nomes,
+            'ausentes_ids': ausentes_ids,
+            'ausentes_nomes': ausentes_nomes,
+            'tem_presenca': "OK" if presentes_ids else "FANTASMA"
         }
         
     except Exception as e:
@@ -307,9 +303,9 @@ def navegar_para_historico_aulas(pagina):
             print("❌ Não foi possível encontrar o menu G.E.M")
             return False
         
-        # Aguardar mais tempo para o submenu aparecer e tentar múltiplas estratégias
+        # Aguardar submenu aparecer
         print("⏳ Aguardando submenu expandir...")
-        time.sleep(3)
+        time.sleep(1)
         
         print("🔍 Procurando por Histórico de Aulas...")
         
@@ -424,7 +420,7 @@ def main():
             print("✅ Configurado para 2000 registros")
             
             # Aguardar a página recarregar com 2000 registros
-            time.sleep(3)
+            time.sleep(1)
             
         except Exception as e:
             print(f"⚠️ Erro ao configurar registros: {e}")
@@ -451,10 +447,11 @@ def main():
         while True:
             print(f"📖 Processando página {pagina_atual}...")
             
-            # Aguardar linhas carregarem - VERSÃO OTIMIZADA
+            # Aguardar linhas carregarem
             try:
-                # Aguarda mais rápido - apenas verifica se há linhas
-                pagina.wait_for_selector("table tbody tr", timeout=5000)
+                # Aguardar checkboxes que indicam linhas carregadas
+                pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=5000)
+                time.sleep(0.5)  # Aguardar estabilização
             except:
                 print("⚠️ Timeout aguardando linhas - tentando continuar...")
             
@@ -487,25 +484,81 @@ def main():
                 
                 # Clicar no botão de frequência para abrir modal
                 try:
-                    # OTIMIZAÇÃO: Verificação rápida de modal aberto
-                    modal_aberto = pagina.evaluate("document.querySelector('#modalFrequencia').style.display === 'block'")
-                    if modal_aberto:
-                        pagina.evaluate("$('#modalFrequencia').modal('hide')")
-                        # Aguardar fechar rapidamente
-                        pagina.wait_for_function("document.querySelector('#modalFrequencia').style.display !== 'block'", timeout=2000)
+                    # Aguardar que não haja modal aberto antes de clicar
+                    try:
+                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=1000)
+                    except:
+                        # Se ainda há modal, forçar fechamento
+                        print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
+                        try:
+                            # Tentar múltiplas formas de fechar modal
+                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
+                            if btn_fechar:
+                                btn_fechar.click()
+                            else:
+                                # Forçar fechamento via JavaScript
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                            
+                            # Aguardar fechar
+                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=2000)
+                        except:
+                            # Último recurso: recarregar página
+                            print("⚠️ Forçando escape...")
+                            pagina.keyboard.press("Escape")
+                            time.sleep(0.2)
                     
-                    # Clicar no botão PELO ÍNDICE (mais rápido)
+                    # Agora clicar no botão de frequência PELO ÍNDICE
+                    print(f"         🖱️ Clicando em frequência...")
                     if clicar_botao_frequencia_por_indice(pagina, i):
-                        # OTIMIZAÇÃO: Aguardar modal mínimo necessário
-                        pagina.wait_for_selector("#modalFrequencia table", timeout=3000)
+                        # Aguardar modal carregar
+                        time.sleep(0.3)
                         
-                        # Processar dados de frequência (otimizado com JavaScript)
+                        # Processar dados de frequência
                         freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
                         
-                        # OTIMIZAÇÃO: Fechamento super rápido
-                        pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                        # Fechar modal de forma mais robusta
+                        print(f"         🚪 Fechando modal...")
+                        try:
+                            # Tentar diferentes formas de fechar
+                            fechou = False
+                            
+                            # 1. Botão Fechar específico
+                            btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
+                            if btn_fechar:
+                                btn_fechar.click()
+                                fechou = True
+                            
+                            # 2. Qualquer botão de fechar modal
+                            if not fechou:
+                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
+                                if btn_fechar:
+                                    btn_fechar.click()
+                                    fechou = True
+                            
+                            # 3. Via JavaScript
+                            if not fechou:
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                                fechou = True
+                            
+                            # 4. ESC como último recurso
+                            if not fechou:
+                                pagina.keyboard.press("Escape")
+                            
+                            # Aguardar modal fechar completamente
+                            try:
+                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=2000)
+                                print(f"         ✅ Modal fechado com sucesso")
+                            except:
+                                print(f"         ⚠️ Modal pode não ter fechado completamente")
+                                
+                        except Exception as close_error:
+                            print(f"         ⚠️ Erro ao fechar modal: {close_error}")
+                            pagina.keyboard.press("Escape")
                         
-                        # Obter detalhes da ATA via requests (paralelo, não bloqueia)
+                        # Pausa adicional para estabilizar
+                        time.sleep(0.2)
+                        
+                        # Obter detalhes da ATA via requests
                         ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
                         
                         # Montar linha de resultado
@@ -526,44 +579,56 @@ def main():
                         
                         # Mostrar resumo da aula
                         total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
-                        print(f"         ✓ {len(freq_data['presentes_ids'])}P/{len(freq_data['ausentes_ids'])}A ({total_alunos}) - ATA:{ata_status}")
+                        print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
                     
                     else:
-                        print(f"         ❌ Falha no clique")
+                        print(f"         ❌ Falha ao clicar no botão de frequência")
                         
                 except Exception as e:
-                    print(f"⚠️ Erro: {e}")
+                    print(f"⚠️ Erro ao processar aula: {e}")
                     continue
+                
+                # Pequena pausa entre aulas
+                time.sleep(0.1)
             
             print(f"   ✅ {aulas_processadas_pagina} aulas válidas processadas nesta página")
             
-            # Tentar avançar para próxima página - VERSÃO OTIMIZADA
+            # Tentar avançar para próxima página
             try:
-                # Buscar botão próximo imediatamente
+                # Aguardar um pouco para garantir que a página atual está estável
+                time.sleep(0.5)
+                
+                # Buscar botão próximo
                 btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
                 
                 if btn_proximo:
-                    # Verificação rápida se não está desabilitado
+                    # Verificar se o botão não está desabilitado
                     parent = btn_proximo.query_selector("..")
                     parent_class = parent.get_attribute("class") if parent else ""
                     
                     if "disabled" not in parent_class:
-                        print("➡️ Próxima página...")
+                        print("➡️ Avançando para próxima página...")
                         btn_proximo.click()
                         pagina_atual += 1
                         
-                        # Aguardar nova página rapidamente
-                        pagina.wait_for_selector("table tbody tr", timeout=8000)
+                        # Aguardar nova página carregar
+                        time.sleep(1)
+                        
+                        # Aguardar checkboxes da nova página
+                        try:
+                            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                        except:
+                            print("⚠️ Timeout aguardando nova página")
                         
                     else:
-                        print("🏁 Sem mais páginas.")
+                        print("🏁 Botão próximo desabilitado - não há mais páginas.")
                         break
                 else:
-                    print("🏁 Botão próximo não encontrado.")
+                    print("🏁 Botão próximo não encontrado - não há mais páginas.")
                     break
                     
             except Exception as e:
-                print(f"⚠️ Erro navegação: {e}")
+                print(f"⚠️ Erro ao navegar para próxima página: {e}")
                 break
         
         print(f"\n📊 Coleta finalizada!")
