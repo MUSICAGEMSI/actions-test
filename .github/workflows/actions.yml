@@ -1,34 +1,71 @@
-name: Executar Scripts Diariamente
-
+name: Executar Coleta Histórico Aulas
 on:
   schedule:
-    - cron: '0 12 12 * 0'  # Todos meses dia 12 às 12:00 UTC (09h Brasília)
-  workflow_dispatch:     # Permite disparo manual
+    - cron: '0 12 12 * *'  # Todo dia 12 de cada mês às 12:00 UTC (09h Brasília)
+  workflow_dispatch:        # Permite disparo manual para testes
   
 jobs:
-  run-scripts:
+  coleta-historico:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 90     # Timeout de segurança (1.5h)
+    
     env:
       LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
       SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
-
+      PYTHONUNBUFFERED: 1   # Para logs em tempo real
+      
     steps:
-      - name: Clonar o repositório
-        uses: actions/checkout@v3
-
-      - name: Configurar Python
+      - name: 📂 Clonar repositório
+        uses: actions/checkout@v4
+        
+      - name: 🐍 Configurar Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
-      - name: Instalar dependências
+          cache: 'pip'  # Cache das dependências
+          
+      - name: 📦 Instalar dependências Python
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt || echo "Nenhuma dependência"
-
-      - name: Instalar navegadores do Playwright
-        run: python -m playwright install
-
-      - name: Executar script_historicoaulas.py
-        run: python script_historicoaulas.py
+          pip install playwright requests python-dotenv beautifulsoup4
+          
+      - name: 🌐 Instalar navegadores Playwright
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium  # Dependências do sistema
+          
+      - name: 🔍 Verificar arquivos necessários
+        run: |
+          echo "📁 Arquivos no diretório:"
+          ls -la
+          echo ""
+          echo "🔑 Verificando variáveis de ambiente:"
+          echo "LOGIN_MUSICAL definido: ${{ env.LOGIN_MUSICAL != '' }}"
+          echo "SENHA_MUSICAL definido: ${{ env.SENHA_MUSICAL != '' }}"
+          
+      - name: 🚀 Executar script_historicoaulas.py
+        run: |
+          echo "🎯 Iniciando coleta do histórico de aulas..."
+          echo "⏰ Horário de início: $(date)"
+          python script_historicoaulas.py
+        timeout-minutes: 80  # Timeout específico do script
+        
+      - name: 📊 Upload de logs em caso de erro
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: logs-erro-coleta
+          path: |
+            backup_dados.json
+            *.log
+          retention-days: 7
+          
+      - name: 📈 Relatório de conclusão
+        if: always()
+        run: |
+          echo "⏰ Horário de término: $(date)"
+          echo "📊 Status do job: ${{ job.status }}"
+          if [ -f "backup_dados.json" ]; then
+            echo "💾 Backup encontrado - dados foram salvos localmente"
+            echo "📏 Tamanho do backup: $(du -h backup_dados.json)"
+          fi
