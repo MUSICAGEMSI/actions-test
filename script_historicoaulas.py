@@ -27,12 +27,15 @@ def data_esta_no_periodo(data_str):
     """Verifica se a data está no período do segundo semestre de 2025"""
     try:
         # Tentar diferentes formatos de data que podem aparecer
-        formatos_data = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"]
+        formatos_data = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"]
         data_obj = None
         
         for formato in formatos_data:
             try:
                 data_obj = datetime.strptime(data_str.strip(), formato)
+                # Se for formato de 2 dígitos do ano, assumir 20XX
+                if data_obj.year < 100:
+                    data_obj = data_obj.replace(year=data_obj.year + 2000)
                 break
             except ValueError:
                 continue
@@ -163,89 +166,109 @@ def extrair_dados_de_linha_por_indice(pagina, indice_linha):
         linha = linhas[indice_linha]
         colunas = linha.query_selector_all("td")
         
-        if len(colunas) >= 6:
-            # CORREÇÃO: Vamos identificar qual coluna tem a data
-            # Vamos testar cada coluna para ver qual contém uma data válida
-            data_aula = None
-            congregacao = None
-            curso = None
-            turma = None
-            
-            # Tentar identificar as colunas dinamicamente
-            for i, coluna in enumerate(colunas):
-                texto = coluna.inner_text().strip()
+        if len(colunas) < 6:
+            return None, False, False
+        
+        # DEBUG: Mostrar conteúdo das primeiras colunas para identificar padrão
+        print(f"      🔍 DEBUG - Linha {indice_linha}, primeiras 6 colunas:")
+        for i, coluna in enumerate(colunas[:6]):
+            texto = coluna.inner_text().strip()
+            print(f"         Coluna {i}: '{texto}'")
+        
+        # NOVA LÓGICA: Identificar a estrutura da tabela
+        # Padrão esperado: [Congregação, Curso, Turma, Data, ...outros...]
+        # Mas pode haver botões como primeira coluna
+        
+        congregacao = None
+        curso = None
+        turma = None
+        data_aula = None
+        
+        # Procurar a data primeiro para estabelecer a estrutura
+        data_col_index = -1
+        for i, coluna in enumerate(colunas):
+            texto = coluna.inner_text().strip()
+            # Verificar se é uma data válida
+            if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', texto) and not re.search(r'[a-zA-Z]', texto):
+                data_aula = texto
+                data_col_index = i
+                print(f"      🔍 Data encontrada na coluna {i}: {data_aula}")
+                break
+        
+        if data_col_index == -1:
+            print(f"      ⚠️ Nenhuma data válida encontrada na linha {indice_linha}")
+            return None, False, False
+        
+        # Com base na posição da data, inferir as outras colunas
+        # Assumindo que a ordem é: [possíveis botões], Congregação, Curso, Turma, Data
+        if data_col_index >= 3:
+            # Data está na posição 3 ou posterior - estrutura esperada
+            congregacao = colunas[data_col_index-3].inner_text().strip() if data_col_index >= 3 else "N/A"
+            curso = colunas[data_col_index-2].inner_text().strip() if data_col_index >= 2 else "N/A"
+            turma = colunas[data_col_index-1].inner_text().strip() if data_col_index >= 1 else "N/A"
+        elif data_col_index == 2:
+            # Data na posição 2
+            congregacao = colunas[0].inner_text().strip() if len(colunas) > 0 else "N/A"
+            curso = colunas[1].inner_text().strip() if len(colunas) > 1 else "N/A"
+            turma = "N/A"  # Não há espaço para turma
+        elif data_col_index == 1:
+            # Data na posição 1
+            congregacao = colunas[0].inner_text().strip() if len(colunas) > 0 else "N/A"
+            curso = "N/A"
+            turma = "N/A"
+        else:
+            # Data na posição 0 - estrutura inesperada
+            congregacao = "N/A"
+            curso = "N/A" 
+            turma = "N/A"
+        
+        # Filtrar dados que parecem ser botões ou ações
+        def limpar_campo(texto):
+            # Remove textos que são claramente botões ou ações
+            botoes_conhecidos = ["frequência", "detalhes", "reabrir", "visualizar", "editar", "excluir"]
+            texto_lower = texto.lower()
+            for botao in botoes_conhecidos:
+                if botao in texto_lower:
+                    return "N/A"
+            return texto if texto else "N/A"
+        
+        congregacao = limpar_campo(congregacao)
+        curso = limpar_campo(curso)
+        turma = limpar_campo(turma)
+        
+        print(f"      📋 Dados extraídos: {congregacao} | {curso} | {turma} | {data_aula}")
+        
+        # Verificar se está no período do segundo semestre 2025
+        no_periodo, data_anterior = data_esta_no_periodo(data_aula)
+        
+        if data_anterior:
+            # Data anterior ao período - PARAR TUDO!
+            print(f"🛑 FINALIZANDO: Encontrada data anterior ao período ({data_aula})")
+            print("   Todas as próximas aulas serão anteriores. Parando coleta!")
+            return None, True, False  # Sinal para parar tudo
+        
+        if not no_periodo:
+            # Se não está no período (mas não é anterior), pular esta aula
+            return None, False, False
+        
+        # Extrair IDs do botão de frequência
+        btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
+        if btn_freq:
+            onclick = btn_freq.get_attribute("onclick")
+            # Extrair os dois IDs: visualizarFrequencias(aula_id, professor_id)
+            match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
+            if match:
+                aula_id = match.group(1)
+                professor_id = match.group(2)
                 
-                # Verificar se parece uma data (contém / ou - e números)
-                if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{4}', texto):
-                    data_aula = texto
-                    print(f"      🔍 Data encontrada na coluna {i}: {data_aula}")
-                    
-                    # Com base na posição da data, definir as outras colunas
-                    try:
-                        if i == 0:  # Data na primeira coluna
-                            congregacao = colunas[1].inner_text().strip() if len(colunas) > 1 else ""
-                            curso = colunas[2].inner_text().strip() if len(colunas) > 2 else ""
-                            turma = colunas[3].inner_text().strip() if len(colunas) > 3 else ""
-                        elif i == 1:  # Data na segunda coluna (original)
-                            congregacao = colunas[2].inner_text().strip() if len(colunas) > 2 else ""
-                            curso = colunas[3].inner_text().strip() if len(colunas) > 3 else ""
-                            turma = colunas[4].inner_text().strip() if len(colunas) > 4 else ""
-                        elif i == 2:  # Data na terceira coluna
-                            congregacao = colunas[1].inner_text().strip() if len(colunas) > 1 else ""
-                            curso = colunas[3].inner_text().strip() if len(colunas) > 3 else ""
-                            turma = colunas[4].inner_text().strip() if len(colunas) > 4 else ""
-                        else:
-                            # Para outras posições, tentar usar as colunas seguintes
-                            congregacao = colunas[i+1].inner_text().strip() if len(colunas) > i+1 else ""
-                            curso = colunas[i+2].inner_text().strip() if len(colunas) > i+2 else ""
-                            turma = colunas[i+3].inner_text().strip() if len(colunas) > i+3 else ""
-                    except Exception as col_error:
-                        print(f"      ⚠️ Erro ao extrair colunas: {col_error}")
-                        congregacao = "N/A"
-                        curso = "N/A"
-                        turma = "N/A"
-                    
-                    break
-            
-            # Se não encontrou data válida, mostrar conteúdo das colunas para debug
-            if not data_aula:
-                print(f"      🔍 DEBUG - Conteúdo das colunas da linha {indice_linha}:")
-                for i, coluna in enumerate(colunas[:6]):  # Mostrar apenas as primeiras 6 colunas
-                    texto = coluna.inner_text().strip()
-                    print(f"         Coluna {i}: '{texto}'")
-                return None, False, False
-            
-            # NOVA LÓGICA: Verificar se está no período do segundo semestre 2025
-            no_periodo, data_anterior = data_esta_no_periodo(data_aula)
-            
-            if data_anterior:
-                # Data anterior ao período - PARAR TUDO!
-                print(f"🛑 FINALIZANDO: Encontrada data anterior ao período ({data_aula})")
-                print("   Todas as próximas aulas serão anteriores. Parando coleta!")
-                return None, True, False  # Sinal para parar tudo
-            
-            if not no_periodo:
-                # Se não está no período (mas não é anterior), pular esta aula
-                return None, False, False
-            
-            # Extrair IDs do botão de frequência
-            btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
-            if btn_freq:
-                onclick = btn_freq.get_attribute("onclick")
-                # Extrair os dois IDs: visualizarFrequencias(aula_id, professor_id)
-                match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
-                if match:
-                    aula_id = match.group(1)
-                    professor_id = match.group(2)
-                    
-                    return {
-                        'aula_id': aula_id,
-                        'professor_id': professor_id,
-                        'data': data_aula,
-                        'congregacao': congregacao or "N/A",
-                        'curso': curso or "N/A",
-                        'turma': turma or "N/A"
-                    }, False, True  # É válida
+                return {
+                    'aula_id': aula_id,
+                    'professor_id': professor_id,
+                    'data': data_aula,
+                    'congregacao': congregacao,
+                    'curso': curso,
+                    'turma': turma
+                }, False, True  # É válida
         
         return None, False, False
         
@@ -433,7 +456,7 @@ def main():
             print("✅ Configurado para 2000 registros")
             
             # Aguardar a página recarregar com 2000 registros
-            time.sleep(1)
+            time.sleep(2)
             
         except Exception as e:
             print(f"⚠️ Erro ao configurar registros: {e}")
@@ -465,7 +488,7 @@ def main():
             try:
                 # Aguardar checkboxes que indicam linhas carregadas
                 pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=5000)
-                time.sleep(0.5)  # Aguardar estabilização
+                time.sleep(1)  # Aguardar estabilização
             except:
                 print("⚠️ Timeout aguardando linhas - tentando continuar...")
             
@@ -531,7 +554,7 @@ def main():
                     print(f"         🖱️ Clicando em frequência...")
                     if clicar_botao_frequencia_por_indice(pagina, i):
                         # Aguardar modal carregar
-                        time.sleep(0.3)
+                        time.sleep(0.5)
                         
                         # Processar dados de frequência
                         freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
@@ -576,7 +599,7 @@ def main():
                             pagina.keyboard.press("Escape")
                         
                         # Pausa adicional para estabilizar
-                        time.sleep(0.2)
+                        time.sleep(0.3)
                         
                         # Obter detalhes da ATA via requests
                         ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
@@ -609,7 +632,7 @@ def main():
                     continue
                 
                 # Pequena pausa entre aulas
-                time.sleep(0.1)
+                time.sleep(0.2)
             
             print(f"   ✅ {aulas_processadas_pagina} aulas válidas processadas nesta página")
             
@@ -617,8 +640,7 @@ def main():
             if deve_parar_coleta:
                 break
             
-            # 🛑 LÓGICA ANTIGA: Se não encontrou NENHUMA aula no período nesta página, PARAR!
-            # (Mantida como backup, mas agora para na primeira data anterior)
+            # Se não encontrou NENHUMA aula no período nesta página, PARAR!
             if aulas_encontradas_periodo == 0:
                 print("🛑 FINALIZANDO: Nenhuma aula do período encontrada nesta página!")
                 print("   Todas as aulas restantes são anteriores ao período desejado.")
@@ -627,7 +649,7 @@ def main():
             # Tentar avançar para próxima página
             try:
                 # Aguardar um pouco para garantir que a página atual está estável
-                time.sleep(0.5)
+                time.sleep(1)
                 
                 # Buscar botão próximo
                 btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
@@ -643,7 +665,7 @@ def main():
                         pagina_atual += 1
                         
                         # Aguardar nova página carregar
-                        time.sleep(1)
+                        time.sleep(2)
                         
                         # Aguardar checkboxes da nova página
                         try:
