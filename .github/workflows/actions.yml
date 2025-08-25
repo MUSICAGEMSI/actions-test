@@ -38,9 +38,3 @@ jobs:
 
       - name: Executar script_expandido.py
         run: python script_expandido.py
-
-      - name: Executar script_historicoindividual.py
-        run: python script_historicoindividual.py
-        
-      - name: Executar script_historicoaulas.py
-        run: python script_historicoaulas.py
