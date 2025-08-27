@@ -1,4 +1,4 @@
-# script_historico_alunos.py
+# script_historico_alunos.py - VERSÃO CORRIGIDA
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -80,31 +80,80 @@ def obter_lista_alunos(session):
         print(f"❌ Erro ao obter lista de alunos: {e}")
         return []
 
-def extrair_todas_as_datas(texto):
-    """Extrai TODAS as datas de um texto e retorna como string separada por ;"""
-    # Padrão para capturar datas no formato dd/mm/yyyy
-    pattern = r'\b(\d{1,2}/\d{1,2}/\d{4})\b'
-    datas = re.findall(pattern, texto)
-    
-    if not datas:
+def extrair_datas_melhorada(html_content, secao_nome=""):
+    """
+    Extrai TODAS as datas de um conteúdo HTML usando múltiplas estratégias
+    """
+    if not html_content:
         return ""
     
-    # Remover duplicatas mantendo a ordem
+    # Usar BeautifulSoup para parsing mais preciso
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Estratégia 1: Buscar todas as datas no texto limpo
+    texto_limpo = soup.get_text()
+    pattern_data = r'\b(\d{1,2}/\d{1,2}/\d{4})\b'
+    datas_regex = re.findall(pattern_data, texto_limpo)
+    
+    # Estratégia 2: Buscar em atributos específicos (data attributes, values, etc.)
+    datas_atributos = []
+    for elemento in soup.find_all(attrs={'data-date': True}):
+        data_attr = elemento.get('data-date')
+        if data_attr and re.match(pattern_data, data_attr):
+            datas_atributos.append(data_attr)
+    
+    # Estratégia 3: Buscar em células de tabela (td) que contenham apenas datas
+    datas_tabela = []
+    for td in soup.find_all('td'):
+        texto_td = td.get_text().strip()
+        if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', texto_td):
+            datas_tabela.append(texto_td)
+    
+    # Estratégia 4: Buscar em inputs type="date" ou similar
+    datas_inputs = []
+    for input_elem in soup.find_all('input'):
+        value = input_elem.get('value', '')
+        if value and re.match(pattern_data, value):
+            datas_inputs.append(value)
+    
+    # Combinar todas as datas encontradas
+    todas_datas = datas_regex + datas_atributos + datas_tabela + datas_inputs
+    
+    # DEBUG: Mostrar detalhes para seções específicas
+    if secao_nome and ("MSA" in secao_nome.upper() and "GRUPO" in secao_nome.upper()):
+        print(f"      🔍 DEBUG {secao_nome}:")
+        print(f"         - Datas regex: {len(datas_regex)}")
+        print(f"         - Datas atributos: {len(datas_atributos)}")
+        print(f"         - Datas tabela: {len(datas_tabela)}")
+        print(f"         - Datas inputs: {len(datas_inputs)}")
+        if todas_datas:
+            print(f"         - Primeiras 3 datas: {todas_datas[:3]}")
+    
+    if not todas_datas:
+        return ""
+    
+    # Remover duplicatas mantendo ordem
     datas_unicas = []
-    for data in datas:
+    for data in todas_datas:
         if data not in datas_unicas:
             datas_unicas.append(data)
     
-    # Ordenar as datas cronologicamente (opcional)
+    # Ordenar cronologicamente
     try:
         datas_ordenadas = sorted(datas_unicas, key=lambda x: datetime.strptime(x, '%d/%m/%Y'))
-        return "; ".join(datas_ordenadas)
-    except:
-        # Se houver erro na ordenação, retorna na ordem encontrada
+        resultado = "; ".join(datas_ordenadas)
+        
+        # DEBUG adicional
+        if secao_nome and len(datas_ordenadas) > 0:
+            print(f"         - Total datas únicas: {len(datas_ordenadas)}")
+            
+        return resultado
+    except Exception as e:
+        print(f"      ⚠️ Erro ao ordenar datas para {secao_nome}: {e}")
         return "; ".join(datas_unicas)
 
 def obter_historico_aluno(session, aluno_id):
-    """Obtém o histórico completo de um aluno - coletando TODAS as datas"""
+    """Obtém o histórico completo de um aluno - versão melhorada"""
     try:
         url_historico = f"https://musical.congregacao.org.br/licoes/index/{aluno_id}"
         
@@ -115,12 +164,12 @@ def obter_historico_aluno(session, aluno_id):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
         }
         
-        resp = session.get(url_historico, headers=headers, timeout=8)
+        resp = session.get(url_historico, headers=headers, timeout=10)
         
         if resp.status_code != 200:
+            print(f"      ⚠️ Status HTTP {resp.status_code} para aluno {aluno_id}")
             return {}
         
-        # Usar regex diretamente no texto
         texto = resp.text
         
         historico = {
@@ -136,31 +185,45 @@ def obter_historico_aluno(session, aluno_id):
             'escalas_grupo': ""
         }
         
-        # Padrões otimizados para capturar as seções
+        # Padrões mais específicos e robustos
         padroes = {
-            'mts': r'(?<!grupo)(?<!Grupo)MTS(?!\s*-\s*Aulas\s+em\s+grupo).*?<table.*?>(.*?)</table>',
-            'mts_grupo': r'MTS\s*-\s*Aulas\s+em\s+grupo.*?<table.*?>(.*?)</table>',
-            'msa': r'(?<!grupo)(?<!Grupo)MSA(?!\s*-\s*Aulas\s+em\s+grupo).*?<table.*?>(.*?)</table>',
-            'msa_grupo': r'MSA\s*-\s*Aulas\s+em\s+grupo.*?<table.*?>(.*?)</table>',
-            'provas': r'Provas.*?<table.*?>(.*?)</table>',
-            'metodo': r'Método.*?<table.*?>(.*?)</table>',
-            'hinario': r'(?<!grupo)(?<!Grupo)Hinário(?!\s*-\s*Aulas\s+em\s+grupo).*?<table.*?>(.*?)</table>',
-            'hinario_grupo': r'Hinos\s*-\s*Aulas\s+em\s+grupo.*?<table.*?>(.*?)</table>',
-            'escalas': r'(?<!grupo)(?<!Grupo)Escalas(?!\s*-\s*Aulas\s+em\s+grupo).*?<table.*?>(.*?)</table>',
-            'escalas_grupo': r'Escalas\s*-\s*Aulas\s+em\s+grupo.*?<table.*?>(.*?)</table>'
+            'mts': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*MTS\s*(?!</[^>]*>)(?!\s*-\s*Aulas\s+em\s+grupo).*?<table[^>]*>(.*?)</table>',
+            'mts_grupo': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*MTS\s*-\s*Aulas\s+em\s+grupo.*?<table[^>]*>(.*?)</table>',
+            'msa': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*MSA\s*(?!</[^>]*>)(?!\s*-\s*Aulas\s+em\s+grupo).*?<table[^>]*>(.*?)</table>',
+            'msa_grupo': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*MSA\s*-\s*Aulas\s+em\s+grupo.*?<table[^>]*>(.*?)</table>',
+            'provas': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Provas?.*?<table[^>]*>(.*?)</table>',
+            'metodo': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Método.*?<table[^>]*>(.*?)</table>',
+            'hinario': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Hinário\s*(?!</[^>]*>)(?!\s*-\s*Aulas\s+em\s+grupo).*?<table[^>]*>(.*?)</table>',
+            'hinario_grupo': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Hinos?\s*-\s*Aulas\s+em\s+grupo.*?<table[^>]*>(.*?)</table>',
+            'escalas': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Escalas?\s*(?!</[^>]*>)(?!\s*-\s*Aulas\s+em\s+grupo).*?<table[^>]*>(.*?)</table>',
+            'escalas_grupo': r'(?:<h[1-6][^>]*>|<strong>|<b>)?\s*Escalas?\s*-\s*Aulas\s+em\s+grupo.*?<table[^>]*>(.*?)</table>'
         }
         
-        # Processar todos os padrões coletando TODAS as datas
+        # Processar seções com função melhorada
+        total_datas_encontradas = 0
         for secao, padrao in padroes.items():
-            match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
-            if match:
-                # Agora coleta TODAS as datas da seção
-                historico[secao] = extrair_todas_as_datas(match.group(1))
+            matches = re.findall(padrao, texto, re.DOTALL | re.IGNORECASE)
+            
+            if matches:
+                # Pegar o maior match (geralmente o mais completo)
+                conteudo_secao = max(matches, key=len)
+                historico[secao] = extrair_datas_melhorada(conteudo_secao, secao.upper())
+                
+                if historico[secao]:
+                    num_datas = len(historico[secao].split('; '))
+                    total_datas_encontradas += num_datas
+        
+        # Log de debug para casos específicos
+        if aluno_id == "622865":  # Arthur do exemplo
+            print(f"      🔍 ALUNO {aluno_id} - DEBUG COMPLETO:")
+            for secao, valor in historico.items():
+                if valor:
+                    print(f"         - {secao.upper()}: {len(valor.split('; '))} datas")
         
         return historico
         
     except Exception as e:
-        print(f"⚠️ Erro ao obter histórico do aluno {aluno_id}: {e}")
+        print(f"      ⚠️ Erro ao obter histórico do aluno {aluno_id}: {e}")
         return {}
 
 def main():
@@ -204,11 +267,19 @@ def main():
             navegador.close()
             return
         
+        # TESTE: Processar apenas o Arthur primeiro para verificar
+        arthur = next((a for a in alunos if a['id'] == '622865'), None)
+        if arthur:
+            print(f"\n🎯 TESTE ESPECÍFICO - ARTHUR (ID: {arthur['id']}):")
+            historico_arthur = obter_historico_aluno(session, arthur['id'])
+            print(f"   MSA GRUPO: {historico_arthur.get('msa_grupo', 'VAZIO')}")
+            print(f"   Número de datas MSA GRUPO: {len(historico_arthur.get('msa_grupo', '').split('; ')) if historico_arthur.get('msa_grupo') else 0}")
+        
         resultado = []
         
-        # Processar cada aluno
+        # Processar todos os alunos
         total_alunos = len(alunos)
-        batch_size = 5  # Processar em lotes para melhor controle
+        batch_size = 5
         
         for batch_start in range(0, total_alunos, batch_size):
             batch_end = min(batch_start + batch_size, total_alunos)
@@ -249,16 +320,18 @@ def main():
                 
                 resultado.append(linha)
                 
-                # Mostrar progresso compacto - agora conta total de datas (não seções)
+                # Log de progresso melhorado
                 total_datas_aluno = sum(len(x.split('; ')) if x else 0 for x in historico.values())
                 if total_datas_aluno > 0:
                     print(f"      ✓ {total_datas_aluno} datas coletadas")
+                else:
+                    print(f"      ⚪ Nenhuma data encontrada")
             
-            # Pausa menor entre lotes
+            # Pausa entre lotes
             if batch_end < total_alunos:
                 time.sleep(0.5)
         
-        print(f"📊 Total de alunos processados: {len(resultado)}")
+        print(f"\n📊 Total de alunos processados: {len(resultado)}")
         
         # Preparar dados para envio
         headers = [
@@ -287,20 +360,30 @@ def main():
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
         
-        # Mostrar resumo final - atualizado para contar todas as datas
-        print("\n📈 RESUMO DA COLETA:")
+        # Resumo final detalhado
+        print("\n📈 RESUMO FINAL DA COLETA:")
         print(f"   🎯 Total de alunos: {len(resultado)}")
         print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
         
-        # Estatísticas de datas coletadas - agora conta corretamente
+        # Estatísticas de datas coletadas por seção
+        stats_secoes = {}
         total_datas = 0
+        
         for linha in resultado:
-            for campo_data in linha[6:]:  # Campos de data começam na posição 6
-                if campo_data:  # Se não está vazio
-                    total_datas += len(campo_data.split('; '))  # Conta quantas datas separadas por ;
+            for i, campo_data in enumerate(linha[6:]):  # Campos de data começam na posição 6
+                secao_nome = headers[i + 6]
+                if campo_data:
+                    num_datas = len(campo_data.split('; '))
+                    stats_secoes[secao_nome] = stats_secoes.get(secao_name, 0) + num_datas
+                    total_datas += num_datas
         
         print(f"   📅 Total de datas coletadas: {total_datas}")
         print(f"   📊 Média de datas por aluno: {total_datas/len(resultado):.1f}")
+        
+        # Mostrar estatísticas por seção
+        print("   📋 Datas por seção:")
+        for secao, count in stats_secoes.items():
+            print(f"      - {secao}: {count} datas")
         
         navegador.close()
 
