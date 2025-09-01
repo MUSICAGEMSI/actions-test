@@ -9,16 +9,19 @@ import time
 import json
 from bs4 import BeautifulSoup
 from datetime import datetime
-import concurrent.futures
-import asyncio
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
+# PERÍODO DO SEGUNDO SEMESTRE 2025
 DATA_INICIO = "04/07/2025"
 DATA_FIM = "31/12/2025"
+
+if not EMAIL or not SENHA:
+    print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
+    exit(1)
 
 def data_esta_no_periodo(data_str):
     """Verifica se a data está no período do segundo semestre de 2025"""
@@ -36,655 +39,558 @@ def data_esta_no_periodo(data_str):
                 continue
         
         if not data_obj:
+            print(f"⚠️ Formato de data não reconhecido: {data_str}")
             return False, False
         
         inicio = datetime.strptime("04/07/2025", "%d/%m/%Y")
         fim = datetime.strptime("31/12/2025", "%d/%m/%Y")
         
         if inicio <= data_obj <= fim:
-            return True, False
+            return True, False  # Está no período
         elif data_obj < inicio:
-            return False, True
+            return False, True  # Data anterior ao período - PARAR!
         else:
-            return False, False
+            return False, False  # Data posterior ao período
         
     except Exception as e:
+        print(f"⚠️ Erro ao verificar data {data_str}: {e}")
         return False, False
 
-class AjaxFrequenciaCollector:
-    """Coletor que intercepta chamadas AJAX de frequência"""
-    
-    def __init__(self):
-        self.ajax_responses = {}
-        self.intercepted_data = {}
-        
-    def setup_page_interception(self, pagina):
-        """Configura interceptação de requests na página"""
-        
-        def handle_response(response):
-            try:
-                url = response.url
-                
-                # Interceptar chamadas AJAX relacionadas à frequência
-                if any(keyword in url for keyword in [
-                    'visualizar_frequencias', 'frequencia', 'presenca', 
-                    'ajax', 'carregarFrequencia', 'obterFrequencia'
-                ]):
-                    print(f"🕵️ AJAX interceptado: {url}")
-                    
-                    # Extrair IDs da URL
-                    match = re.search(r'/(\d+)/(\d+)/?$', url)
-                    if match:
-                        aula_id = match.group(1)
-                        professor_id = match.group(2)
-                        
-                        # Salvar resposta
-                        try:
-                            content = response.text()
-                            self.ajax_responses[f"{aula_id}_{professor_id}"] = {
-                                'url': url,
-                                'status': response.status,
-                                'content': content,
-                                'headers': dict(response.headers)
-                            }
-                            print(f"   ✅ Dados salvos para aula {aula_id}")
-                        except Exception as e:
-                            print(f"   ⚠️ Erro ao salvar resposta: {e}")
-                            
-            except Exception as e:
-                print(f"⚠️ Erro no interceptor: {e}")
-        
-        # Configurar interceptação
-        pagina.on("response", handle_response)
-        
-        # JavaScript para interceptar chamadas AJAX
-        js_interceptor = """
-        // Interceptar XMLHttpRequest
-        (function() {
-            const originalOpen = XMLHttpRequest.prototype.open;
-            const originalSend = XMLHttpRequest.prototype.send;
-            
-            XMLHttpRequest.prototype.open = function(method, url, ...args) {
-                this._url = url;
-                this._method = method;
-                return originalOpen.call(this, method, url, ...args);
-            };
-            
-            XMLHttpRequest.prototype.send = function(data) {
-                this.addEventListener('load', function() {
-                    if (this._url && (this._url.includes('frequencia') || this._url.includes('presenca'))) {
-                        console.log('🔍 XHR Interceptado:', this._method, this._url);
-                        console.log('📊 Resposta:', this.responseText);
-                        
-                        // Armazenar dados globalmente
-                        if (!window._interceptedData) window._interceptedData = {};
-                        window._interceptedData[this._url] = {
-                            method: this._method,
-                            response: this.responseText,
-                            status: this.status
-                        };
-                    }
-                });
-                
-                return originalSend.call(this, data);
-            };
-            
-            // Interceptar fetch também
-            const originalFetch = window.fetch;
-            window.fetch = function(url, options = {}) {
-                const promise = originalFetch.call(this, url, options);
-                
-                if (typeof url === 'string' && (url.includes('frequencia') || url.includes('presenca'))) {
-                    console.log('🔍 Fetch Interceptado:', options.method || 'GET', url);
-                    
-                    promise.then(response => {
-                        return response.clone().text().then(text => {
-                            console.log('📊 Fetch Resposta:', text);
-                            
-                            if (!window._interceptedData) window._interceptedData = {};
-                            window._interceptedData[url] = {
-                                method: options.method || 'GET',
-                                response: text,
-                                status: response.status
-                            };
-                        });
-                    });
-                }
-                
-                return promise;
-            };
-            
-            console.log('🚀 Interceptação AJAX configurada!');
-        })();
-        """
-        
-        pagina.evaluate(js_interceptor)
-    
-    def processar_frequencia_otimizada(self, pagina, aula_id, professor_id):
-        """Processa frequência usando método otimizado com interceptação"""
-        
-        try:
-            print(f"      🎯 Processando aula {aula_id}...")
-            
-            # 1. MÉTODO: Tentar obter dados interceptados primeiro
-            dados_interceptados = self.obter_dados_interceptados(pagina, aula_id, professor_id)
-            if dados_interceptados:
-                return dados_interceptados
-            
-            # 2. MÉTODO: JavaScript direto para carregar dados
-            script_carregar = f"""
-            // Tentar carregar dados via JavaScript
-            if (typeof visualizarFrequencias === 'function') {{
-                visualizarFrequencias({aula_id}, {professor_id});
-                return 'modal_triggered';
-            }} else if (typeof carregarFrequencia === 'function') {{
-                carregarFrequencia({aula_id}, {professor_id});
-                return 'ajax_triggered';
-            }} else {{
-                return 'no_function';
-            }}
-            """
-            
-            trigger_result = pagina.evaluate(script_carregar)
-            print(f"         🔧 Trigger result: {trigger_result}")
-            
-            # Aguardar dados carregarem
-            time.sleep(0.5)
-            
-            # 3. MÉTODO: Extrair dados do DOM após carregamento
-            dados_dom = self.extrair_dados_dom_completo(pagina)
-            if dados_dom['tem_dados']:
-                return dados_dom
-            
-            # 4. MÉTODO FALLBACK: Verificar dados interceptados novamente
-            time.sleep(0.5)
-            dados_interceptados = self.obter_dados_interceptados(pagina, aula_id, professor_id)
-            if dados_interceptados:
-                return dados_interceptados
-            
-            # 5. ÚLTIMO RECURSO: Modal tradicional
-            return self.modal_fallback(pagina, aula_id, professor_id)
-            
-        except Exception as e:
-            print(f"         ❌ Erro ao processar: {e}")
-            return self.resultado_erro()
-    
-    def obter_dados_interceptados(self, pagina, aula_id, professor_id):
-        """Obtém dados das chamadas AJAX interceptadas"""
-        
-        # Verificar dados interceptados via JavaScript
-        script_obter = """
-        if (window._interceptedData) {
-            const dados = {};
-            for (const [url, data] of Object.entries(window._interceptedData)) {
-                dados[url] = data;
-            }
-            return dados;
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright para usar em requests"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def extrair_frequencia_via_http(session, aula_id, professor_id):
+    """Extrai dados de frequência via requisição HTTP direta (NOVO MÉTODO)"""
+    try:
+        url_freq = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_frequencias/{aula_id}/{professor_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
+            'X-Requested-With': 'XMLHttpRequest'
         }
-        return null;
-        """
         
-        intercepted = pagina.evaluate(script_obter)
+        resp = session.get(url_freq, headers=headers, timeout=15)
         
-        if intercepted:
-            print(f"         📡 {len(intercepted)} chamadas AJAX interceptadas")
-            
-            # Processar dados interceptados
-            for url, data in intercepted.items():
-                if aula_id in url:
-                    try:
-                        # Parsear HTML da resposta AJAX
-                        soup = BeautifulSoup(data['response'], 'html.parser')
-                        return self.extrair_frequencia_html(soup)
-                    except Exception as e:
-                        print(f"         ⚠️ Erro ao parsear AJAX: {e}")
-        
-        # Verificar também dados salvos na classe
-        key = f"{aula_id}_{professor_id}"
-        if key in self.ajax_responses:
-            try:
-                content = self.ajax_responses[key]['content']
-                soup = BeautifulSoup(content, 'html.parser')
-                return self.extrair_frequencia_html(soup)
-            except Exception as e:
-                print(f"         ⚠️ Erro ao processar resposta salva: {e}")
-        
-        return None
-    
-    def extrair_dados_dom_completo(self, pagina):
-        """Extrai dados diretamente do DOM após JavaScript executar"""
-        
-        script_extrair = """
-        function extrairFrequenciaCompleta() {
-            const presentes_ids = [];
-            const presentes_nomes = [];
-            const ausentes_ids = [];
-            const ausentes_nomes = [];
-            
-            // Procurar em modal aberto
-            let tabela = document.querySelector('#modalFrequencia table tbody');
-            
-            // Se modal não está aberto, procurar em qualquer tabela
-            if (!tabela) {
-                tabela = document.querySelector('table tbody');
-            }
-            
-            // Procurar também em elementos específicos
-            if (!tabela) {
-                const tabelas = document.querySelectorAll('table');
-                for (const t of tabelas) {
-                    const linhas = t.querySelectorAll('tbody tr');
-                    if (linhas.length > 0) {
-                        // Verificar se tem estrutura de frequência
-                        const primeiraLinha = linhas[0];
-                        if (primeiraLinha.querySelector('a[data-id-membro]')) {
-                            tabela = t.querySelector('tbody');
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if (!tabela) {
-                return {
-                    presentes_ids, presentes_nomes, ausentes_ids, ausentes_nomes,
-                    tem_dados: false, motivo: 'tabela_nao_encontrada'
-                };
-            }
-            
-            const linhas = tabela.querySelectorAll('tr');
-            
-            for (const linha of linhas) {
-                try {
-                    const nome = linha.querySelector('td:first-child')?.textContent?.trim();
-                    const link = linha.querySelector('td:last-child a[data-id-membro]');
-                    
-                    if (nome && link) {
-                        const idMembro = link.getAttribute('data-id-membro');
-                        const icone = link.querySelector('i');
-                        
-                        if (idMembro && icone) {
-                            const classes = icone.className;
-                            
-                            if (classes.includes('fa-check') && classes.includes('text-success')) {
-                                presentes_ids.push(idMembro);
-                                presentes_nomes.push(nome);
-                            } else if (classes.includes('fa-remove') || classes.includes('fa-times')) {
-                                ausentes_ids.push(idMembro);
-                                ausentes_nomes.push(nome);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error('Erro ao processar linha:', e);
-                }
-            }
-            
+        if resp.status_code != 200:
+            print(f"⚠️ Erro HTTP {resp.status_code} ao acessar frequência da aula {aula_id}")
             return {
-                presentes_ids, presentes_nomes, ausentes_ids, ausentes_nomes,
-                tem_dados: presentes_ids.length > 0 || ausentes_ids.length > 0,
-                total_linhas: linhas.length,
-                motivo: 'dom_extraido'
-            };
-        }
+                'presentes_ids': [],
+                'presentes_nomes': [],
+                'ausentes_ids': [],
+                'ausentes_nomes': [],
+                'tem_presenca': "ERRO"
+            }
         
-        return extrairFrequenciaCompleta();
-        """
-        
-        try:
-            resultado = pagina.evaluate(script_extrair)
-            
-            if resultado['tem_dados']:
-                print(f"         ✅ DOM: {len(resultado['presentes_ids'])} presentes, {len(resultado['ausentes_ids'])} ausentes")
-                return {
-                    'presentes_ids': resultado['presentes_ids'],
-                    'presentes_nomes': resultado['presentes_nomes'],
-                    'ausentes_ids': resultado['ausentes_ids'],
-                    'ausentes_nomes': resultado['ausentes_nomes'],
-                    'tem_presenca': "OK",
-                    'metodo': 'dom_otimizado'
-                }
-            else:
-                print(f"         ⚠️ DOM sem dados: {resultado.get('motivo', 'unknown')}")
-            
-        except Exception as e:
-            print(f"         ❌ Erro na extração DOM: {e}")
-        
-        return {'tem_dados': False}
-    
-    def extrair_frequencia_html(self, soup):
-        """Extrai dados de frequência de HTML parseado"""
+        # Parsear HTML com BeautifulSoup
+        soup = BeautifulSoup(resp.text, 'html.parser')
         
         presentes_ids = []
         presentes_nomes = []
         ausentes_ids = []
         ausentes_nomes = []
         
-        # Procurar tabela de frequência
-        tabela = soup.find('table')
-        if tabela:
-            tbody = tabela.find('tbody')
-            if tbody:
-                linhas = tbody.find_all('tr')
+        # Buscar tabela de frequência
+        tabela = soup.find('table', class_='table-bordered')
+        if not tabela:
+            print(f"⚠️ Tabela de frequência não encontrada para aula {aula_id}")
+            return {
+                'presentes_ids': [],
+                'presentes_nomes': [],
+                'ausentes_ids': [],
+                'ausentes_nomes': [],
+                'tem_presenca': "FANTASMA"
+            }
+        
+        # Processar linhas da tabela
+        tbody = tabela.find('tbody')
+        if not tbody:
+            print(f"⚠️ Corpo da tabela não encontrado para aula {aula_id}")
+            return {
+                'presentes_ids': [],
+                'presentes_nomes': [],
+                'ausentes_ids': [],
+                'ausentes_nomes': [],
+                'tem_presenca': "FANTASMA"
+            }
+        
+        linhas = tbody.find_all('tr')
+        for linha in linhas:
+            colunas = linha.find_all('td')
+            if len(colunas) < 2:
+                continue
+            
+            # Nome do aluno (primeira coluna)
+            nome_completo = colunas[0].get_text(strip=True)
+            if not nome_completo:
+                continue
+            
+            # Status de presença (última coluna)
+            link_presenca = colunas[-1].find('a')
+            if not link_presenca:
+                continue
+            
+            # Extrair ID do membro
+            id_membro = link_presenca.get('data-id-membro')
+            if not id_membro:
+                continue
+            
+            # Verificar ícone de presença/ausência
+            icone = link_presenca.find('i')
+            if icone:
+                classes = icone.get('class', [])
+                classes_str = ' '.join(classes) if isinstance(classes, list) else str(classes)
                 
-                for linha in linhas:
-                    cels = linha.find_all('td')
-                    if len(cels) >= 2:
-                        # Nome
-                        nome = cels[0].get_text(strip=True)
-                        
-                        # Link com dados
-                        link = cels[-1].find('a', {'data-id-membro': True})
-                        if link and nome:
-                            id_membro = link.get('data-id-membro')
-                            icone = link.find('i')
-                            
-                            if id_membro and icone:
-                                classes = ' '.join(icone.get('class', []))
-                                
-                                if 'fa-check' in classes and 'text-success' in classes:
-                                    presentes_ids.append(id_membro)
-                                    presentes_nomes.append(nome)
-                                elif 'fa-remove' in classes or 'fa-times' in classes:
-                                    ausentes_ids.append(id_membro)
-                                    ausentes_nomes.append(nome)
+                if 'fa-check' in classes_str and 'text-success' in classes_str:
+                    # Presente
+                    presentes_ids.append(id_membro)
+                    presentes_nomes.append(nome_completo)
+                elif 'fa-remove' in classes_str and 'text-danger' in classes_str:
+                    # Ausente
+                    ausentes_ids.append(id_membro)
+                    ausentes_nomes.append(nome_completo)
+        
+        # Determinar status da presença
+        tem_presenca_status = "OK" if (presentes_ids or ausentes_ids) else "FANTASMA"
         
         return {
             'presentes_ids': presentes_ids,
             'presentes_nomes': presentes_nomes,
             'ausentes_ids': ausentes_ids,
             'ausentes_nomes': ausentes_nomes,
-            'tem_presenca': "OK" if presentes_ids or ausentes_ids else "FANTASMA",
-            'metodo': 'html_parsed'
+            'tem_presenca': tem_presenca_status
         }
-    
-    def modal_fallback(self, pagina, aula_id, professor_id):
-        """Método fallback usando modal tradicional"""
         
-        print(f"         🔄 Usando fallback modal...")
-        
-        try:
-            # Tentar clicar no modal via JavaScript
-            script_modal = f"""
-            // Procurar botão de frequência
-            const botoes = document.querySelectorAll('button[onclick*="visualizarFrequencias"]');
-            for (const botao of botoes) {{
-                const onclick = botao.getAttribute('onclick');
-                if (onclick.includes('{aula_id}') && onclick.includes('{professor_id}')) {{
-                    botao.click();
-                    return 'clicked';
-                }}
-            }}
-            return 'not_found';
-            """
-            
-            click_result = pagina.evaluate(script_modal)
-            
-            if click_result == 'clicked':
-                # Aguardar modal carregar
-                pagina.wait_for_selector("#modalFrequencia table tbody tr", timeout=2000)
-                
-                # Extrair dados
-                dados = self.extrair_dados_dom_completo(pagina)
-                
-                # Fechar modal
-                pagina.evaluate("$('#modalFrequencia').modal('hide');")
-                
-                if dados['tem_dados']:
-                    return dados
-                    
-        except Exception as e:
-            print(f"         ⚠️ Fallback modal falhou: {e}")
-        
-        return self.resultado_erro()
-    
-    def resultado_erro(self):
-        """Retorna resultado de erro padrão"""
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair frequência via HTTP da aula {aula_id}: {e}")
         return {
             'presentes_ids': [],
             'presentes_nomes': [],
             'ausentes_ids': [],
             'ausentes_nomes': [],
-            'tem_presenca': "ERRO",
-            'metodo': 'erro'
+            'tem_presenca': "ERRO"
         }
 
-def extrair_aulas_da_pagina_super_rapido(pagina):
-    """Extrai todas as aulas de uma página rapidamente"""
-    
-    script_extracao = """
-    function extrairTodasAulas() {
-        const aulas = [];
-        const linhas = document.querySelectorAll('table tbody tr');
-        
-        for (let i = 0; i < linhas.length; i++) {
-            try {
-                const linha = linhas[i];
-                const colunas = linha.querySelectorAll('td');
-                
-                if (colunas.length < 4) continue;
-                
-                // Encontrar data
-                let data = null;
-                let dataColIndex = -1;
-                
-                for (let j = 0; j < colunas.length; j++) {
-                    const texto = colunas[j].textContent.trim();
-                    if (/\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}/.test(texto) && !/[a-zA-Z]/.test(texto)) {
-                        data = texto;
-                        dataColIndex = j;
-                        break;
-                    }
-                }
-                
-                if (!data) continue;
-                
-                // Extrair outras informações
-                const congregacao = dataColIndex >= 3 ? colunas[dataColIndex-3].textContent.trim() : "N/A";
-                const curso = dataColIndex >= 2 ? colunas[dataColIndex-2].textContent.trim() : "N/A";
-                const turma = dataColIndex >= 1 ? colunas[dataColIndex-1].textContent.trim() : "N/A";
-                
-                // Encontrar botão de frequência
-                const btnFreq = linha.querySelector('button[onclick*="visualizarFrequencias"]');
-                if (btnFreq) {
-                    const onclick = btnFreq.getAttribute('onclick');
-                    const match = onclick.match(/visualizarFrequencias\\((\\d+),\\s*(\\d+)\\)/);
-                    
-                    if (match) {
-                        aulas.push({
-                            aula_id: match[1],
-                            professor_id: match[2],
-                            data: data,
-                            congregacao: congregacao,
-                            curso: curso,
-                            turma: turma,
-                            linha_index: i
-                        });
-                    }
-                }
-            } catch (e) {
-                console.error('Erro na linha', i, ':', e);
-            }
+def extrair_detalhes_aula(session, aula_id):
+    """Extrai detalhes da aula via requests para verificar ATA"""
+    try:
+        url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
         }
         
-        return aulas;
-    }
-    
-    return extrairTodasAulas();
-    """
-    
-    try:
-        aulas = pagina.evaluate(script_extracao)
+        resp = session.get(url_detalhes, headers=headers, timeout=10)
         
-        # Filtrar por período
-        aulas_validas = []
+        if resp.status_code == 200:
+            if "ATA DA AULA" in resp.text:
+                return "OK"
+            else:
+                return "FANTASMA"
+        
+        return "ERRO"
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair detalhes da aula {aula_id}: {e}")
+        return "ERRO"
+
+def extrair_dados_da_linha(linha_elemento):
+    """Extrai dados de uma linha da tabela de forma mais robusta"""
+    try:
+        colunas = linha_elemento.query_selector_all("td")
+        
+        if len(colunas) < 4:
+            return None
+        
+        # Buscar data primeiro para estabelecer estrutura
+        data_aula = None
+        data_col_index = -1
+        
+        for i, coluna in enumerate(colunas):
+            texto = coluna.inner_text().strip()
+            # Verificar se é uma data válida
+            if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', texto) and not re.search(r'[a-zA-Z]', texto):
+                data_aula = texto
+                data_col_index = i
+                break
+        
+        if data_col_index == -1 or not data_aula:
+            return None
+        
+        # Inferir outras colunas baseado na posição da data
+        congregacao = "N/A"
+        curso = "N/A" 
+        turma = "N/A"
+        
+        if data_col_index >= 3:
+            congregacao = colunas[data_col_index-3].inner_text().strip()
+            curso = colunas[data_col_index-2].inner_text().strip()
+            turma = colunas[data_col_index-1].inner_text().strip()
+        elif data_col_index == 2:
+            congregacao = colunas[0].inner_text().strip()
+            curso = colunas[1].inner_text().strip()
+        elif data_col_index == 1:
+            congregacao = colunas[0].inner_text().strip()
+        
+        # Limpar campos de botões/ações
+        def limpar_campo(texto):
+            botoes_conhecidos = ["frequência", "detalhes", "reabrir", "visualizar", "editar", "excluir"]
+            texto_lower = texto.lower()
+            for botao in botoes_conhecidos:
+                if botao in texto_lower:
+                    return "N/A"
+            return texto if texto else "N/A"
+        
+        congregacao = limpar_campo(congregacao)
+        curso = limpar_campo(curso)
+        turma = limpar_campo(turma)
+        
+        # Extrair IDs do botão de frequência
+        btn_freq = linha_elemento.query_selector("button[onclick*='visualizarFrequencias']")
+        if btn_freq:
+            onclick = btn_freq.get_attribute("onclick")
+            match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
+            if match:
+                aula_id = match.group(1)
+                professor_id = match.group(2)
+                
+                return {
+                    'aula_id': aula_id,
+                    'professor_id': professor_id,
+                    'data': data_aula,
+                    'congregacao': congregacao,
+                    'curso': curso,
+                    'turma': turma
+                }
+        
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair dados da linha: {e}")
+        return None
+
+def navegar_para_historico_aulas(pagina):
+    """Navega pelos menus para chegar ao histórico de aulas"""
+    try:
+        print("🔍 Navegando para G.E.M...")
+        
+        pagina.wait_for_selector("nav", timeout=15000)
+        
+        # Buscar menu G.E.M
+        seletores_gem = [
+            'a:has-text("G.E.M")',
+            'a:has(.fa-graduation-cap)',
+            'a[href="#"]:has(span:text-is("G.E.M"))',
+            'a:has(span):has-text("G.E.M")'
+        ]
+        
+        menu_gem_clicado = False
+        for seletor in seletores_gem:
+            try:
+                elemento_gem = pagina.query_selector(seletor)
+                if elemento_gem:
+                    print(f"✅ Menu G.E.M encontrado")
+                    elemento_gem.click()
+                    menu_gem_clicado = True
+                    break
+            except Exception:
+                continue
+        
+        if not menu_gem_clicado:
+            print("❌ Menu G.E.M não encontrado")
+            return False
+        
+        time.sleep(1)
+        
+        print("🔍 Procurando Histórico de Aulas...")
+        
+        # Estratégias para encontrar Histórico de Aulas
+        historico_clicado = False
+        
+        try:
+            historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', 
+                                                     state="visible", timeout=10000)
+            if historico_link:
+                historico_link.click()
+                historico_clicado = True
+                print("✅ Histórico encontrado via seletor")
+        except Exception:
+            pass
+        
+        if not historico_clicado:
+            try:
+                elemento = pagina.query_selector('a:has-text("Histórico de Aulas")')
+                if elemento:
+                    pagina.evaluate("element => element.click()", elemento)
+                    historico_clicado = True
+                    print("✅ Histórico encontrado via JavaScript")
+            except Exception:
+                pass
+        
+        if not historico_clicado:
+            try:
+                pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
+                historico_clicado = True
+                print("✅ Navegação direta para histórico")
+            except Exception:
+                pass
+        
+        if not historico_clicado:
+            return False
+        
+        print("⏳ Aguardando página carregar...")
+        
+        try:
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
+            print("✅ Tabela carregada!")
+            return True
+        except PlaywrightTimeoutError:
+            try:
+                pagina.wait_for_selector("table", timeout=5000)
+                print("✅ Tabela encontrada")
+                return True
+            except:
+                return False
+                
+    except Exception as e:
+        print(f"❌ Erro na navegação: {e}")
+        return False
+
+def processar_pagina_atual(pagina, session):
+    """Processa todas as aulas da página atual"""
+    try:
+        # Aguardar linhas carregarem
+        pagina.wait_for_selector('table tbody tr', timeout=10000)
+        time.sleep(1)
+        
+        linhas = pagina.query_selector_all("table tbody tr")
+        aulas_processadas = []
         deve_parar = False
         
-        for aula in aulas:
-            no_periodo, data_anterior = data_esta_no_periodo(aula['data'])
+        print(f"   📊 Processando {len(linhas)} linhas...")
+        
+        for i, linha in enumerate(linhas):
+            # Extrair dados da aula
+            dados_aula = extrair_dados_da_linha(linha)
+            
+            if not dados_aula:
+                continue
+            
+            # Verificar período
+            no_periodo, data_anterior = data_esta_no_periodo(dados_aula['data'])
             
             if data_anterior:
+                print(f"🛑 Data anterior ao período encontrada: {dados_aula['data']}")
                 deve_parar = True
                 break
             
-            if no_periodo:
-                aulas_validas.append(aula)
+            if not no_periodo:
+                continue
+            
+            print(f"      🎯 Processando: {dados_aula['data']} - {dados_aula['curso']}")
+            
+            # Extrair frequência via HTTP (NOVO MÉTODO - SEM MODAL!)
+            freq_data = extrair_frequencia_via_http(session, dados_aula['aula_id'], dados_aula['professor_id'])
+            
+            # Extrair ATA
+            ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
+            
+            # Montar resultado
+            linha_resultado = [
+                dados_aula['congregacao'],
+                dados_aula['curso'], 
+                dados_aula['turma'],
+                dados_aula['data'],
+                "; ".join(freq_data['presentes_ids']),
+                "; ".join(freq_data['presentes_nomes']),
+                "; ".join(freq_data['ausentes_ids']),
+                "; ".join(freq_data['ausentes_nomes']),
+                freq_data['tem_presenca'],
+                ata_status
+            ]
+            
+            aulas_processadas.append(linha_resultado)
+            
+            # Log do resultado
+            total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
+            print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes - ATA: {ata_status}")
+            
+            # Pausa entre requisições para não sobrecarregar servidor
+            time.sleep(0.1)
         
-        print(f"   📊 {len(aulas_validas)} aulas válidas de {len(aulas)} totais")
-        return aulas_validas, deve_parar
+        return aulas_processadas, deve_parar
         
     except Exception as e:
-        print(f"❌ Erro na extração JavaScript: {e}")
+        print(f"⚠️ Erro ao processar página: {e}")
         return [], False
 
-def main_ajax_interceptor():
+def avancar_pagina(pagina):
+    """Tenta avançar para a próxima página"""
+    try:
+        time.sleep(1)
+        
+        btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
+        
+        if btn_proximo:
+            parent = btn_proximo.query_selector("..")
+            parent_class = parent.get_attribute("class") if parent else ""
+            
+            if "disabled" not in parent_class:
+                print("➡️ Avançando para próxima página...")
+                btn_proximo.click()
+                
+                time.sleep(2)
+                
+                try:
+                    pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                    return True
+                except:
+                    pagina.wait_for_selector("table tbody tr", timeout=5000)
+                    return True
+            else:
+                print("🏁 Última página alcançada")
+                return False
+        else:
+            print("🏁 Botão próximo não encontrado")
+            return False
+            
+    except Exception as e:
+        print(f"⚠️ Erro ao avançar página: {e}")
+        return False
+
+def main():
     tempo_inicio = time.time()
     
-    print(f"🚀 COLETOR COM INTERCEPTAÇÃO AJAX")
+    print(f"🎯 COLETANDO DADOS DO SEGUNDO SEMESTRE 2025")
     print(f"📅 Período: {DATA_INICIO} a {DATA_FIM}")
+    print(f"🚀 VERSÃO OTIMIZADA - Sem modais, requisições HTTP diretas")
     print("=" * 60)
     
     with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=False)  # Deixar visível para debug
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
         
-        contexto = navegador.new_context(
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        )
-        
-        pagina = contexto.new_page()
-        
-        # Configurar coletor
-        collector = AjaxFrequenciaCollector()
-        collector.setup_page_interception(pagina)
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        })
         
         print("🔐 Fazendo login...")
         pagina.goto(URL_INICIAL)
         
-        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
         
         try:
             pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado com sucesso!")
+            print("✅ Login realizado!")
         except PlaywrightTimeoutError:
-            print("❌ Falha no login.")
+            print("❌ Falha no login")
+            navegador.close()
             return
         
-        # Navegar para histórico (código de navegação aqui)
-        print("🔍 Navegando para histórico...")
-        # ... implementar navegação ...
+        if not navegar_para_historico_aulas(pagina):
+            print("❌ Falha na navegação")
+            navegador.close()
+            return
         
-        # Processar páginas
-        todas_aulas = []
+        # Configurar 2000 registros
+        print("⚙️ Configurando 2000 registros...")
+        try:
+            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+            pagina.select_option('select[name="listagem_length"]', "2000")
+            time.sleep(2)
+            print("✅ Configurado para 2000 registros")
+        except Exception as e:
+            print(f"⚠️ Erro ao configurar registros: {e}")
+        
+        # Criar sessão requests
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+        
+        # Variáveis de controle
+        resultado = []
         pagina_atual = 1
-        deve_parar = False
+        deve_parar_coleta = False
         
-        print("📥 Coletando informações básicas...")
-        
-        while not deve_parar:
-            print(f"📖 Página {pagina_atual}...")
+        # Loop principal - processar páginas
+        while not deve_parar_coleta:
+            print(f"\n📖 PÁGINA {pagina_atual}")
+            print("-" * 30)
             
-            aulas_pagina, deve_parar = extrair_aulas_da_pagina_super_rapido(pagina)
-            todas_aulas.extend(aulas_pagina)
+            # Processar página atual
+            aulas_pagina, deve_parar = processar_pagina_atual(pagina, session)
             
-            if deve_parar or not aulas_pagina:
+            if deve_parar:
+                deve_parar_coleta = True
                 break
             
-            # Navegar próxima página
-            try:
-                btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
-                if btn_proximo and "disabled" not in (btn_proximo.query_selector("..").get_attribute("class") or ""):
-                    btn_proximo.click()
-                    pagina_atual += 1
-                    time.sleep(2)
-                else:
-                    break
-            except:
+            if not aulas_pagina:
+                print("🛑 Nenhuma aula válida encontrada - finalizando")
                 break
+            
+            resultado.extend(aulas_pagina)
+            print(f"✅ {len(aulas_pagina)} aulas coletadas nesta página")
+            
+            # Tentar avançar para próxima página
+            if not avancar_pagina(pagina):
+                break
+            
+            pagina_atual += 1
         
-        print(f"✅ {len(todas_aulas)} aulas coletadas!")
+        # Resumo e envio dos dados
+        print(f"\n📊 COLETA FINALIZADA!")
+        print(f"🎯 Total de aulas coletadas: {len(resultado)}")
+        print(f"📄 Páginas processadas: {pagina_atual}")
+        print(f"⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
         
-        # Processar frequências
-        if todas_aulas:
-            print("⚡ Processando frequências...")
-            resultado = []
+        if resultado:
+            # Calcular estatísticas
+            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado)
+            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado)
+            aulas_com_ata = sum(1 for linha in resultado if linha[9] == "OK")
             
-            for i, aula in enumerate(todas_aulas):
-                print(f"🎯 Aula {i+1}/{len(todas_aulas)}: {aula['data']} - {aula['curso']}")
-                
-                # Processar frequência
-                freq_data = collector.processar_frequencia_otimizada(
-                    pagina, aula['aula_id'], aula['professor_id']
-                )
-                
-                # ATA via request
-                session = requests.Session()
-                cookies_dict = {c['name']: c['value'] for c in contexto.cookies()}
-                session.cookies.update(cookies_dict)
-                
-                url_ata = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula['aula_id']}"
-                try:
-                    resp_ata = session.get(url_ata, timeout=5)
-                    ata_status = "OK" if "ATA DA AULA" in resp_ata.text else "FANTASMA"
-                except:
-                    ata_status = "ERRO"
-                
-                # Montar linha resultado
-                linha = [
-                    aula['congregacao'], aula['curso'], aula['turma'], aula['data'],
-                    "; ".join(freq_data['presentes_ids']),
-                    "; ".join(freq_data['presentes_nomes']),
-                    "; ".join(freq_data['ausentes_ids']),
-                    "; ".join(freq_data['ausentes_nomes']),
-                    freq_data['tem_presenca'],
-                    ata_status
-                ]
-                
-                resultado.append(linha)
-                
-                # Log resumo
-                total = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
-                print(f"      ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total}) - {freq_data['metodo']}")
-                
-                # Pausa entre aulas
-                time.sleep(0.2)
+            print(f"👥 Presenças registradas: {total_presentes}")
+            print(f"❌ Ausências registradas: {total_ausentes}")
+            print(f"📝 Aulas com ATA: {aulas_com_ata}/{len(resultado)}")
             
-            # Salvar resultados
-            tempo_total = (time.time() - tempo_inicio) / 60
+            # Preparar dados para envio
+            headers = [
+                "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+                "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+            ]
             
-            print(f"\n🎉 COLETA FINALIZADA!")
-            print(f"⏱️ Tempo: {tempo_total:.1f} minutos")
-            print(f"🎯 Aulas: {len(resultado)}")
-            print(f"⚡ Velocidade: {len(resultado) / tempo_total:.1f} aulas/min")
+            body = {
+                "tipo": "historico_aulas_2sem_2025_otimizado",
+                "dados": resultado,
+                "headers": headers,
+                "resumo": {
+                    "total_aulas": len(resultado),
+                    "periodo": f"{DATA_INICIO} a {DATA_FIM}",
+                    "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
+                    "paginas_processadas": pagina_atual,
+                    "total_presentes": total_presentes,
+                    "total_ausentes": total_ausentes,
+                    "aulas_com_ata": aulas_com_ata,
+                    "versao": "otimizada_http_direto"
+                }
+            }
             
             # Enviar para Google Sheets
-            if resultado:
-                headers = [
-                    "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
-                    "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
-                ]
-                
-                body = {
-                    "tipo": "historico_aulas_ajax_interceptor",
-                    "dados": resultado,
-                    "headers": headers,
-                    "resumo": {
-                        "total_aulas": len(resultado),
-                        "tempo_processamento": f"{tempo_total:.1f} minutos",
-                        "metodo": "ajax_interceptor"
-                    }
-                }
-                
-                try:
-                    resposta = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-                    print(f"✅ Enviado! Status: {resposta.status_code}")
-                except Exception as e:
-                    print(f"❌ Erro ao enviar: {e}")
+            try:
+                print("\n📤 Enviando para Google Sheets...")
+                resposta = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+                print("✅ Dados enviados!")
+                print(f"Status: {resposta.status_code}")
+                print(f"Resposta: {resposta.text}")
+            except Exception as e:
+                print(f"❌ Erro no envio: {e}")
+        else:
+            print("ℹ️ Nenhuma aula encontrada no período")
         
-        contexto.close()
         navegador.close()
 
 if __name__ == "__main__":
-    main_ajax_interceptor()
+    main()
