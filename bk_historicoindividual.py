@@ -17,7 +17,7 @@ EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_LISTAGEM_ALUNOS = "https://musical.congregacao.org.br/alunos/listagem"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxVW_i69_DL_UQQqVjxLsAcEv5edorXSD4g-PZUu4LC9TkGd9yEfNiTL0x92ELDNm8M/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzSMrefJ-RJvjBNLVnqB2iXdBpoxM5WwuDUbl3rKelFplv898DKu9R9oWYXGgVxNjie/exec'
 
 # Lock para thread safety
 print_lock = Lock()
