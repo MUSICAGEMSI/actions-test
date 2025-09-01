@@ -45,11 +45,18 @@ def data_esta_no_periodo(data_str):
         inicio = datetime.strptime("04/07/2025", "%d/%m/%Y")
         fim = datetime.strptime("31/12/2025", "%d/%m/%Y")
         
+        # Debug das comparações
+        print(f"      🔍 Debug data: {data_str} -> {data_obj.strftime('%d/%m/%Y')}")
+        print(f"         Período: {inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}")
+        
         if inicio <= data_obj <= fim:
+            print(f"         ✅ ESTÁ NO PERÍODO!")
             return True, False  # Está no período
         elif data_obj < inicio:
+            print(f"         🛑 ANTERIOR AO PERÍODO!")
             return False, True  # Data anterior ao período - PARAR!
         else:
+            print(f"         ⏭️ POSTERIOR AO PERÍODO!")
             return False, False  # Data posterior ao período
         
     except Exception as e:
@@ -367,6 +374,7 @@ def processar_pagina_atual(pagina, session):
         linhas = pagina.query_selector_all("table tbody tr")
         aulas_processadas = []
         deve_parar = False
+        aulas_no_periodo_encontradas = 0
         
         print(f"   📊 Processando {len(linhas)} linhas...")
         
@@ -386,8 +394,11 @@ def processar_pagina_atual(pagina, session):
                 break
             
             if not no_periodo:
+                # Aula fora do período - pular silenciosamente
                 continue
             
+            # AULA ESTÁ NO PERÍODO - PROCESSAR!
+            aulas_no_periodo_encontradas += 1
             print(f"      🎯 Processando: {dados_aula['data']} - {dados_aula['curso']}")
             
             # Extrair frequência via HTTP (NOVO MÉTODO - SEM MODAL!)
@@ -418,6 +429,9 @@ def processar_pagina_atual(pagina, session):
             
             # Pausa entre requisições para não sobrecarregar servidor
             time.sleep(0.1)
+        
+        print(f"   📋 Aulas do período processadas nesta página: {aulas_no_periodo_encontradas}")
+        print(f"   📦 Aulas adicionadas ao resultado: {len(aulas_processadas)}")
         
         return aulas_processadas, deve_parar
         
@@ -523,19 +537,34 @@ def main():
             # Processar página atual
             aulas_pagina, deve_parar = processar_pagina_atual(pagina, session)
             
+            print(f"🔍 Debug: aulas_pagina retornadas = {len(aulas_pagina)}")
+            
             if deve_parar:
+                print("🛑 Parando coleta por data anterior ao período")
                 deve_parar_coleta = True
+                # MAS AINDA ADICIONAR AS AULAS COLETADAS DESTA PÁGINA!
+                if aulas_pagina:
+                    resultado.extend(aulas_pagina)
+                    print(f"✅ {len(aulas_pagina)} aulas finais adicionadas antes de parar")
                 break
             
             if not aulas_pagina:
-                print("🛑 Nenhuma aula válida encontrada - finalizando")
-                break
+                print("⚠️ Nenhuma aula válida encontrada nesta página")
+                # Se não tem aulas válidas, pode ser que todas sejam posteriores
+                # Vamos tentar a próxima página
+                if not avancar_pagina(pagina):
+                    print("🛑 Não há mais páginas - finalizando")
+                    break
+                pagina_atual += 1
+                continue
             
             resultado.extend(aulas_pagina)
             print(f"✅ {len(aulas_pagina)} aulas coletadas nesta página")
+            print(f"📊 Total acumulado: {len(resultado)} aulas")
             
             # Tentar avançar para próxima página
             if not avancar_pagina(pagina):
+                print("🛑 Não há mais páginas - finalizando")
                 break
             
             pagina_atual += 1
