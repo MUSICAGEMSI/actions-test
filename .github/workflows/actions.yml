@@ -1,4 +1,4 @@
-name: Executar Scripts Diariamente
+name: Musical Analytics - Execução Diária
 
 on:
   schedule:
@@ -8,15 +8,7 @@ on:
 jobs:
   run-scripts:
     runs-on: ubuntu-latest
-    env:
-      # Credenciais existentes
-      LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
-      SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
-      
-      # Novas credenciais Supabase
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-      
+    
     steps:
       - name: Clonar o repositório
         uses: actions/checkout@v4
@@ -34,42 +26,131 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
             
-      - name: Instalar dependências
+      - name: Instalar dependências básicas
         run: |
           python -m pip install --upgrade pip
-          pip install playwright beautifulsoup4 requests python-dotenv supabase
-          pip install -r requirements.txt || echo "Arquivo requirements.txt não encontrado"
+          echo "📦 Instalando dependências básicas..."
+          
+      - name: Instalar dependências do requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "📋 Arquivo requirements.txt encontrado. Instalando..."
+            pip install -r requirements.txt
+          else
+            echo "⚠️ Arquivo requirements.txt não encontrado. Instalando dependências manualmente..."
+            pip install supabase pandas python-dotenv matplotlib seaborn openpyxl numpy
+          fi
+          
+      - name: Instalar dependências web scraping
+        run: |
+          pip install playwright beautifulsoup4 requests
           
       - name: Instalar navegadores do Playwright
-        run: python -m playwright install chromium
-        
+        run: |
+          python -m playwright install chromium
+          
+      - name: Criar arquivo de credenciais
+        run: |
+          echo "🔐 Criando arquivo de credenciais..."
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > credencial.env
+          echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_KEY }}" >> credencial.env
+          echo "LOGIN_MUSICAL=${{ secrets.LOGIN_MUSICAL }}" >> credencial.env
+          echo "SENHA_MUSICAL=${{ secrets.SENHA_MUSICAL }}" >> credencial.env
+          
+      - name: Verificar dependências instaladas
+        run: |
+          echo "🔍 Verificando dependências..."
+          python -c "
+          import sys
+          try:
+              import pandas as pd
+              print('✅ pandas:', pd.__version__)
+          except ImportError as e:
+              print('❌ pandas não encontrado:', e)
+              sys.exit(1)
+          
+          try:
+              import supabase
+              print('✅ supabase: OK')
+          except ImportError as e:
+              print('❌ supabase não encontrado:', e)
+              sys.exit(1)
+              
+          try:
+              from dotenv import load_dotenv
+              print('✅ python-dotenv: OK')
+          except ImportError as e:
+              print('❌ python-dotenv não encontrado:', e)
+              sys.exit(1)
+          
+          print('✅ Todas as dependências OK!')
+          "
+          
       - name: Verificar conexão Supabase
         run: |
           python -c "
           import os
+          from dotenv import load_dotenv
           from supabase import create_client
+          
+          load_dotenv('credencial.env')
+          
           try:
               url = os.environ.get('SUPABASE_URL')
-              key = os.environ.get('SUPABASE_KEY')
+              key = os.environ.get('SUPABASE_ANON_KEY')
+              
               if not url or not key:
                   raise Exception('Credenciais Supabase não encontradas')
+              
               supabase = create_client(url, key)
-              print('✅ Conexão Supabase OK')
+              print('✅ Conexão Supabase estabelecida com sucesso!')
+              
           except Exception as e:
-              print(f'❌ Erro Supabase: {e}')
+              print(f'❌ Erro na conexão Supabase: {e}')
               exit(1)
           "
           
-      - name: Executar script_historicoaulas.py
-        run: python script_historicoaulas.py
-        continue-on-error: false
-        
-      - name: Backup em caso de erro
-        if: failure()
+      - name: Executar script principal
         run: |
-          echo "Script falhou. Verificar logs acima."
-          # Opcional: enviar notificação por email/slack
+          echo "🚀 Iniciando execução do script..."
+          python script_historicoaulas.py
+          
+      - name: Executar análise musical (se existir)
+        run: |
+          if [ -f musical_analytics.py ]; then
+            echo "📊 Executando análise musical..."
+            python musical_analytics.py
+          else
+            echo "⚠️ Arquivo musical_analytics.py não encontrado"
+          fi
+        continue-on-error: true
+        
+      - name: Upload de artefatos gerados
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: relatorios-musicais-${{ github.run_number }}
+          path: |
+            *.xlsx
+            *.png
+            *.log
+            *.csv
+          retention-days: 30
+          
+      - name: Limpeza de arquivos sensíveis
+        if: always()
+        run: |
+          echo "🧹 Limpando arquivos sensíveis..."
+          rm -f credencial.env
           
       - name: Log de sucesso
         if: success()
-        run: echo "✅ Execução concluída com sucesso!"
+        run: |
+          echo "✅ Execução concluída com sucesso!"
+          echo "📅 Data/Hora: $(date)"
+          
+      - name: Log de erro
+        if: failure()
+        run: |
+          echo "❌ Script falhou. Verificar logs acima."
+          echo "📅 Data/Hora: $(date)"
