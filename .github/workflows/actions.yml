@@ -60,8 +60,8 @@ jobs:
               exit(1)
           "
           
-      - name: Executar script_históricoindividual.py
-        run: python script_historicoindividual.py
+      - name: Executar script_historicoaulas.py
+        run: python script_historicoaulas.py
         continue-on-error: false
         
       - name: Backup em caso de erro
