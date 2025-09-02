@@ -1,8 +1,9 @@
-# script_historico_alunos_otimizado.py
+# script_historico_alunos_supabase.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from supabase import create_client, Client
 import os
 import re
 import requests
@@ -13,11 +14,16 @@ from datetime import datetime
 import concurrent.futures
 from threading import Lock
 
+# Credenciais originais
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
+
+# Novas credenciais Supabase - adicione no seu credencial.env
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_LISTAGEM_ALUNOS = "https://musical.congregacao.org.br/alunos/listagem"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxVW_i69_DL_UQQqVjxLsAcEv5edorXSD4g-PZUu4LC9TkGd9yEfNiTL0x92ELDNm8M/exec'
 
 # Lock para thread safety
 print_lock = Lock()
@@ -27,6 +33,219 @@ def safe_print(*args, **kwargs):
     with print_lock:
         print(*args, **kwargs)
 
+def init_supabase():
+    """Inicializa cliente Supabase"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise Exception("SUPABASE_URL ou SUPABASE_KEY não definidos no .env")
+    
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def parsear_nome_info(nome_completo):
+    """
+    Extrai informações do nome completo:
+    Ex: "ADILSON THIAGO VIRTIS DOS SANTOS - CASADO/41"
+    """
+    # Separar nome do resto
+    if ' - ' in nome_completo:
+        nome, info_extra = nome_completo.split(' - ', 1)
+        
+        # Extrair estado civil e idade
+        estado_civil = ""
+        idade = None
+        
+        if '/' in info_extra:
+            estado_civil = info_extra.split('/')[0].strip()
+            try:
+                idade = int(info_extra.split('/')[1].strip())
+            except:
+                pass
+        else:
+            estado_civil = info_extra.strip()
+        
+        return nome.strip(), estado_civil, idade
+    
+    return nome_completo.strip(), "", None
+
+def parsear_endereco(comum_info):
+    """
+    Extrai informações de endereço:
+    Ex: "Jardim Interlagos | BR-SP-CAMPINAS-HORTOLÂNDIA"
+    """
+    endereco = ""
+    cidade = ""
+    estado = ""
+    
+    if '|' in comum_info:
+        endereco = comum_info.split('|')[0].strip()
+        localizacao = comum_info.split('|')[1].strip()
+        
+        # Parse da localização: BR-SP-CAMPINAS-HORTOLÂNDIA
+        if '-' in localizacao:
+            partes = localizacao.split('-')
+            if len(partes) >= 2:
+                estado = partes[1]  # SP
+            if len(partes) >= 4:
+                cidade = f"{partes[2]}-{partes[3]}"  # CAMPINAS-HORTOLÂNDIA
+    else:
+        endereco = comum_info
+    
+    return endereco, cidade, estado
+
+def converter_datas_para_array(datas_str):
+    """Converte string de datas separadas por ';' para array de datas"""
+    if not datas_str:
+        return []
+    
+    datas = []
+    for data_str in datas_str.split(';'):
+        data_str = data_str.strip()
+        if data_str:
+            try:
+                # Converter de DD/MM/YYYY para YYYY-MM-DD (formato PostgreSQL)
+                data_obj = datetime.strptime(data_str, '%d/%m/%Y')
+                datas.append(data_obj.strftime('%Y-%m-%d'))
+            except:
+                continue  # Ignorar datas inválidas
+    
+    return datas
+
+def inserir_pessoa_supabase(supabase, dados_pessoa):
+    """Insere uma pessoa no Supabase"""
+    try:
+        # Verificar se pessoa já existe
+        resultado_busca = supabase.table('pessoas').select('id').eq('id_comum', dados_pessoa['id_comum']).execute()
+        
+        if resultado_busca.data:
+            # Atualizar pessoa existente
+            pessoa_id = resultado_busca.data[0]['id']
+            supabase.table('pessoas').update(dados_pessoa).eq('id', pessoa_id).execute()
+            safe_print(f"      ✓ Pessoa {dados_pessoa['nome'][:30]}... atualizada")
+        else:
+            # Inserir nova pessoa
+            resultado = supabase.table('pessoas').insert(dados_pessoa).execute()
+            pessoa_id = resultado.data[0]['id']
+            safe_print(f"      ✓ Pessoa {dados_pessoa['nome'][:30]}... inserida")
+        
+        return pessoa_id
+        
+    except Exception as e:
+        safe_print(f"      ⚠️ Erro ao inserir pessoa {dados_pessoa['nome'][:30]}...: {e}")
+        return None
+
+def inserir_escalas_supabase(supabase, pessoa_id, escalas, escalas_grupo):
+    """Insere escalas de uma pessoa no Supabase"""
+    try:
+        # Limpar escalas anteriores dessa pessoa
+        supabase.table('escalas').delete().eq('pessoa_id', pessoa_id).execute()
+        
+        total_escalas = 0
+        
+        # Escalas individuais
+        datas_escalas = converter_datas_para_array(escalas)
+        for data_escala in datas_escalas:
+            supabase.table('escalas').insert({
+                'pessoa_id': pessoa_id,
+                'data_escala': data_escala,
+                'tipo_escala': 'INDIVIDUAL'
+            }).execute()
+            total_escalas += 1
+        
+        # Escalas em grupo
+        datas_escalas_grupo = converter_datas_para_array(escalas_grupo)
+        for data_escala in datas_escalas_grupo:
+            supabase.table('escalas').insert({
+                'pessoa_id': pessoa_id,
+                'data_escala': data_escala,
+                'tipo_escala': 'GRUPO'
+            }).execute()
+            total_escalas += 1
+        
+        if total_escalas > 0:
+            safe_print(f"      ✓ {total_escalas} escalas inseridas")
+        
+        return total_escalas
+        
+    except Exception as e:
+        safe_print(f"      ⚠️ Erro ao inserir escalas: {e}")
+        return 0
+
+def processar_e_inserir_dados(supabase, linha_dados):
+    """Processa uma linha de dados e insere no Supabase"""
+    try:
+        # Mapear dados da linha para estrutura do banco
+        nome_completo = linha_dados[0]
+        id_comum = int(linha_dados[1]) if linha_dados[1] else None
+        comum_info = linha_dados[2]
+        ministerio = linha_dados[3]
+        instrumento = linha_dados[4]
+        nivel = linha_dados[5]
+        mts = linha_dados[6]
+        mts_grupo = linha_dados[7]
+        msa = linha_dados[8]
+        msa_grupo = linha_dados[9]
+        provas = linha_dados[10]
+        metodo = linha_dados[11]
+        hinario = linha_dados[12]
+        hinario_grupo = linha_dados[13]
+        escalas = linha_dados[14]
+        escalas_grupo = linha_dados[15]
+        
+        # Parsear informações
+        nome, estado_civil, idade = parsear_nome_info(nome_completo)
+        endereco, cidade, estado = parsear_endereco(comum_info)
+        
+        # Preparar dados da pessoa
+        dados_pessoa = {
+            'nome': nome,
+            'id_comum': id_comum,
+            'estado_civil': estado_civil,
+            'idade': idade,
+            'endereco': endereco,
+            'cidade': cidade,
+            'estado': estado,
+            'pais': 'BR',
+            'ministerio': ministerio,
+            'instrumento': instrumento,
+            'nivel': nivel,
+            'mts': mts,
+            'mts_grupo': mts_grupo,
+            'msa': msa,
+            'msa_grupo': msa_grupo,
+            'provas': provas,
+            'metodo': metodo,
+            'hinario': hinario,
+            'hinario_grupo': hinario_grupo,
+            'status': 'CANDIDATO(A)'
+        }
+        
+        # Inserir pessoa
+        pessoa_id = inserir_pessoa_supabase(supabase, dados_pessoa)
+        
+        if pessoa_id:
+            # Inserir escalas
+            total_escalas = inserir_escalas_supabase(supabase, pessoa_id, escalas, escalas_grupo)
+            return 1, total_escalas
+        
+        return 0, 0
+        
+    except Exception as e:
+        safe_print(f"      ⚠️ Erro ao processar linha: {e}")
+        return 0, 0
+
+def log_coleta_supabase(supabase, total_registros, tempo_execucao, status="SUCESSO", observacoes=""):
+    """Registra log da coleta no Supabase"""
+    try:
+        supabase.table('logs_coleta').insert({
+            'total_registros': total_registros,
+            'tempo_execucao': f"{tempo_execucao:.2f} minutes",
+            'status': status,
+            'observacoes': observacoes
+        }).execute()
+        safe_print("📋 Log de coleta registrado")
+    except Exception as e:
+        safe_print(f"⚠️ Erro ao registrar log: {e}")
+
+# [MANTER TODAS AS FUNÇÕES ORIGINAIS DE SCRAPING]
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright para usar em requests"""
     cookies = pagina.context.cookies()
@@ -321,6 +540,14 @@ def criar_sessoes_multiplas(cookies_dict, num_sessoes=3):
 def main():
     tempo_inicio = time.time()
     
+    # Inicializar Supabase
+    try:
+        supabase = init_supabase()
+        safe_print("✅ Conexão com Supabase estabelecida")
+    except Exception as e:
+        safe_print(f"❌ Erro ao conectar com Supabase: {e}")
+        return
+    
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
@@ -358,13 +585,10 @@ def main():
             navegador.close()
             return
         
-        # Teste com alguns alunos primeiro (opcional)
-        # alunos = alunos[:50]  # Descomente para testar com apenas 50 alunos
-        
         print(f"📊 Processando {len(alunos)} alunos...")
         
         # Dividir alunos em lotes menores
-        batch_size = 10  # Lotes menores para melhor controle
+        batch_size = 10
         lotes = [alunos[i:i + batch_size] for i in range(0, len(alunos), batch_size)]
         
         resultado_final = []
@@ -408,76 +632,51 @@ def main():
                 resultado_lote = future.result()
                 resultado_final.extend(resultado_lote)
         
-        print(f"\n📊 Processamento concluído: {len(resultado_final)} alunos")
-        tempo_total = (time.time() - tempo_inicio) / 60
-        print(f"⏱️ Tempo total: {tempo_total:.1f} minutos")
+        print(f"\n📊 Processamento de scraping concluído: {len(resultado_final)} alunos")
         
-        # Preparar dados para envio
-        headers = [
-            "NOME", "ID", "COMUM", "MINISTERIO", "INSTRUMENTO", "NIVEL",
-            "MTS", "MTS GRUPO", "MSA", "MSA GRUPO", "PROVAS", "MÉTODO",
-            "HINÁRIO", "HINÁRIO GRUPO", "ESCALAS", "ESCALAS GRUPO"
-        ]
+        # NOVA PARTE: Inserir dados no Supabase
+        print("💾 Inserindo dados no Supabase...")
+        pessoas_inseridas = 0
+        total_escalas = 0
         
-        # Calcular estatísticas
-        total_datas = 0
-        stats_secoes = {}
-        
-        for linha in resultado_final:
-            for i, campo_data in enumerate(linha[6:]):
-                secao_nome = headers[i + 6]
-                if campo_data:
-                    num_datas = len(campo_data.split('; '))
-                    stats_secoes[secao_nome] = stats_secoes.get(secao_nome, 0) + num_datas
-                    total_datas += num_datas
-        
-        body = {
-            "tipo": "historico_alunos",
-            "dados": resultado_final,
-            "headers": headers,
-            "resumo": {
-                "total_alunos": len(resultado_final),
-                "tempo_processamento": f"{tempo_total:.1f} minutos",
-                "total_datas": total_datas,
-                "media_datas_por_aluno": f"{total_datas/len(resultado_final):.1f}" if resultado_final else "0",
-                "stats_secoes": stats_secoes
-            }
-        }
-        
-        # Enviar dados para Apps Script
-        try:
-            print("📤 Enviando dados para Google Sheets...")
-            resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-            print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
-            print(f"Resposta: {resposta_post.text[:200]}...")
-        except Exception as e:
-            print(f"❌ Erro ao enviar para Apps Script: {e}")
+        for i, linha in enumerate(resultado_final):
+            pessoas_inc, escalas_inc = processar_e_inserir_dados(supabase, linha)
+            pessoas_inseridas += pessoas_inc
+            total_escalas += escalas_inc
             
-            # Salvar backup local em caso de erro
-            import json
-            with open(f'backup_historico_{int(time.time())}.json', 'w', encoding='utf-8') as f:
-                json.dump(body, f, ensure_ascii=False, indent=2)
-            print("💾 Backup salvo localmente")
+            # Progress update
+            if (i + 1) % 50 == 0:
+                progresso = ((i + 1) / len(resultado_final)) * 100
+                print(f"   💾 Progresso inserção: {i + 1}/{len(resultado_final)} ({progresso:.1f}%)")
+        
+        tempo_total = (time.time() - tempo_inicio) / 60
+        
+        # Registrar log da coleta
+        log_coleta_supabase(
+            supabase, 
+            pessoas_inseridas, 
+            tempo_total,
+            "SUCESSO",
+            f"Processados {len(resultado_final)} registros, {total_escalas} escalas inseridas"
+        )
         
         # Resumo final
-        print(f"\n📈 RESUMO FINAL:")
-        print(f"   🎯 Total de alunos processados: {len(resultado_final)}")
-        print(f"   📅 Total de datas coletadas: {total_datas}")
-        print(f"   📊 Média de datas por aluno: {total_datas/len(resultado_final):.1f}")
+        print(f"\n🎉 PROCESSAMENTO CONCLUÍDO!")
+        print(f"   📊 Total de registros processados: {len(resultado_final)}")
+        print(f"   👥 Pessoas inseridas/atualizadas: {pessoas_inseridas}")
+        print(f"   📅 Escalas inseridas: {total_escalas}")
         print(f"   ⏱️ Tempo total: {tempo_total:.1f} minutos")
-        print(f"   🚀 Velocidade: {len(resultado_final)/tempo_total:.1f} alunos/min")
-        
-        if stats_secoes:
-            print("   📋 Datas por seção:")
-            for secao, count in sorted(stats_secoes.items(), key=lambda x: x[1], reverse=True):
-                if count > 0:
-                    print(f"      - {secao}: {count} datas")
+        print(f"   🚀 Velocidade: {len(resultado_final)/tempo_total:.1f} registros/min")
         
         navegador.close()
 
 if __name__ == "__main__":
     if not EMAIL or not SENHA:
         print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
+        exit(1)
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("❌ Erro: SUPABASE_URL ou SUPABASE_KEY não definidos.")
         exit(1)
     
     main()
