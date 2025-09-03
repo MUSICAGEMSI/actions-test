@@ -8,149 +8,212 @@ on:
 jobs:
   run-scripts:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     
     steps:
       - name: Clonar o repositório
         uses: actions/checkout@v4
         
       - name: Configurar Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
           
-      - name: Cache de dependências
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-            
-      - name: Instalar dependências básicas
+      - name: Verificar arquivos do projeto
         run: |
-          python -m pip install --upgrade pip
-          echo "📦 Instalando dependências básicas..."
-          
-      - name: Instalar dependências do requirements.txt
-        run: |
+          echo "📁 Arquivos encontrados no repositório:"
+          ls -la
+          echo ""
+          echo "🔍 Procurando por arquivos Python:"
+          find . -name "*.py" -type f
+          echo ""
           if [ -f requirements.txt ]; then
-            echo "📋 Arquivo requirements.txt encontrado. Instalando..."
-            pip install -r requirements.txt
+            echo "📋 Conteúdo do requirements.txt:"
+            cat requirements.txt
           else
-            echo "⚠️ Arquivo requirements.txt não encontrado. Instalando dependências manualmente..."
-            pip install supabase pandas python-dotenv matplotlib seaborn openpyxl numpy
+            echo "⚠️ Arquivo requirements.txt não encontrado"
           fi
           
-      - name: Instalar dependências web scraping
+      - name: Instalar dependências
         run: |
-          pip install playwright beautifulsoup4 requests
+          python -m pip install --upgrade pip setuptools wheel
           
-      - name: Instalar navegadores do Playwright
+          # Verificar se requirements.txt existe
+          if [ -f requirements.txt ]; then
+            echo "📦 Instalando dependências do requirements.txt..."
+            pip install -r requirements.txt
+          else
+            echo "📦 Instalando dependências manualmente..."
+            pip install supabase==2.9.1 pandas==2.2.3 python-dotenv==1.0.1
+            pip install matplotlib==3.9.2 seaborn==0.13.2 openpyxl==3.1.5
+            pip install playwright==1.48.0 beautifulsoup4==4.12.3 requests==2.32.3
+          fi
+          
+          # Instalar playwright browsers
+          python -m playwright install chromium --with-deps
+          
+      - name: Verificar instalação das dependências
         run: |
-          python -m playwright install chromium
+          echo "🔍 Verificando dependências instaladas..."
+          python -c "
+          import sys
+          
+          # Lista de dependências para verificar
+          deps = [
+              ('pandas', 'pandas'),
+              ('supabase', 'supabase'),  
+              ('dotenv', 'python-dotenv'),
+              ('matplotlib.pyplot', 'matplotlib'),
+              ('seaborn', 'seaborn'),
+              ('openpyxl', 'openpyxl'),
+              ('requests', 'requests'),
+              ('playwright', 'playwright')
+          ]
+          
+          print('📦 Status das dependências:')
+          all_ok = True
+          
+          for module, package in deps:
+              try:
+                  mod = __import__(module)
+                  version = getattr(mod, '__version__', 'N/A')
+                  print(f'✅ {package}: {version}')
+              except ImportError as e:
+                  print(f'❌ {package}: NÃO INSTALADO ({e})')
+                  all_ok = False
+          
+          if not all_ok:
+              print('❌ Algumas dependências faltam!')
+              sys.exit(1)
+          else:
+              print('✅ Todas as dependências estão OK!')
+          "
           
       - name: Criar arquivo de credenciais
         run: |
           echo "🔐 Criando arquivo de credenciais..."
-          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > credencial.env
-          echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_KEY }}" >> credencial.env
-          echo "LOGIN_MUSICAL=${{ secrets.LOGIN_MUSICAL }}" >> credencial.env
-          echo "SENHA_MUSICAL=${{ secrets.SENHA_MUSICAL }}" >> credencial.env
+          cat > credencial.env << EOF
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY=${{ secrets.SUPABASE_KEY }}
+          LOGIN_MUSICAL=${{ secrets.LOGIN_MUSICAL }}
+          SENHA_MUSICAL=${{ secrets.SENHA_MUSICAL }}
+          EOF
           
-      - name: Verificar dependências instaladas
+          # Verificar se as variáveis foram definidas (sem mostrar valores)
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "⚠️ SUPABASE_URL não definida"
+          else
+            echo "✅ SUPABASE_URL definida"
+          fi
+          
+          if [ -z "${{ secrets.SUPABASE_KEY }}" ]; then
+            echo "⚠️ SUPABASE_KEY não definida"  
+          else
+            echo "✅ SUPABASE_KEY definida"
+          fi
+          
+      - name: Testar conexão Supabase
         run: |
-          echo "🔍 Verificando dependências..."
-          python -c "
-          import sys
-          try:
-              import pandas as pd
-              print('✅ pandas:', pd.__version__)
-          except ImportError as e:
-              print('❌ pandas não encontrado:', e)
-              sys.exit(1)
-          
-          try:
-              import supabase
-              print('✅ supabase: OK')
-          except ImportError as e:
-              print('❌ supabase não encontrado:', e)
-              sys.exit(1)
-              
-          try:
-              from dotenv import load_dotenv
-              print('✅ python-dotenv: OK')
-          except ImportError as e:
-              print('❌ python-dotenv não encontrado:', e)
-              sys.exit(1)
-          
-          print('✅ Todas as dependências OK!')
-          "
-          
-      - name: Verificar conexão Supabase
-        run: |
+          echo "🔗 Testando conexão com Supabase..."
           python -c "
           import os
           from dotenv import load_dotenv
           from supabase import create_client
           
+          # Carregar variáveis do arquivo
           load_dotenv('credencial.env')
           
           try:
               url = os.environ.get('SUPABASE_URL')
               key = os.environ.get('SUPABASE_ANON_KEY')
               
-              if not url or not key:
-                  raise Exception('Credenciais Supabase não encontradas')
+              if not url:
+                  raise Exception('SUPABASE_URL não encontrada')
+              if not key:
+                  raise Exception('SUPABASE_ANON_KEY não encontrada')
               
+              # Testar conexão
               supabase = create_client(url, key)
+              
+              # Fazer uma consulta simples para testar
+              result = supabase.table('aulas').select('count').limit(1).execute()
+              
               print('✅ Conexão Supabase estabelecida com sucesso!')
+              print(f'📊 Banco de dados acessível')
               
           except Exception as e:
               print(f'❌ Erro na conexão Supabase: {e}')
+              import traceback
+              traceback.print_exc()
               exit(1)
           "
           
       - name: Executar script principal
+        id: main-script
         run: |
-          echo "🚀 Iniciando execução do script..."
-          python script_historicoaulas.py
+          echo "🚀 Iniciando execução do script principal..."
+          echo "📅 Data/Hora: $(date)"
           
-      - name: Executar análise musical (se existir)
+          if [ -f script_historicoaulas.py ]; then
+            echo "📝 Executando script_historicoaulas.py..."
+            timeout 20m python script_historicoaulas.py
+          else
+            echo "❌ Arquivo script_historicoaulas.py não encontrado!"
+            ls -la *.py 2>/dev/null || echo "Nenhum arquivo .py encontrado"
+            exit 1
+          fi
+          
+      - name: Executar análise adicional (opcional)
+        if: success()
+        continue-on-error: true
         run: |
           if [ -f musical_analytics.py ]; then
-            echo "📊 Executando análise musical..."
-            python musical_analytics.py
+            echo "📊 Executando análise musical adicional..."
+            timeout 10m python musical_analytics.py
           else
-            echo "⚠️ Arquivo musical_analytics.py não encontrado"
+            echo "ℹ️ Arquivo musical_analytics.py não encontrado (opcional)"
           fi
-        continue-on-error: true
-        
-      - name: Upload de artefatos gerados
+          
+      - name: Listar arquivos gerados
         if: always()
-        uses: actions/upload-artifact@v3
+        run: |
+          echo "📁 Arquivos gerados na execução:"
+          ls -la *.xlsx *.png *.log *.csv 2>/dev/null || echo "Nenhum arquivo de saída encontrado"
+          
+      - name: Upload de relatórios e logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: relatorios-musicais-${{ github.run_number }}
+          name: relatorios-musical-${{ github.run_number }}
           path: |
             *.xlsx
-            *.png
+            *.png  
             *.log
             *.csv
+            *.json
           retention-days: 30
+          if-no-files-found: warn
+          compression-level: 9
           
-      - name: Limpeza de arquivos sensíveis
+      - name: Cleanup - Remover arquivos sensíveis
         if: always()
         run: |
-          echo "🧹 Limpando arquivos sensíveis..."
+          echo "🧹 Removendo arquivos sensíveis..."
           rm -f credencial.env
+          rm -f .env
           
-      - name: Log de sucesso
-        if: success()
+      - name: Resultado da execução
+        if: always()
         run: |
-          echo "✅ Execução concluída com sucesso!"
-          echo "📅 Data/Hora: $(date)"
-          
-      - name: Log de erro
-        if: failure()
-        run: |
-          echo "❌ Script falhou. Verificar logs acima."
-          echo "📅 Data/Hora: $(date)"
+          if [ "${{ steps.main-script.outcome }}" = "success" ]; then
+            echo "✅ Script executado com SUCESSO!"
+            echo "📅 Concluído em: $(date)"
+            echo "🎯 Próxima execução: dia 12 do próximo mês às 12:00 UTC"
+          else
+            echo "❌ Script falhou durante a execução"
+            echo "📅 Falha em: $(date)"
+            echo "🔍 Verifique os logs acima para mais detalhes"
+            exit 1
+          fi
