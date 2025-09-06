@@ -1,448 +1,743 @@
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
-from supabase import create_client, Client
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
-import warnings
-warnings.filterwarnings('ignore')
+import re
+import requests
+import time
+import json
+from bs4 import BeautifulSoup
+from datetime import datetime
 
-# Configurações
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+EMAIL = os.environ.get("LOGIN_MUSICAL")
+SENHA = os.environ.get("SENHA_MUSICAL")
+URL_INICIAL = "https://musical.congregacao.org.br/"
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
 
-if not all([SUPABASE_URL, SUPABASE_KEY]):
-    print("❌ Erro: Credenciais Supabase não encontradas no arquivo .env")
+# PERÍODO DO SEGUNDO SEMESTRE 2025
+DATA_INICIO = "04/07/2025"
+DATA_FIM = "05/09/2025"
+
+if not EMAIL or not SENHA:
+    print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
-# Inicializar Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+def data_esta_no_periodo(data_str):
+    """Verifica se a data está no período do segundo semestre de 2025"""
+    try:
+        # Tentar diferentes formatos de data que podem aparecer
+        formatos_data = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"]
+        data_obj = None
+        
+        for formato in formatos_data:
+            try:
+                data_obj = datetime.strptime(data_str.strip(), formato)
+                # Se for formato de 2 dígitos do ano, assumir 20XX
+                if data_obj.year < 100:
+                    data_obj = data_obj.replace(year=data_obj.year + 2000)
+                break
+            except ValueError:
+                continue
+        
+        if not data_obj:
+            print(f"⚠️ Formato de data não reconhecido: {data_str}")
+            return False, False  # (no_periodo, data_anterior)
+        
+        # Definir limites do período
+        inicio = datetime.strptime("04/07/2025", "%d/%m/%Y")
+        fim = datetime.strptime("31/12/2025", "%d/%m/%Y")
+        
+        if inicio <= data_obj <= fim:
+            return True, False  # Está no período
+        elif data_obj < inicio:
+            return False, True  # Data anterior ao período - PARAR!
+        else:
+            return False, False  # Data posterior ao período
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao verificar data {data_str}: {e}")
+        return False, False
 
-class MusicalAnalytics:
-    def __init__(self):
-        self.supabase = supabase
-        print("📊 Musical Analytics - Sistema de Análise de Dados")
-        print("=" * 50)
-    
-    def obter_estatisticas_gerais(self):
-        """Obtém estatísticas gerais do banco de dados"""
-        try:
-            # Usar a função SQL personalizada
-            result = self.supabase.rpc('get_estatisticas_gerais').execute()
-            
-            if result.data:
-                stats = result.data[0]
-                print("📈 ESTATÍSTICAS GERAIS - 2º Semestre 2025")
-                print("-" * 45)
-                print(f"🎯 Total de Aulas: {stats['total_aulas']:,}")
-                print(f"📝 Aulas com ATA: {stats['aulas_com_ata']:,}")
-                print(f"👥 Total de Registros de Frequência: {stats['total_frequencias']:,}")
-                print(f"✅ Presenças: {stats['total_presentes']:,}")
-                print(f"❌ Ausências: {stats['total_ausentes']:,}")
-                print(f"📊 Percentual de Presença: {stats['percentual_presenca']:.1f}%")
-                print(f"🏛️ Congregações Ativas: {stats['congregacoes_ativas']}")
-                print(f"🎵 Cursos Ativos: {stats['cursos_ativos']}")
-                
-                return stats
-            else:
-                print("⚠️ Nenhum dado encontrado")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erro ao obter estatísticas: {e}")
-            return None
-    
-    def relatorio_por_congregacao(self, limite=10):
-        """Relatório detalhado por congregação"""
-        try:
-            result = self.supabase.table('view_estatisticas_congregacao').select('*').limit(limite).execute()
-            
-            if result.data:
-                df = pd.DataFrame(result.data)
-                
-                print(f"\n🏛️ TOP {len(df)} CONGREGAÇÕES - Atividade Musical")
-                print("-" * 60)
-                
-                for idx, row in df.iterrows():
-                    print(f"{idx+1:2d}. {row['congregacao']}")
-                    print(f"    📚 Aulas: {row['total_aulas']} | ATA: {row['aulas_com_ata']}")
-                    print(f"    👥 Frequências: {row['total_frequencias']} | Presença: {row['percentual_presenca_geral']:.1f}%")
-                    print()
-                
-                return df
-            else:
-                print("⚠️ Nenhum dado de congregação encontrado")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erro no relatório por congregação: {e}")
-            return None
-    
-    def relatorio_por_curso(self, limite=15):
-        """Relatório detalhado por curso"""
-        try:
-            result = self.supabase.table('view_estatisticas_curso').select('*').order('total_aulas', desc=True).limit(limite).execute()
-            
-            if result.data:
-                df = pd.DataFrame(result.data)
-                
-                print(f"\n🎵 TOP {len(df)} CURSOS MAIS ATIVOS")
-                print("-" * 50)
-                
-                for idx, row in df.iterrows():
-                    print(f"{idx+1:2d}. {row['curso']} - {row['congregacao']}")
-                    print(f"    📚 Aulas: {row['total_aulas']} | ATA: {row['aulas_com_ata']}")
-                    print(f"    👥 Alunos: {row['total_frequencias']} | Presença: {row['percentual_presenca']:.1f}%")
-                    print()
-                
-                return df
-            else:
-                print("⚠️ Nenhum dado de curso encontrado")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erro no relatório por curso: {e}")
-            return None
-    
-    def evolucao_mensal(self):
-        """Análise da evolução mensal"""
-        try:
-            result = self.supabase.table('view_estatisticas_mensais').select('*').order('mes').execute()
-            
-            if result.data:
-                df = pd.DataFrame(result.data)
-                
-                print(f"\n📅 EVOLUÇÃO MENSAL - 2º Semestre 2025")
-                print("-" * 45)
-                
-                for idx, row in df.iterrows():
-                    mes_nome = self.obter_nome_mes(row['mes_texto'])
-                    print(f"📅 {mes_nome}:")
-                    print(f"   📚 Aulas: {row['total_aulas']} | ATA: {row['aulas_com_ata']}")
-                    print(f"   👥 Frequências: {row['total_frequencias']}")
-                    print(f"   📊 Presença: {row['percentual_presenca']:.1f}%")
-                    print()
-                
-                return df
-            else:
-                print("⚠️ Nenhum dado mensal encontrado")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erro na evolução mensal: {e}")
-            return None
-    
-    def obter_nome_mes(self, mes_codigo):
-        """Converte código do mês para nome"""
-        meses = {
-            '2025-07': 'Julho 2025',
-            '2025-08': 'Agosto 2025', 
-            '2025-09': 'Setembro 2025',
-            '2025-10': 'Outubro 2025',
-            '2025-11': 'Novembro 2025',
-            '2025-12': 'Dezembro 2025'
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright para usar em requests"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def extrair_detalhes_aula(session, aula_id):
+    """Extrai detalhes da aula via requests para verificar ATA"""
+    try:
+        url_detalhes = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Referer': 'https://musical.congregacao.org.br/aulas_abertas/listagem',
         }
-        return meses.get(mes_codigo, mes_codigo)
-    
-    def identificar_problemas(self):
-        """Identifica possíveis problemas nos dados"""
-        print(f"\n🔍 ANÁLISE DE QUALIDADE DOS DADOS")
-        print("-" * 40)
         
-        try:
-            # Aulas sem frequência
-            result = self.supabase.table('aulas').select('*').eq('status_frequencia', 'VAZIA').gte('data_aula', '2025-07-04').lte('data_aula', '2025-12-31').execute()
-            aulas_sem_freq = len(result.data) if result.data else 0
+        resp = session.get(url_detalhes, headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            # Buscar por "ATA DA AULA" no conteúdo
+            if "ATA DA AULA" in resp.text:
+                return "OK"
+            else:
+                return "FANTASMA"
+        
+        return "ERRO"
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair detalhes da aula {aula_id}: {e}")
+        return "ERRO"
+
+def processar_frequencia_modal(pagina, aula_id, professor_id):
+    """Processa a frequência após abrir o modal"""
+    try:
+        # Aguardar o modal carregar completamente
+        pagina.wait_for_selector("table.table-bordered tbody tr", timeout=5000)
+        
+        presentes_ids = []
+        presentes_nomes = []
+        ausentes_ids = []
+        ausentes_nomes = []
+        
+        # Extrair todas as linhas da tabela de frequência
+        linhas = pagina.query_selector_all("table.table-bordered tbody tr")
+        
+        for linha in linhas:
+            # Extrair nome do aluno
+            nome_cell = linha.query_selector("td:first-child")
+            nome_completo = nome_cell.inner_text().strip() if nome_cell else ""
             
-            # Aulas sem ATA
-            result = self.supabase.table('aulas').select('*').eq('tem_ata', False).gte('data_aula', '2025-07-04').lte('data_aula', '2025-12-31').execute()
-            aulas_sem_ata = len(result.data) if result.data else 0
+            # IGNORAR linhas sem nome (vazias)
+            if not nome_completo:
+                continue
             
-            # Aulas com erro
-            result = self.supabase.table('aulas').select('*').eq('status_frequencia', 'ERRO').gte('data_aula', '2025-07-04').lte('data_aula', '2025-12-31').execute()
-            aulas_com_erro = len(result.data) if result.data else 0
+            # Extrair status de presença
+            link_presenca = linha.query_selector("td:last-child a")
             
-            print(f"⚠️  Aulas sem frequência registrada: {aulas_sem_freq}")
-            print(f"📝 Aulas sem ATA: {aulas_sem_ata}")
-            print(f"❌ Aulas com erro na coleta: {aulas_com_erro}")
-            
-            # Congregações com baixa atividade
-            result = self.supabase.table('view_estatisticas_congregacao').select('*').lt('total_aulas', 5).execute()
-            cong_baixa_atividade = len(result.data) if result.data else 0
-            
-            print(f"📉 Congregações com menos de 5 aulas: {cong_baixa_atividade}")
-            
-            return {
-                'aulas_sem_frequencia': aulas_sem_freq,
-                'aulas_sem_ata': aulas_sem_ata,
-                'aulas_com_erro': aulas_com_erro,
-                'congregacoes_baixa_atividade': cong_baixa_atividade
-            }
-            
-        except Exception as e:
-            print(f"❌ Erro na análise de qualidade: {e}")
-            return None
-    
-    def exportar_dados_excel(self, arquivo="dados_musical_2sem2025.xlsx"):
-        """Exporta todos os dados para Excel"""
-        try:
-            print(f"\n📤 EXPORTANDO DADOS PARA {arquivo}")
-            print("-" * 40)
-            
-            with pd.ExcelWriter(arquivo, engine='openpyxl') as writer:
+            if link_presenca:
+                # Extrair ID do membro do data-id-membro
+                id_membro = link_presenca.get_attribute("data-id-membro")
                 
-                # Aba 1: Estatísticas Gerais
-                stats_result = self.supabase.rpc('get_estatisticas_gerais').execute()
-                if stats_result.data:
-                    stats = stats_result.data[0]
-                    df_stats = pd.DataFrame([stats])
-                    df_stats.to_excel(writer, sheet_name='Estatísticas Gerais', index=False)
-                    print("✅ Estatísticas gerais exportadas")
+                # IGNORAR se não tem ID válido
+                if not id_membro:
+                    continue
                 
-                # Aba 2: Por Congregação
-                result = self.supabase.table('view_estatisticas_congregacao').select('*').execute()
-                if result.data:
-                    df_cong = pd.DataFrame(result.data)
-                    df_cong.to_excel(writer, sheet_name='Por Congregação', index=False)
-                    print("✅ Dados por congregação exportados")
-                
-                # Aba 3: Por Curso
-                result = self.supabase.table('view_estatisticas_curso').select('*').execute()
-                if result.data:
-                    df_curso = pd.DataFrame(result.data)
-                    df_curso.to_excel(writer, sheet_name='Por Curso', index=False)
-                    print("✅ Dados por curso exportados")
-                
-                # Aba 4: Evolução Mensal
-                result = self.supabase.table('view_estatisticas_mensais').select('*').execute()
-                if result.data:
-                    df_mensal = pd.DataFrame(result.data)
-                    df_mensal.to_excel(writer, sheet_name='Evolução Mensal', index=False)
-                    print("✅ Evolução mensal exportada")
-                
-                # Aba 5: Detalhes das Aulas
-                result = self.supabase.table('view_estatisticas_aulas').select('*').order('data_aula', desc=True).limit(1000).execute()
-                if result.data:
-                    df_aulas = pd.DataFrame(result.data)
-                    df_aulas.to_excel(writer, sheet_name='Detalhes Aulas', index=False)
-                    print("✅ Detalhes das aulas exportados")
-            
-            print(f"🎉 Exportação concluída: {arquivo}")
-            return arquivo
-            
-        except Exception as e:
-            print(f"❌ Erro na exportação: {e}")
-            return None
-    
-    def gerar_graficos(self):
-        """Gera gráficos de análise"""
-        try:
-            print(f"\n📊 GERANDO GRÁFICOS DE ANÁLISE")
-            print("-" * 40)
-            
-            # Configurar estilo dos gráficos
-            plt.style.use('seaborn-v0_8')
-            sns.set_palette("husl")
-            
-            # Criar figura com subplots
-            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-            fig.suptitle('Análise Musical - 2º Semestre 2025', fontsize=16, fontweight='bold')
-            
-            # Gráfico 1: Top 10 Congregações por Aulas
-            result = self.supabase.table('view_estatisticas_congregacao').select('*').order('total_aulas', desc=True).limit(10).execute()
-            if result.data:
-                df_cong = pd.DataFrame(result.data)
-                axes[0,0].barh(df_cong['congregacao'][::-1], df_cong['total_aulas'][::-1])
-                axes[0,0].set_title('Top 10 Congregações - Total de Aulas')
-                axes[0,0].set_xlabel('Total de Aulas')
-            
-            # Gráfico 2: Evolução Mensal de Aulas
-            result = self.supabase.table('view_estatisticas_mensais').select('*').order('mes').execute()
-            if result.data:
-                df_mensal = pd.DataFrame(result.data)
-                meses = [self.obter_nome_mes(m).split()[0] for m in df_mensal['mes_texto']]
-                axes[0,1].plot(meses, df_mensal['total_aulas'], marker='o', linewidth=2, markersize=8)
-                axes[0,1].set_title('Evolução Mensal - Total de Aulas')
-                axes[0,1].set_ylabel('Total de Aulas')
-                axes[0,1].tick_params(axis='x', rotation=45)
-            
-            # Gráfico 3: Top 10 Cursos por Presença
-            result = self.supabase.table('view_estatisticas_curso').select('*').order('percentual_presenca', desc=True).limit(10).execute()
-            if result.data:
-                df_curso = pd.DataFrame(result.data)
-                curso_labels = [f"{row['curso'][:15]}..." if len(row['curso']) > 15 else row['curso'] for _, row in df_curso.iterrows()]
-                axes[1,0].bar(range(len(curso_labels)), df_curso['percentual_presenca'])
-                axes[1,0].set_title('Top 10 Cursos - % Presença')
-                axes[1,0].set_ylabel('% Presença')
-                axes[1,0].set_xticks(range(len(curso_labels)))
-                axes[1,0].set_xticklabels(curso_labels, rotation=45, ha='right')
-            
-            # Gráfico 4: Distribuição de Presença por Mês
-            result = self.supabase.table('view_estatisticas_mensais').select('*').order('mes').execute()
-            if result.data:
-                df_mensal = pd.DataFrame(result.data)
-                meses = [self.obter_nome_mes(m).split()[0] for m in df_mensal['mes_texto']]
-                axes[1,1].bar(meses, df_mensal['percentual_presenca'], color='green', alpha=0.7)
-                axes[1,1].set_title('% Presença por Mês')
-                axes[1,1].set_ylabel('% Presença')
-                axes[1,1].tick_params(axis='x', rotation=45)
-            
-            plt.tight_layout()
-            
-            # Salvar gráfico
-            arquivo_grafico = f"graficos_musical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(arquivo_grafico, dpi=300, bbox_inches='tight')
-            print(f"✅ Gráficos salvos em: {arquivo_grafico}")
-            
-            # Mostrar gráfico
-            plt.show()
-            
-            return arquivo_grafico
-            
-        except Exception as e:
-            print(f"❌ Erro ao gerar gráficos: {e}")
-            return None
-    
-    def buscar_congregacao_especifica(self):
-        """Busca dados de uma congregação específica"""
-        try:
-            # Listar congregações disponíveis
-            result = self.supabase.table('view_estatisticas_congregacao').select('congregacao').execute()
-            if result.data:
-                congregacoes = [item['congregacao'] for item in result.data]
-                
-                print(f"\n🏛️ CONGREGAÇÕES DISPONÍVEIS:")
-                print("-" * 40)
-                for i, cong in enumerate(congregacoes[:20], 1):  # Mostrar apenas as 20 primeiras
-                    print(f"{i:2d}. {cong}")
-                
-                if len(congregacoes) > 20:
-                    print(f"... e mais {len(congregacoes) - 20} congregações")
-                
-                print(f"\nTotal: {len(congregacoes)} congregações")
-                
-                # Solicitar entrada do usuário
-                congregacao = input("\nDigite o nome da congregação (ou parte dele): ").strip()
-                
-                if congregacao:
-                    # Buscar congregação
-                    result = self.supabase.table('view_estatisticas_congregacao').select('*').ilike('congregacao', f'%{congregacao}%').execute()
+                # Verificar se está presente ou ausente pelo ícone
+                icone = link_presenca.query_selector("i")
+                if icone:
+                    classes = icone.get_attribute("class")
                     
-                    if result.data:
-                        print(f"\n🔍 RESULTADOS PARA: '{congregacao}'")
-                        print("-" * 50)
-                        
-                        for cong in result.data:
-                            print(f"🏛️ {cong['congregacao']}")
-                            print(f"   📚 Total de Aulas: {cong['total_aulas']}")
-                            print(f"   📝 Aulas com ATA: {cong['aulas_com_ata']}")
-                            print(f"   👥 Total Frequências: {cong['total_frequencias']}")
-                            print(f"   📊 % Presença: {cong['percentual_presenca_geral']:.1f}%")
-                            print()
-                    else:
-                        print(f"⚠️ Nenhuma congregação encontrada com '{congregacao}'")
-                        
-        except Exception as e:
-            print(f"❌ Erro na busca: {e}")
-    
-    def gerar_relatorio_completo(self):
-        """Gera relatório completo de análise"""
-        print(f"\n🎯 RELATÓRIO COMPLETO - MUSICAL 2º SEMESTRE 2025")
-        print(f"📅 Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-        print("=" * 60)
-        
-        # 1. Estatísticas Gerais
-        stats = self.obter_estatisticas_gerais()
-        
-        # 2. Top Congregações
-        self.relatorio_por_congregacao(10)
-        
-        # 3. Top Cursos
-        self.relatorio_por_curso(10)
-        
-        # 4. Evolução Mensal
-        self.evolucao_mensal()
-        
-        # 5. Análise de Qualidade
-        problemas = self.identificar_problemas()
-        
-        # 6. Exportar dados
-        arquivo = self.exportar_dados_excel()
-        
-        # 7. Gerar gráficos
-        arquivo_grafico = self.gerar_graficos()
-        
-        print(f"\n✅ RELATÓRIO COMPLETO FINALIZADO!")
-        print(f"📊 Dados exportados para: {arquivo}")
-        print(f"📈 Gráficos salvos em: {arquivo_grafico}")
-        print("-" * 60)
+                    if "fa-check text-success" in classes:
+                        # Presente
+                        presentes_ids.append(id_membro)
+                        presentes_nomes.append(nome_completo)
+                    elif "fa-remove text-danger" in classes:
+                        # Ausente
+                        ausentes_ids.append(id_membro)
+                        ausentes_nomes.append(nome_completo)
         
         return {
-            'estatisticas': stats,
-            'problemas': problemas,
-            'arquivo_excel': arquivo,
-            'arquivo_grafico': arquivo_grafico
+            'presentes_ids': presentes_ids,
+            'presentes_nomes': presentes_nomes,
+            'ausentes_ids': ausentes_ids,
+            'ausentes_nomes': ausentes_nomes,
+            'tem_presenca': "OK" if presentes_ids else "FANTASMA"
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao processar frequência: {e}")
+        return {
+            'presentes_ids': [],
+            'presentes_nomes': [],
+            'ausentes_ids': [],
+            'ausentes_nomes': [],
+            'tem_presenca': "ERRO"
         }
 
+def extrair_dados_de_linha_por_indice(pagina, indice_linha):
+    """Extrai dados de uma linha específica pelo índice, filtrando por período"""
+    try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
+        linhas = pagina.query_selector_all("table tbody tr")
+        
+        if indice_linha >= len(linhas):
+            return None, False, False
+        
+        linha = linhas[indice_linha]
+        colunas = linha.query_selector_all("td")
+        
+        if len(colunas) < 6:
+            return None, False, False
+        
+        # DEBUG: Mostrar conteúdo das primeiras colunas para identificar padrão
+        print(f"      🔍 DEBUG - Linha {indice_linha}, primeiras 6 colunas:")
+        for i, coluna in enumerate(colunas[:6]):
+            texto = coluna.inner_text().strip()
+            print(f"         Coluna {i}: '{texto}'")
+        
+        # NOVA LÓGICA: Identificar a estrutura da tabela
+        # Padrão esperado: [Congregação, Curso, Turma, Data, ...outros...]
+        # Mas pode haver botões como primeira coluna
+        
+        congregacao = None
+        curso = None
+        turma = None
+        data_aula = None
+        
+        # Procurar a data primeiro para estabelecer a estrutura
+        data_col_index = -1
+        for i, coluna in enumerate(colunas):
+            texto = coluna.inner_text().strip()
+            # Verificar se é uma data válida
+            if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', texto) and not re.search(r'[a-zA-Z]', texto):
+                data_aula = texto
+                data_col_index = i
+                print(f"      🔍 Data encontrada na coluna {i}: {data_aula}")
+                break
+        
+        if data_col_index == -1:
+            print(f"      ⚠️ Nenhuma data válida encontrada na linha {indice_linha}")
+            return None, False, False
+        
+        # Com base na posição da data, inferir as outras colunas
+        # Assumindo que a ordem é: [possíveis botões], Congregação, Curso, Turma, Data
+        if data_col_index >= 3:
+            # Data está na posição 3 ou posterior - estrutura esperada
+            congregacao = colunas[data_col_index-3].inner_text().strip() if data_col_index >= 3 else "N/A"
+            curso = colunas[data_col_index-2].inner_text().strip() if data_col_index >= 2 else "N/A"
+            turma = colunas[data_col_index-1].inner_text().strip() if data_col_index >= 1 else "N/A"
+        elif data_col_index == 2:
+            # Data na posição 2
+            congregacao = colunas[0].inner_text().strip() if len(colunas) > 0 else "N/A"
+            curso = colunas[1].inner_text().strip() if len(colunas) > 1 else "N/A"
+            turma = "N/A"  # Não há espaço para turma
+        elif data_col_index == 1:
+            # Data na posição 1
+            congregacao = colunas[0].inner_text().strip() if len(colunas) > 0 else "N/A"
+            curso = "N/A"
+            turma = "N/A"
+        else:
+            # Data na posição 0 - estrutura inesperada
+            congregacao = "N/A"
+            curso = "N/A" 
+            turma = "N/A"
+        
+        # Filtrar dados que parecem ser botões ou ações
+        def limpar_campo(texto):
+            # Remove textos que são claramente botões ou ações
+            botoes_conhecidos = ["frequência", "detalhes", "reabrir", "visualizar", "editar", "excluir"]
+            texto_lower = texto.lower()
+            for botao in botoes_conhecidos:
+                if botao in texto_lower:
+                    return "N/A"
+            return texto if texto else "N/A"
+        
+        congregacao = limpar_campo(congregacao)
+        curso = limpar_campo(curso)
+        turma = limpar_campo(turma)
+        
+        print(f"      📋 Dados extraídos: {congregacao} | {curso} | {turma} | {data_aula}")
+        
+        # Verificar se está no período do segundo semestre 2025
+        no_periodo, data_anterior = data_esta_no_periodo(data_aula)
+        
+        if data_anterior:
+            # Data anterior ao período - PARAR TUDO!
+            print(f"🛑 FINALIZANDO: Encontrada data anterior ao período ({data_aula})")
+            print("   Todas as próximas aulas serão anteriores. Parando coleta!")
+            return None, True, False  # Sinal para parar tudo
+        
+        if not no_periodo:
+            # Se não está no período (mas não é anterior), pular esta aula
+            return None, False, False
+        
+        # Extrair IDs do botão de frequência
+        btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
+        if btn_freq:
+            onclick = btn_freq.get_attribute("onclick")
+            # Extrair os dois IDs: visualizarFrequencias(aula_id, professor_id)
+            match = re.search(r'visualizarFrequencias\((\d+),\s*(\d+)\)', onclick)
+            if match:
+                aula_id = match.group(1)
+                professor_id = match.group(2)
+                
+                return {
+                    'aula_id': aula_id,
+                    'professor_id': professor_id,
+                    'data': data_aula,
+                    'congregacao': congregacao,
+                    'curso': curso,
+                    'turma': turma
+                }, False, True  # É válida
+        
+        return None, False, False
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair dados da linha {indice_linha}: {e}")
+        return None, False, False
+
+def clicar_botao_frequencia_por_indice(pagina, indice_linha):
+    """Clica no botão de frequência de uma linha específica pelo índice"""
+    try:
+        # Buscar NOVAMENTE todas as linhas para evitar elementos coletados
+        linhas = pagina.query_selector_all("table tbody tr")
+        
+        if indice_linha >= len(linhas):
+            return False
+        
+        linha = linhas[indice_linha]
+        btn_freq = linha.query_selector("button[onclick*='visualizarFrequencias']")
+        
+        if btn_freq:
+            btn_freq.click()
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao clicar no botão da linha {indice_linha}: {e}")
+        return False
+
+def contar_linhas_na_pagina(pagina):
+    """Conta quantas linhas existem na página atual"""
+    try:
+        linhas = pagina.query_selector_all("table tbody tr")
+        return len(linhas)
+    except:
+        return 0
+
+def navegar_para_historico_aulas(pagina):
+    """Navega pelos menus para chegar ao histórico de aulas"""
+    try:
+        print("🔍 Navegando para G.E.M...")
+        
+        # Aguardar o menu carregar após login
+        pagina.wait_for_selector("nav", timeout=15000)
+        
+        # Buscar e clicar no menu G.E.M
+        seletores_gem = [
+            'a:has-text("G.E.M")',
+            'a:has(.fa-graduation-cap)',
+            'a[href="#"]:has(span:text-is("G.E.M"))',
+            'a:has(span):has-text("G.E.M")'
+        ]
+        
+        menu_gem_clicado = False
+        for seletor in seletores_gem:
+            try:
+                elemento_gem = pagina.query_selector(seletor)
+                if elemento_gem:
+                    print(f"✅ Menu G.E.M encontrado: {seletor}")
+                    elemento_gem.click()
+                    menu_gem_clicado = True
+                    break
+            except Exception as e:
+                print(f"⚠️ Tentativa com seletor {seletor} falhou: {e}")
+                continue
+        
+        if not menu_gem_clicado:
+            print("❌ Não foi possível encontrar o menu G.E.M")
+            return False
+        
+        # Aguardar submenu aparecer
+        print("⏳ Aguardando submenu expandir...")
+        time.sleep(1)
+        
+        print("🔍 Procurando por Histórico de Aulas...")
+        
+        # Estratégia 1: Tentar aguardar elemento ficar visível
+        historico_clicado = False
+        try:
+            # Aguardar elemento aparecer e ficar visível
+            historico_link = pagina.wait_for_selector('a:has-text("Histórico de Aulas")', 
+                                                     state="visible", timeout=10000)
+            if historico_link:
+                print("✅ Histórico de Aulas visível - clicando...")
+                historico_link.click()
+                historico_clicado = True
+        except Exception as e:
+            print(f"⚠️ Estratégia 1 falhou: {e}")
+        
+        # Estratégia 2: Forçar visibilidade com JavaScript
+        if not historico_clicado:
+            try:
+                print("🔧 Tentando forçar clique com JavaScript...")
+                # Buscar elemento mesmo que não visível
+                elemento = pagina.query_selector('a:has-text("Histórico de Aulas")')
+                if elemento:
+                    # Forçar clique via JavaScript
+                    pagina.evaluate("element => element.click()", elemento)
+                    historico_clicado = True
+                    print("✅ Clique forçado com JavaScript")
+            except Exception as e:
+                print(f"⚠️ Estratégia 2 falhou: {e}")
+        
+        # Estratégia 3: Navegar diretamente via URL
+        if not historico_clicado:
+            try:
+                print("🌐 Navegando diretamente para URL do histórico...")
+                pagina.goto("https://musical.congregacao.org.br/aulas_abertas")
+                historico_clicado = True
+                print("✅ Navegação direta bem-sucedida")
+            except Exception as e:
+                print(f"⚠️ Estratégia 3 falhou: {e}")
+        
+        if not historico_clicado:
+            print("❌ Todas as estratégias falharam")
+            return False
+        
+        print("⏳ Aguardando página do histórico carregar...")
+        
+        # Aguardar indicador de carregamento da tabela
+        try:
+            # Aguardar pelo menos um checkbox aparecer (indica que a tabela carregou)
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=20000)
+            print("✅ Tabela do histórico carregada!")
+            return True
+        except PlaywrightTimeoutError:
+            print("⚠️ Timeout aguardando tabela - tentando continuar...")
+            # Verificar se pelo menos temos uma tabela
+            try:
+                pagina.wait_for_selector("table", timeout=5000)
+                print("✅ Tabela encontrada (sem checkboxes)")
+                return True
+            except:
+                print("❌ Nenhuma tabela encontrada")
+                return False
+                
+    except Exception as e:
+        print(f"❌ Erro durante navegação: {e}")
+        return False
+
 def main():
-    """Função principal"""
-    analytics = MusicalAnalytics()
+    tempo_inicio = time.time()
     
-    # Menu interativo
-    while True:
-        print(f"\n📊 MENU - MUSICAL ANALYTICS")
-        print("-" * 30)
-        print("1. 📈 Estatísticas Gerais")
-        print("2. 🏛️  Relatório por Congregação")
-        print("3. 🎵 Relatório por Curso")
-        print("4. 📅 Evolução Mensal")
-        print("5. 🔍 Análise de Qualidade")
-        print("6. 📤 Exportar para Excel")
-        print("7. 📊 Gerar Gráficos")
-        print("8. 🔍 Buscar Congregação")
-        print("9. 🎯 Relatório Completo")
-        print("0. 🚪 Sair")
+    print(f"🎯 COLETANDO DADOS DO SEGUNDO SEMESTRE 2025")
+    print(f"📅 Período: {DATA_INICIO} a {DATA_FIM}")
+    print("=" * 50)
+    
+    with sync_playwright() as p:
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        
+        # Configurações do navegador
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        })
+        
+        print("🔐 Fazendo login...")
+        pagina.goto(URL_INICIAL)
+        
+        # Login
+        pagina.fill('input[name="login"]', EMAIL)
+        pagina.fill('input[name="password"]', SENHA)
+        pagina.click('button[type="submit"]')
         
         try:
-            opcao = input("\nEscolha uma opção (0-9): ").strip()
-            
-            if opcao == "1":
-                analytics.obter_estatisticas_gerais()
-            elif opcao == "2":
-                analytics.relatorio_por_congregacao()
-            elif opcao == "3":
-                analytics.relatorio_por_curso()
-            elif opcao == "4":
-                analytics.evolucao_mensal()
-            elif opcao == "5":
-                analytics.identificar_problemas()
-            elif opcao == "6":
-                analytics.exportar_dados_excel()
-            elif opcao == "7":
-                analytics.gerar_graficos()
-            elif opcao == "8":
-                analytics.buscar_congregacao_especifica()
-            elif opcao == "9":
-                analytics.gerar_relatorio_completo()
-            elif opcao == "0":
-                print("\n👋 Obrigado por usar o Musical Analytics!")
-                print("📊 Sistema desenvolvido para análise de dados musicais")
-                break
-            else:
-                print("❌ Opção inválida! Escolha uma opção de 0 a 9.")
-                
-        except KeyboardInterrupt:
-            print("\n\n👋 Sistema interrompido pelo usuário. Até logo!")
-            break
-        except Exception as e:
-            print(f"❌ Erro inesperado: {e}")
-            print("🔄 Retornando ao menu principal...")
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login. Verifique suas credenciais.")
+            navegador.close()
+            return
         
-        # Aguardar antes de mostrar o menu novamente
-        input("\n⏸️  Pressione Enter para continuar...")
+        # Navegar pelos menus para histórico de aulas
+        if not navegar_para_historico_aulas(pagina):
+            print("❌ Falha na navegação para histórico de aulas.")
+            navegador.close()
+            return
+        
+        # Configurar para mostrar 2000 registros
+        print("⚙️ Configurando para mostrar 2000 registros...")
+        try:
+            # Aguardar o seletor de quantidade aparecer
+            pagina.wait_for_selector('select[name="listagem_length"]', timeout=10000)
+            pagina.select_option('select[name="listagem_length"]', "2000")
+            print("✅ Configurado para 2000 registros")
+            
+            # Aguardar a página recarregar com 2000 registros
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao configurar registros: {e}")
+            print("📋 Continuando com configuração padrão...")
+        
+        # Aguardar carregamento da tabela após mudança de quantidade
+        print("⏳ Aguardando nova configuração carregar...")
+        try:
+            # Aguardar pelo menos um checkbox aparecer novamente
+            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=15000)
+            print("✅ Tabela recarregada com nova configuração!")
+        except:
+            print("⚠️ Timeout aguardando recarregamento - continuando...")
+        
+        # Criar sessão requests com cookies para detalhes das aulas
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+        
+        resultado = []
+        pagina_atual = 1
+        aulas_ignoradas = 0
+        deve_parar_coleta = False
+        
+        while not deve_parar_coleta:
+            print(f"📖 Processando página {pagina_atual}...")
+            
+            # Aguardar linhas carregarem
+            try:
+                # Aguardar checkboxes que indicam linhas carregadas
+                pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=5000)
+                time.sleep(1)  # Aguardar estabilização
+            except:
+                print("⚠️ Timeout aguardando linhas - tentando continuar...")
+            
+            # Contar quantas linhas temos na página atual
+            total_linhas = contar_linhas_na_pagina(pagina)
+            
+            if total_linhas == 0:
+                print("🏁 Não há mais linhas para processar.")
+                break
+            
+            print(f"   📊 Encontradas {total_linhas} aulas nesta página")
+            
+            aulas_processadas_pagina = 0
+            aulas_encontradas_periodo = 0  # Contador de aulas no período
+            
+            # Processar cada linha POR ÍNDICE (evita referências antigas)
+            for i in range(total_linhas):
+                # Extrair dados da linha atual pelo índice
+                dados_aula, deve_parar_coleta, aula_valida = extrair_dados_de_linha_por_indice(pagina, i)
+                
+                # Se encontrou data anterior ao período, PARAR TUDO!
+                if deve_parar_coleta:
+                    break
+                
+                if not aula_valida:
+                    # Aula fora do período - ignorar silenciosamente
+                    aulas_ignoradas += 1
+                    continue
+                
+                if not dados_aula:
+                    continue
+                
+                aulas_processadas_pagina += 1
+                aulas_encontradas_periodo += 1
+                print(f"      🎯 Aula {aulas_processadas_pagina}: {dados_aula['data']} - {dados_aula['curso']}")
+                
+                # Clicar no botão de frequência para abrir modal
+                try:
+                    # Aguardar que não haja modal aberto antes de clicar
+                    try:
+                        pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=1000)
+                    except:
+                        # Se ainda há modal, forçar fechamento
+                        print("⚠️ Modal anterior ainda aberto - forçando fechamento...")
+                        try:
+                            # Tentar múltiplas formas de fechar modal
+                            btn_fechar = pagina.query_selector('button[data-dismiss="modal"], .modal-footer button')
+                            if btn_fechar:
+                                btn_fechar.click()
+                            else:
+                                # Forçar fechamento via JavaScript
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                            
+                            # Aguardar fechar
+                            pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=2000)
+                        except:
+                            # Último recurso: recarregar página
+                            print("⚠️ Forçando escape...")
+                            pagina.keyboard.press("Escape")
+                            time.sleep(0.2)
+                    
+                    # Agora clicar no botão de frequência PELO ÍNDICE
+                    print(f"         🖱️ Clicando em frequência...")
+                    if clicar_botao_frequencia_por_indice(pagina, i):
+                        # Aguardar modal carregar
+                        time.sleep(0.5)
+                        
+                        # Processar dados de frequência
+                        freq_data = processar_frequencia_modal(pagina, dados_aula['aula_id'], dados_aula['professor_id'])
+                        
+                        # Fechar modal de forma mais robusta
+                        print(f"         🚪 Fechando modal...")
+                        try:
+                            # Tentar diferentes formas de fechar
+                            fechou = False
+                            
+                            # 1. Botão Fechar específico
+                            btn_fechar = pagina.query_selector('button.btn-warning[data-dismiss="modal"]:has-text("Fechar")')
+                            if btn_fechar:
+                                btn_fechar.click()
+                                fechou = True
+                            
+                            # 2. Qualquer botão de fechar modal
+                            if not fechou:
+                                btn_fechar = pagina.query_selector('button[data-dismiss="modal"]')
+                                if btn_fechar:
+                                    btn_fechar.click()
+                                    fechou = True
+                            
+                            # 3. Via JavaScript
+                            if not fechou:
+                                pagina.evaluate("$('#modalFrequencia').modal('hide')")
+                                fechou = True
+                            
+                            # 4. ESC como último recurso
+                            if not fechou:
+                                pagina.keyboard.press("Escape")
+                            
+                            # Aguardar modal fechar completamente
+                            try:
+                                pagina.wait_for_selector("#modalFrequencia", state="hidden", timeout=2000)
+                                print(f"         ✅ Modal fechado com sucesso")
+                            except:
+                                print(f"         ⚠️ Modal pode não ter fechado completamente")
+                                
+                        except Exception as close_error:
+                            print(f"         ⚠️ Erro ao fechar modal: {close_error}")
+                            pagina.keyboard.press("Escape")
+                        
+                        # Pausa adicional para estabilizar
+                        time.sleep(0.3)
+                        
+                        # Obter detalhes da ATA via requests
+                        ata_status = extrair_detalhes_aula(session, dados_aula['aula_id'])
+                        
+                        # Montar linha de resultado
+                        linha_resultado = [
+                            dados_aula['congregacao'],
+                            dados_aula['curso'],
+                            dados_aula['turma'],
+                            dados_aula['data'],
+                            "; ".join(freq_data['presentes_ids']),
+                            "; ".join(freq_data['presentes_nomes']),
+                            "; ".join(freq_data['ausentes_ids']),
+                            "; ".join(freq_data['ausentes_nomes']),
+                            freq_data['tem_presenca'],
+                            ata_status
+                        ]
+                        
+                        resultado.append(linha_resultado)
+                        
+                        # Mostrar resumo da aula
+                        total_alunos = len(freq_data['presentes_ids']) + len(freq_data['ausentes_ids'])
+                        print(f"         ✓ {len(freq_data['presentes_ids'])} presentes, {len(freq_data['ausentes_ids'])} ausentes (Total: {total_alunos}) - ATA: {ata_status}")
+                    
+                    else:
+                        print(f"         ❌ Falha ao clicar no botão de frequência")
+                        
+                except Exception as e:
+                    print(f"⚠️ Erro ao processar aula: {e}")
+                    continue
+                
+                # Pequena pausa entre aulas
+                time.sleep(0.2)
+            
+            print(f"   ✅ {aulas_processadas_pagina} aulas válidas processadas nesta página")
+            
+            # Se deve parar a coleta, sair do loop principal
+            if deve_parar_coleta:
+                break
+            
+            # Se não encontrou NENHUMA aula no período nesta página, PARAR!
+            if aulas_encontradas_periodo == 0:
+                print("🛑 FINALIZANDO: Nenhuma aula do período encontrada nesta página!")
+                print("   Todas as aulas restantes são anteriores ao período desejado.")
+                break
+            
+            # Tentar avançar para próxima página
+            try:
+                # Aguardar um pouco para garantir que a página atual está estável
+                time.sleep(1)
+                
+                # Buscar botão próximo
+                btn_proximo = pagina.query_selector("a:has(i.fa-chevron-right)")
+                
+                if btn_proximo:
+                    # Verificar se o botão não está desabilitado
+                    parent = btn_proximo.query_selector("..")
+                    parent_class = parent.get_attribute("class") if parent else ""
+                    
+                    if "disabled" not in parent_class:
+                        print("➡️ Avançando para próxima página...")
+                        btn_proximo.click()
+                        pagina_atual += 1
+                        
+                        # Aguardar nova página carregar
+                        time.sleep(2)
+                        
+                        # Aguardar checkboxes da nova página
+                        try:
+                            pagina.wait_for_selector('input[type="checkbox"][name="item[]"]', timeout=10000)
+                        except:
+                            print("⚠️ Timeout aguardando nova página")
+                        
+                    else:
+                        print("🏁 Botão próximo desabilitado - não há mais páginas.")
+                        break
+                else:
+                    print("🏁 Botão próximo não encontrado - não há mais páginas.")
+                    break
+                    
+            except Exception as e:
+                print(f"⚠️ Erro ao navegar para próxima página: {e}")
+                break
+        
+        print(f"\n📊 Coleta finalizada!")
+        print(f"🎯 Aulas do 2º semestre 2025: {len(resultado)}")
+        print(f"⏭️ Aulas fora do período: {aulas_ignoradas}")
+        
+        # Preparar dados para envio
+        headers = [
+            "CONGREGAÇÃO", "CURSO", "TURMA", "DATA", "PRESENTES IDs", 
+            "PRESENTES Nomes", "AUSENTES IDs", "AUSENTES Nomes", "TEM PRESENÇA", "ATA DA AULA"
+        ]
+        
+        body = {
+            "tipo": "historico_aulas_2sem_2025",
+            "dados": resultado,
+            "headers": headers,
+            "resumo": {
+                "total_aulas": len(resultado),
+                "aulas_ignoradas": aulas_ignoradas,
+                "periodo": f"{DATA_INICIO} a {DATA_FIM}",
+                "tempo_processamento": f"{(time.time() - tempo_inicio) / 60:.1f} minutos",
+                "paginas_processadas": pagina_atual
+            }
+        }
+        
+        # Enviar dados para Apps Script
+        if resultado:
+            try:
+                print("📤 Enviando dados para Google Sheets...")
+                resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+                print("✅ Dados enviados!")
+                print("Status code:", resposta_post.status_code)
+                print("Resposta do Apps Script:", resposta_post.text)
+            except Exception as e:
+                print(f"❌ Erro ao enviar para Apps Script: {e}")
+        else:
+            print("ℹ️ Nenhuma aula encontrada no período especificado.")
+        
+        # Resumo final
+        print("\n📈 RESUMO DA COLETA:")
+        print(f"   📅 Período: {DATA_INICIO} a {DATA_FIM}")
+        print(f"   🎯 Aulas coletadas: {len(resultado)}")
+        print(f"   ⏭️ Aulas ignoradas: {aulas_ignoradas}")
+        print(f"   📄 Páginas processadas: {pagina_atual}")
+        print(f"   ⏱️ Tempo total: {(time.time() - tempo_inicio) / 60:.1f} minutos")
+        
+        if resultado:
+            total_presentes = sum(len(linha[4].split('; ')) if linha[4] else 0 for linha in resultado)
+            total_ausentes = sum(len(linha[6].split('; ')) if linha[6] else 0 for linha in resultado)
+            aulas_com_ata = sum(1 for linha in resultado if linha[9] == "OK")
+            
+            print(f"   👥 Total de presenças registradas: {total_presentes}")
+            print(f"   ❌ Total de ausências registradas: {total_ausentes}")
+            print(f"   📝 Aulas com ATA: {aulas_com_ata}/{len(resultado)}")
+        
+        navegador.close()
 
 if __name__ == "__main__":
     main()
