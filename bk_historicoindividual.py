@@ -1,4 +1,4 @@
-# bk_historicoindividual_melhorado.py
+# script_historico_alunos_ultra_otimizado.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -12,6 +12,9 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import concurrent.futures
 from threading import Lock
+import asyncio
+import aiohttp
+from urllib.parse import urlencode
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -21,11 +24,22 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzSMrefJ-RJvjBNLVnqB2
 
 # Lock para thread safety
 print_lock = Lock()
+processados_count = 0
+total_alunos = 0
 
 def safe_print(*args, **kwargs):
     """Print thread-safe"""
     with print_lock:
         print(*args, **kwargs)
+
+def update_progress():
+    """Atualiza contador de progresso de forma thread-safe"""
+    global processados_count
+    with print_lock:
+        processados_count += 1
+        if processados_count % 10 == 0 or processados_count <= 5:
+            progresso = (processados_count / total_alunos) * 100
+            safe_print(f"📈 Progresso: {processados_count}/{total_alunos} ({progresso:.1f}%)")
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright para usar em requests"""
@@ -84,280 +98,304 @@ def obter_lista_alunos(session):
         safe_print(f"❌ Erro ao obter lista de alunos: {e}")
         return []
 
-def extrair_texto_limpo(elemento):
-    """Extrai texto limpo de um elemento HTML, preservando informações importantes"""
-    if not elemento:
-        return ""
-    
-    # Extrair texto preservando quebras de linha importantes
-    texto = elemento.get_text(separator=" ", strip=True)
-    
-    # Normalizar espaços em branco
-    texto = re.sub(r'\s+', ' ', texto)
-    
-    # Remover texto de botões de ação
-    texto = re.sub(r'\s*Apagar\s*', '', texto)
-    texto = re.sub(r'\s*Excluir\s*', '', texto)
-    
-    return texto.strip()
+# Cache de regex compilado para melhor performance
+REGEX_DATA = re.compile(r'\b(\d{1,2}/\d{1,2}/\d{4})\b')
+REGEX_DATA_CELL = re.compile(r'^\d{1,2}/\d{1,2}/\d{4}$')
 
-def extrair_dados_tabela_completa_melhorada(soup_secao, secao_nome):
-    """Versão melhorada que extrai TODOS os dados de uma tabela"""
-    registros = []
-    
-    # Encontrar todas as tabelas na seção
-    tabelas = soup_secao.find_all('table')
-    
-    for idx_tabela, tabela in enumerate(tabelas):
-        # Pular se é tabela de grupo (será processada separadamente)
-        table_id = tabela.get('id', '')
-        if 'grupo' in table_id.lower():
-            continue
-            
-        # Extrair cabeçalho
-        thead = tabela.find('thead')
-        if not thead:
-            continue
-            
-        headers = []
-        header_row = thead.find('tr')
-        if header_row:
-            for th in header_row.find_all('th'):
-                header_text = extrair_texto_limpo(th)
-                if header_text and header_text.lower() not in ['ações', 'acoes']:
-                    headers.append(header_text)
-        
-        if not headers:
-            continue
-        
-        # Extrair dados do corpo da tabela
-        tbody = tabela.find('tbody')
-        if not tbody:
-            continue
-            
-        for tr_idx, tr in enumerate(tbody.find_all('tr')):
-            # Verificar se não é linha de "nenhum registro encontrado"
-            if ('dataTables_empty' in str(tr.get('class', [])) or 
-                'Nenhum registro encontrado' in tr.get_text() or
-                'Oops...' in tr.get_text()):
-                continue
-                
-            linha_dados = []
-            tds = tr.find_all('td')
-            
-            # Processar cada célula, limitando ao número de headers
-            for i in range(min(len(headers), len(tds))):
-                td = tds[i]
-                
-                # Extrair texto limpo da célula
-                conteudo_celula = extrair_texto_limpo(td)
-                
-                # Se a célula está vazia, tentar extrair atributos úteis
-                if not conteudo_celula:
-                    # Verificar se há inputs ou selects com valores
-                    inputs = td.find_all(['input', 'select'])
-                    for input_elem in inputs:
-                        valor = input_elem.get('value', '')
-                        if valor:
-                            conteudo_celula = valor
-                            break
-                
-                linha_dados.append(conteudo_celula)
-            
-            # Só adicionar se há dados válidos na linha
-            if linha_dados and any(campo.strip() for campo in linha_dados):
-                # Extrair ID da linha se existir
-                row_id = tr.get('id', '')
-                
-                registro = {
-                    'secao': secao_nome,
-                    'tabela_index': idx_tabela,
-                    'linha_index': tr_idx,
-                    'row_id': row_id,
-                    'headers': headers,
-                    'dados': linha_dados,
-                    'dados_estruturados': dict(zip(headers, linha_dados)),
-                    'timestamp_coleta': datetime.now().isoformat()
-                }
-                registros.append(registro)
-    
-    return registros
-
-def extrair_dados_grupo_melhorada(soup_secao, secao_nome):
-    """Versão melhorada para extrair dados das seções de grupo"""
-    registros = []
-    
-    # Buscar por H3 seguido de tabelas
-    h3_elements = soup_secao.find_all('h3')
-    
-    for h3 in h3_elements:
-        h3_text = h3.get_text().lower()
-        if 'grupo' in h3_text or 'aulas em grupo' in h3_text:
-            # Encontrar próxima tabela após o H3
-            next_table = h3.find_next('table')
-            if next_table:
-                # Extrair cabeçalho
-                headers = []
-                thead = next_table.find('thead')
-                if thead:
-                    header_row = thead.find('tr')
-                    if header_row:
-                        for th in header_row.find_all('th'):
-                            header_text = extrair_texto_limpo(th)
-                            if header_text:
-                                headers.append(header_text)
-                
-                # Extrair dados
-                tbody = next_table.find('tbody')
-                if tbody:
-                    for tr_idx, tr in enumerate(tbody.find_all('tr')):
-                        if ('dataTables_empty' in str(tr.get('class', [])) or
-                            'Nenhum registro encontrado' in tr.get_text()):
-                            continue
-                            
-                        linha_dados = []
-                        tds = tr.find_all('td')
-                        
-                        for td in tds:
-                            conteudo_celula = extrair_texto_limpo(td)
-                            linha_dados.append(conteudo_celula)
-                        
-                        if linha_dados and any(campo.strip() for campo in linha_dados):
-                            registro = {
-                                'secao': f"{secao_nome}_grupo",
-                                'subsecao': h3.get_text().strip(),
-                                'linha_index': tr_idx,
-                                'headers': headers,
-                                'dados': linha_dados,
-                                'dados_estruturados': dict(zip(headers, linha_dados)) if len(headers) == len(linha_dados) else {},
-                                'timestamp_coleta': datetime.now().isoformat()
-                            }
-                            registros.append(registro)
-    
-    return registros
-
-def processar_secao_completa_melhorada(html_content, secao_id):
-    """Versão melhorada que processa uma seção completa"""
-    if not html_content:
+def extrair_dados_completos_tabela(html_content, secao_nome=""):
+    """
+    Extrai todos os dados de uma tabela, não apenas datas
+    """
+    if not html_content or len(html_content) < 10:
         return []
     
-    soup = BeautifulSoup(html_content, 'html.parser')
-    registros_secao = []
+    # Usar regex para encontrar linhas de dados (<tr> que não são header)
+    # Buscar por <tr> que contêm id ou role="row" (excluindo headers)
+    pattern_tr = r'<tr[^>]*(?:id="[^"]*"|role="row")[^>]*>(.*?)</tr>'
+    matches = re.findall(pattern_tr, html_content, re.DOTALL | re.IGNORECASE)
     
-    # Encontrar a div da aba específica
-    tab_pane = soup.find('div', {'id': secao_id, 'class': 'tab-pane'})
-    if not tab_pane:
-        tab_pane = soup.find('div', id=secao_id)
+    dados_extraidos = []
     
-    if tab_pane:
-        # Extrair dados das tabelas principais
-        registros_principais = extrair_dados_tabela_completa_melhorada(tab_pane, secao_id)
-        registros_secao.extend(registros_principais)
+    for tr_content in matches:
+        # Extrair dados de cada <td>
+        pattern_td = r'<td[^>]*>(.*?)</td>'
+        células = re.findall(pattern_td, tr_content, re.DOTALL | re.IGNORECASE)
         
-        # Extrair dados das tabelas de grupo
-        registros_grupo = extrair_dados_grupo_melhorada(tab_pane, secao_id)
-        registros_secao.extend(registros_grupo)
+        if células and len(células) > 2:  # Ignorar linhas com poucos dados
+            # Limpar HTML das células
+            células_limpas = []
+            for célula in células:
+                # Remover HTML mas manter quebras de linha importantes
+                célula_limpa = re.sub(r'<br\s*/?>', ' | ', célula)
+                célula_limpa = re.sub(r'<[^>]+>', '', célula_limpa)
+                célula_limpa = célula_limpa.strip()
+                células_limpas.append(célula_limpa)
+            
+            # Filtrar linhas vazias ou só com botões
+            if any(cell and 'Apagar' not in cell and len(cell) > 1 for cell in células_limpas[:-1]):
+                dados_extraidos.append(células_limpas[:-1])  # Remove última coluna (botões)
     
-    return registros_secao
+    return dados_extraidos
 
-def obter_backup_completo_aluno_melhorado(session, aluno_id, aluno_nome=""):
-    """Versão melhorada que extrai TODOS os dados disponíveis"""
+def identificar_secoes_otimizada(html):
+    """
+    Versão otimizada que usa regex em vez de BeautifulSoup para maior velocidade
+    """
+    secoes = {
+        'mts': "",
+        'mts_grupo': "",
+        'msa': "",
+        'msa_grupo': "",
+        'provas': "",
+        'metodo': "",
+        'hinario': "",
+        'hinario_grupo': "",
+        'escalas': "",
+        'escalas_grupo': ""
+    }
+    
+    # Usar regex para encontrar seções específicas
+    patterns = {
+        'mts': r'<div[^>]*id="mts"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)',
+        'msa': r'<div[^>]*id="msa"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)',
+        'provas': r'<div[^>]*id="provas"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)',
+        'metodos': r'<div[^>]*id="metodos"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)',
+        'hinario': r'<div[^>]*id="hinario"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)',
+        'escalas': r'<div[^>]*id="escalas"[^>]*>.*?</div>(?=<div[^>]*class="tab-pane"|$)'
+    }
+    
+    for secao_key, pattern in patterns.items():
+        match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+        if match:
+            conteudo = match.group(0)
+            
+            if secao_key == 'mts':
+                # Primeira tabela para MTS individual
+                tabela_match = re.search(r'<table[^>]*id="datatable1"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['mts'] = tabela_match.group(0)
+                
+                # Tabela grupo
+                grupo_match = re.search(r'<table[^>]*id="datatable_mts_grupo"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if grupo_match:
+                    secoes['mts_grupo'] = grupo_match.group(0)
+            
+            elif secao_key == 'msa':
+                # Primeira tabela para MSA individual
+                tabela_match = re.search(r'<table[^>]*id="datatable1"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['msa'] = tabela_match.group(0)
+                
+                # MSA grupo (depois do h3 com "grupo")
+                if 'grupo' in conteudo.lower():
+                    grupo_match = re.search(r'<h3[^>]*>.*?grupo.*?</h3>.*?<table[^>]*>.*?</table>', conteudo, re.DOTALL | re.IGNORECASE)
+                    if grupo_match:
+                        table_match = re.search(r'<table[^>]*>.*?</table>', grupo_match.group(0), re.DOTALL)
+                        if table_match:
+                            secoes['msa_grupo'] = table_match.group(0)
+            
+            elif secao_key == 'provas':
+                tabela_match = re.search(r'<table[^>]*id="datatable2"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['provas'] = tabela_match.group(0)
+            
+            elif secao_key == 'metodos':
+                tabela_match = re.search(r'<table[^>]*id="datatable3"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['metodo'] = tabela_match.group(0)
+            
+            elif secao_key == 'hinario':
+                # Hinário individual
+                tabela_match = re.search(r'<table[^>]*id="datatable4"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['hinario'] = tabela_match.group(0)
+                
+                # Hinário grupo
+                if 'grupo' in conteudo.lower():
+                    grupo_match = re.search(r'<h3[^>]*>.*?grupo.*?</h3>.*?<table[^>]*>.*?</table>', conteudo, re.DOTALL | re.IGNORECASE)
+                    if grupo_match:
+                        table_match = re.search(r'<table[^>]*>.*?</table>', grupo_match.group(0), re.DOTALL)
+                        if table_match:
+                            secoes['hinario_grupo'] = table_match.group(0)
+            
+            elif secao_key == 'escalas':
+                # Escalas individual
+                tabela_match = re.search(r'<table[^>]*id="datatable4"[^>]*>.*?</table>', conteudo, re.DOTALL)
+                if tabela_match:
+                    secoes['escalas'] = tabela_match.group(0)
+                
+                # Escalas grupo
+                if 'grupo' in conteudo.lower():
+                    grupo_match = re.search(r'<h3[^>]*>.*?grupo.*?</h3>.*?<table[^>]*>.*?</table>', conteudo, re.DOTALL | re.IGNORECASE)
+                    if grupo_match:
+                        table_match = re.search(r'<table[^>]*>.*?</table>', grupo_match.group(0), re.DOTALL)
+                        if table_match:
+                            secoes['escalas_grupo'] = table_match.group(0)
+    
+    return secoes
+
+def configurar_datatables_completas(session, aluno_id):
+    """
+    Configura as DataTables para mostrar todos os registros de uma vez
+    """
     try:
-        url_historico = f"https://musical.congregacao.org.br/licoes/index/{aluno_id}"
+        # URL da página do aluno
+        url_aluno = f"https://musical.congregacao.org.br/licoes/index/{aluno_id}"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
             'Referer': 'https://musical.congregacao.org.br/alunos/listagem',
-            'Connection': 'keep-alive',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         }
         
-        resp = session.get(url_historico, headers=headers, timeout=20)
+        # Fazer requisição para a página normal primeiro
+        resp = session.get(url_aluno, headers=headers, timeout=10)
         
         if resp.status_code != 200:
-            safe_print(f"      ⚠️ Status HTTP {resp.status_code} para aluno {aluno_id}")
-            return {}
+            return ""
         
-        # Processar todas as seções
-        secoes = ['mts', 'msa', 'provas', 'metodos', 'hinario', 'escalas']
-        backup_completo = {
-            'aluno_id': aluno_id,
-            'aluno_nome': aluno_nome,
-            'timestamp_coleta': datetime.now().isoformat(),
-            'secoes': {}
-        }
+        # Procurar por JavaScript que configura as DataTables e tentar modificar
+        html_content = resp.text
         
-        total_registros = 0
+        # Usar regex para forçar length=5000 nas DataTables via JavaScript injection
+        # Isso pode não funcionar, mas a página completa já carrega os dados principais
         
-        for secao in secoes:
-            registros_secao = processar_secao_completa_melhorada(resp.text, secao)
-            backup_completo['secoes'][secao] = registros_secao
-            total_registros += len(registros_secao)
-        
-        if total_registros > 0:
-            # Criar resumo detalhado por seção
-            resumo_secoes = {}
-            for secao, registros in backup_completo['secoes'].items():
-                if registros:
-                    resumo_secoes[secao] = {
-                        'total_registros': len(registros),
-                        'headers_encontrados': list(set(str(reg.get('headers', [])) for reg in registros if reg.get('headers'))),
-                    }
-            
-            backup_completo['resumo_secoes'] = resumo_secoes
-            safe_print(f"      ✓ {aluno_nome[:30]}... - {total_registros} registros coletados")
-        
-        return backup_completo
+        return html_content
         
     except Exception as e:
-        safe_print(f"      ❌ Erro ao processar aluno {aluno_id}: {e}")
+        return ""
+
+def obter_historico_aluno_super_otimizado(session, aluno_id, aluno_nome=""):
+    """Versão otimizada para obter histórico COMPLETO do aluno"""
+    try:
+        # Obter HTML completo da página
+        html_content = configurar_datatables_completas(session, aluno_id)
+        
+        if not html_content:
+            return {}
+        
+        # Usar a versão otimizada de identificação de seções
+        secoes_html = identificar_secoes_otimizada(html_content)
+        
+        # Extrair TODOS os dados de cada seção
+        historico = {}
+        total_registros = 0
+        
+        for secao_nome, conteudo_html in secoes_html.items():
+            if conteudo_html:
+                dados_tabela = extrair_dados_completos_tabela(conteudo_html, secao_nome)
+                historico[secao_nome] = dados_tabela
+                total_registros += len(dados_tabela)
+            else:
+                historico[secao_nome] = []
+        
+        # Atualizar progresso
+        update_progress()
+        
+        return historico
+        
+    except Exception as e:
+        update_progress()
         return {}
 
-def processar_lote_backup_completo_melhorado(session, lote_alunos, lote_numero):
-    """Processa um lote de alunos para backup completo melhorado"""
-    resultado_lote = []
-    
-    for i, aluno in enumerate(lote_alunos):
-        try:
-            # Obter backup completo do aluno
-            backup_aluno = obter_backup_completo_aluno_melhorado(session, aluno['id'], aluno['nome'])
-            
-            if backup_aluno:
-                # Adicionar informações básicas do aluno
-                backup_aluno['info_basica'] = {
-                    'nome': aluno['nome'],
-                    'id': aluno['id'],
-                    'comum': aluno['comum'],
-                    'ministerio': aluno['ministerio'],
-                    'instrumento': aluno['instrumento'],
-                    'nivel': aluno['nivel']
-                }
-                
-                resultado_lote.append(backup_aluno)
-            
-            # Pausa entre alunos
-            time.sleep(0.3)
-            
-        except Exception as e:
-            safe_print(f"      ⚠️ Erro ao processar aluno {aluno['id']}: {e}")
-    
-    safe_print(f"   📦 Lote {lote_numero} concluído ({len(resultado_lote)} alunos processados)")
-    return resultado_lote
+def processar_aluno_individual(session, aluno):
+    """Processa um único aluno - versão com dados completos"""
+    try:
+        # Obter histórico COMPLETO do aluno
+        historico = obter_historico_aluno_super_otimizado(session, aluno['id'], aluno['nome'])
+        
+        # Preparar dados estruturados para cada seção
+        dados_estruturados = {
+            'info_basica': {
+                'nome': aluno['nome'],
+                'id': aluno['id'],
+                'comum': aluno['comum'],
+                'ministerio': aluno['ministerio'],
+                'instrumento': aluno['instrumento'],
+                'nivel': aluno['nivel']
+            },
+            'mts': historico.get('mts', []),
+            'mts_grupo': historico.get('mts_grupo', []),
+            'msa': historico.get('msa', []),
+            'msa_grupo': historico.get('msa_grupo', []),
+            'provas': historico.get('provas', []),
+            'metodo': historico.get('metodo', []),
+            'hinario': historico.get('hinario', []),
+            'hinario_grupo': historico.get('hinario_grupo', []),
+            'escalas': historico.get('escalas', []),
+            'escalas_grupo': historico.get('escalas_grupo', [])
+        }
+        
+        return dados_estruturados
+        
+    except Exception as e:
+        # Retornar estrutura vazia em caso de erro
+        return {
+            'info_basica': {
+                'nome': aluno['nome'],
+                'id': aluno['id'],
+                'comum': aluno['comum'],
+                'ministerio': aluno['ministerio'],
+                'instrumento': aluno['instrumento'],
+                'nivel': aluno['nivel']
+            },
+            'mts': [],
+            'mts_grupo': [],
+            'msa': [],
+            'msa_grupo': [],
+            'provas': [],
+            'metodo': [],
+            'hinario': [],
+            'hinario_grupo': [],
+            'escalas': [],
+            'escalas_grupo': []
+        }
 
-def criar_sessoes_multiplas(cookies_dict, num_sessoes=2):
-    """Cria múltiplas sessões com os mesmos cookies"""
+def criar_sessoes_otimizadas(cookies_dict, num_sessoes=8):
+    """Cria múltiplas sessões otimizadas"""
     sessoes = []
     for i in range(num_sessoes):
         session = requests.Session()
         session.cookies.update(cookies_dict)
+        
+        # Otimizações de sessão
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Keep-Alive': 'timeout=30, max=100'
+        })
+        
+        # Configurar adapter para connection pooling
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=2
+        )
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        
         sessoes.append(session)
+    
     return sessoes
 
 def main():
+    global total_alunos, processados_count
     tempo_inicio = time.time()
     
     with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
+        # Usar Chrome com otimizações
+        navegador = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
+            ]
+        )
         pagina = navegador.new_page()
         
         pagina.set_extra_http_headers({
@@ -393,197 +431,153 @@ def main():
             navegador.close()
             return
         
-        # Para teste inicial, uncomment para limitar
-        # alunos = alunos[:10]  # Teste com 10 alunos primeiro
+        total_alunos = len(alunos)
+        processados_count = 0
         
-        print(f"📊 Iniciando backup completo melhorado de {len(alunos)} alunos...")
+        # Teste com alguns alunos primeiro (opcional)
+        # alunos = alunos[:20]  # Descomente para testar
+        # total_alunos = len(alunos)
         
-        # Dividir alunos em lotes menores
-        batch_size = 5
-        lotes = [alunos[i:i + batch_size] for i in range(0, len(alunos), batch_size)]
+        print(f"📊 Processando {len(alunos)} alunos com paralelização ultra otimizada...")
         
-        backup_completo_final = {
-            'metadata': {
-                'timestamp_inicio': datetime.now().isoformat(),
-                'total_alunos': len(alunos),
-                'versao_script': '3.0_melhorado_completo',
-                'fonte': 'musical.congregacao.org.br',
-                'descricao': 'Backup completo com extração melhorada de todos os dados das tabelas'
-            },
-            'alunos': []
-        }
+        resultado_final = []
         
-        # Criar múltiplas sessões para paralelização
-        sessoes = criar_sessoes_multiplas(cookies_dict, 2)
+        # Criar múltiplas sessões otimizadas
+        max_workers = 8  # Aumentado para maior paralelismo
+        sessoes = criar_sessoes_otimizadas(cookies_dict, max_workers)
         
-        # Processar lotes com threading
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        # Processar todos os alunos em paralelo
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Mapear cada aluno para uma sessão
             futures = []
             
-            for i, lote in enumerate(lotes):
-                session_para_lote = sessoes[i % len(sessoes)]
-                
-                future = executor.submit(
-                    processar_lote_backup_completo_melhorado, 
-                    session_para_lote, 
-                    lote, 
-                    i + 1
-                )
+            for i, aluno in enumerate(alunos):
+                session_para_aluno = sessoes[i % len(sessoes)]
+                future = executor.submit(processar_aluno_individual, session_para_aluno, aluno)
                 futures.append(future)
-                
-                # Processar em grupos menores para controle
-                if len(futures) >= 2:
-                    for future in concurrent.futures.as_completed(futures):
-                        resultado_lote = future.result()
-                        backup_completo_final['alunos'].extend(resultado_lote)
-                    
-                    futures = []
-                    
-                    # Status atualizado
-                    alunos_processados = len(backup_completo_final['alunos'])
-                    progresso = (alunos_processados / len(alunos)) * 100
-                    tempo_decorrido = (time.time() - tempo_inicio) / 60
-                    print(f"📈 Progresso: {alunos_processados}/{len(alunos)} ({progresso:.1f}%) - {tempo_decorrido:.1f}min")
             
-            # Processar futures restantes
+            # Coletar resultados conforme ficam prontos
             for future in concurrent.futures.as_completed(futures):
-                resultado_lote = future.result()
-                backup_completo_final['alunos'].extend(resultado_lote)
-        
-        # Calcular estatísticas detalhadas
-        tempo_total = (time.time() - tempo_inicio) / 60
-        backup_completo_final['metadata']['timestamp_fim'] = datetime.now().isoformat()
-        backup_completo_final['metadata']['tempo_total_minutos'] = tempo_total
-        backup_completo_final['metadata']['alunos_processados'] = len(backup_completo_final['alunos'])
-        
-        # Estatísticas por seção
-        total_registros = 0
-        stats_secoes = {}
-        stats_detalhadas = {}
-        
-        for aluno_backup in backup_completo_final['alunos']:
-            for secao_nome, registros_secao in aluno_backup.get('secoes', {}).items():
-                total_registros += len(registros_secao)
-                stats_secoes[secao_nome] = stats_secoes.get(secao_nome, 0) + len(registros_secao)
+                try:
+                    resultado = future.result()
+                    resultado_final.append(resultado)
+                except Exception as e:
+                    safe_print(f"⚠️ Erro em future: {e}")
                 
-                # Estatísticas detalhadas por tipo de dados
-                if registros_secao and secao_nome not in stats_detalhadas:
-                    stats_detalhadas[secao_nome] = {
-                        'headers_exemplo': registros_secao[0].get('headers', []) if registros_secao else [],
-                        'estrutura_dados': list(registros_secao[0].get('dados_estruturados', {}).keys()) if registros_secao else []
-                    }
+                # Status a cada 25 alunos processados
+                if len(resultado_final) % 25 == 0:
+                    progresso = (len(resultado_final) / len(alunos)) * 100
+                    tempo_decorrido = (time.time() - tempo_inicio) / 60
+                    velocidade = len(resultado_final) / tempo_decorrido if tempo_decorrido > 0 else 0
+                    safe_print(f"🚀 {len(resultado_final)}/{len(alunos)} ({progresso:.1f}%) - {velocidade:.1f} alunos/min")
         
-        backup_completo_final['metadata']['total_registros'] = total_registros
-        backup_completo_final['metadata']['stats_secoes'] = stats_secoes
-        backup_completo_final['metadata']['stats_detalhadas'] = stats_detalhadas
+        print(f"\n📊 Processamento concluído: {len(resultado_final)} alunos")
+        tempo_total = (time.time() - tempo_inicio) / 60
+        print(f"⏱️ Tempo total: {tempo_total:.1f} minutos")
+        print(f"🚀 Velocidade média: {len(resultado_final)/tempo_total:.1f} alunos/min")
         
-        print(f"\n📊 Backup completo melhorado finalizado!")
-        print(f"   🎯 Total de alunos processados: {len(backup_completo_final['alunos'])}")
-        print(f"   📋 Total de registros coletados: {total_registros}")
-        print(f"   ⏱️ Tempo total: {tempo_total:.1f} minutos")
-        print(f"   🚀 Velocidade: {len(backup_completo_final['alunos'])/tempo_total:.1f} alunos/min")
+        # Preparar dados estruturados para Google Sheets
+        dados_para_sheets = []
         
-        print(f"\n📈 Estatísticas por seção:")
-        for secao, count in stats_secoes.items():
-            if count > 0:
-                print(f"   └─ {secao}: {count} registros")
+        for aluno_dados in resultado_final:
+            info_basica = aluno_dados['info_basica']
+            
+            # Para cada seção, criar linhas separadas se houver dados
+            secoes_com_dados = ['mts', 'mts_grupo', 'msa', 'msa_grupo', 'provas', 'metodo', 'hinario', 'hinario_grupo', 'escalas', 'escalas_grupo']
+            
+            tem_dados_historico = False
+            for secao in secoes_com_dados:
+                if aluno_dados[secao]:
+                    tem_dados_historico = True
+                    for registro in aluno_dados[secao]:
+                        linha_sheets = [
+                            info_basica['nome'],
+                            info_basica['id'],
+                            info_basica['comum'],
+                            info_basica['ministerio'],
+                            info_basica['instrumento'],
+                            info_basica['nivel'],
+                            secao.upper(),  # Tipo de registro
+                            "|".join(registro) if isinstance(registro, list) else str(registro)  # Dados do registro
+                        ]
+                        dados_para_sheets.append(linha_sheets)
+            
+            # Se não tem dados de histórico, adicionar linha só com info básica
+            if not tem_dados_historico:
+                linha_vazia = [
+                    info_basica['nome'],
+                    info_basica['id'],
+                    info_basica['comum'],
+                    info_basica['ministerio'],
+                    info_basica['instrumento'],
+                    info_basica['nivel'],
+                    'SEM_HISTORICO',
+                    ''
+                ]
+                dados_para_sheets.append(linha_vazia)
         
-        # Preparar dados para envio ao Apps Script
-        body_para_apps_script = {
-            "tipo": "backup_completo_melhorado",
-            "dados": backup_completo_final,
+        print(f"\n📊 Dados estruturados: {len(dados_para_sheets)} linhas para envio")
+        
+        # Headers para o Google Sheets
+        headers = [
+            "NOME", "ID", "COMUM", "MINISTERIO", "INSTRUMENTO", "NIVEL", 
+            "TIPO_REGISTRO", "DADOS_REGISTRO"
+        ]
+        
+        # Calcular estatísticas
+        total_registros = len(dados_para_sheets)
+        stats_tipos = {}
+        
+        for linha in dados_para_sheets:
+            tipo = linha[6]  # Coluna TIPO_REGISTRO
+            stats_tipos[tipo] = stats_tipos.get(tipo, 0) + 1
+        
+        body = {
+            "tipo": "historico_alunos_completo",
+            "dados": dados_para_sheets,
+            "headers": headers,
             "resumo": {
-                "total_alunos": len(backup_completo_final['alunos']),
+                "total_alunos": len(resultado_final),
                 "total_registros": total_registros,
                 "tempo_processamento": f"{tempo_total:.1f} minutos",
-                "stats_secoes": stats_secoes,
-                "versao": "3.0_melhorado",
-                "melhorias": [
-                    "Extração completa de conteúdo das células",
-                    "Mapeamento estruturado de dados por headers",
-                    "Identificação de IDs de registros",
-                    "Processamento melhorado de tabelas de grupo",
-                    "Limpeza aprimorada de texto"
-                ]
+                "velocidade": f"{len(resultado_final)/tempo_total:.1f} alunos/min",
+                "stats_tipos": stats_tipos,
+                "estrutura": "dados_completos_por_tipo"
             }
         }
         
-        # Tentar enviar para Apps Script
+        # Enviar dados para Apps Script
         try:
-            print("📤 Enviando backup melhorado para Google Sheets...")
-            resposta_post = requests.post(URL_APPS_SCRIPT, json=body_para_apps_script, timeout=300)
-            print(f"✅ Backup enviado! Status: {resposta_post.status_code}")
-            if resposta_post.text:
-                print(f"Resposta: {resposta_post.text[:200]}...")
+            print("📤 Enviando dados para Google Sheets...")
+            resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+            print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
+            print(f"Resposta: {resposta_post.text[:200]}...")
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
             
-            # Salvar backup local como fallback
-            nome_arquivo = f'backup_melhorado_{int(time.time())}.json'
-            with open(nome_arquivo, 'w', encoding='utf-8') as f:
-                json.dump(backup_completo_final, f, ensure_ascii=False, indent=2)
-            print(f"💾 Backup completo salvo localmente: {nome_arquivo}")
-            
-            # Salvar também um resumo legível
-            nome_resumo = f'resumo_backup_{int(time.time())}.txt'
-            with open(nome_resumo, 'w', encoding='utf-8') as f:
-                f.write("RESUMO DO BACKUP COMPLETO\n")
-                f.write("="*50 + "\n\n")
-                f.write(f"Total de alunos: {len(backup_completo_final['alunos'])}\n")
-                f.write(f"Total de registros: {total_registros}\n")
-                f.write(f"Tempo de processamento: {tempo_total:.1f} minutos\n\n")
-                f.write("Estatísticas por seção:\n")
-                for secao, count in stats_secoes.items():
-                    if count > 0:
-                        f.write(f"  {secao}: {count} registros\n")
-                        if secao in stats_detalhadas:
-                            f.write(f"    Headers: {stats_detalhadas[secao]['headers_exemplo']}\n")
-                f.write(f"\nVersão do script: 3.0_melhorado_completo\n")
-            print(f"📄 Resumo salvo: {nome_resumo}")
+            # Salvar backup local
+            with open(f'backup_historico_{int(time.time())}.json', 'w', encoding='utf-8') as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+            print("💾 Backup salvo localmente")
+        
+        # Resumo final
+        print(f"\n📈 RESUMO FINAL:")
+        print(f"   🎯 Total de alunos processados: {len(resultado_final)}")
+        print(f"   📊 Total de registros extraídos: {total_registros}")
+        print(f"   ⏱️ Tempo total: {tempo_total:.1f} minutos")
+        print(f"   🚀 Velocidade: {len(resultado_final)/tempo_total:.1f} alunos/min")
+        
+        if stats_tipos:
+            print("   📋 Registros por tipo:")
+            for tipo, count in sorted(stats_tipos.items(), key=lambda x: x[1], reverse=True):
+                if count > 0:
+                    print(f"      - {tipo}: {count} registros")
         
         navegador.close()
-
-# Função utilitária para testar um único aluno (para debug)
-def testar_um_aluno(aluno_id, aluno_nome="Teste"):
-    """Função para testar a extração de dados de um único aluno"""
-    with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=False)  # headless=False para debug
-        pagina = navegador.new_page()
-        
-        pagina.goto(URL_INICIAL)
-        pagina.fill('input[name="login"]', EMAIL)
-        pagina.fill('input[name="password"]', SENHA)
-        pagina.click('button[type="submit"]')
-        pagina.wait_for_selector("nav", timeout=15000)
-        
-        cookies_dict = extrair_cookies_playwright(pagina)
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-        
-        print(f"🔍 Testando extração para aluno {aluno_id}...")
-        backup = obter_backup_completo_aluno_melhorado(session, aluno_id, aluno_nome)
-        
-        # Mostrar resultados detalhados
-        print(f"\n📊 Resultados para {aluno_nome}:")
-        for secao, registros in backup.get('secoes', {}).items():
-            if registros:
-                print(f"  {secao}: {len(registros)} registros")
-                for i, reg in enumerate(registros[:2]):  # Mostrar primeiros 2 registros
-                    print(f"    Registro {i+1}: {reg.get('dados', [])}")
-        
-        # Salvar resultado para análise
-        with open(f'teste_aluno_{aluno_id}.json', 'w', encoding='utf-8') as f:
-            json.dump(backup, f, ensure_ascii=False, indent=2)
-        
-        navegador.close()
-        return backup
 
 if __name__ == "__main__":
     if not EMAIL or not SENHA:
         print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
         exit(1)
-    
-    # Para testar um aluno específico, uncomment a linha abaixo e comment main()
-    # testar_um_aluno("697150", "Adilson Thiago Virtis Dos Santos")
     
     main()
