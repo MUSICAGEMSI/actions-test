@@ -30,7 +30,5 @@ jobs:
       - name: Instalar navegadores do Playwright
         run: python -m playwright install
 
-      - name: Executar script_historicoindividual.py
-        run: python script_historicoindividual.py
-
-
+      - name: Executar script_localidadesccb.py
+        run: python script_localidadesccb.py
