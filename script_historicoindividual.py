@@ -1,37 +1,77 @@
-import requests
 from playwright.sync_api import sync_playwright
 import json
 import time
-from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
-class MusicalAPIExtractor:
+class NetworkAPIDiscovery:
     def __init__(self, email, senha):
         self.email = email
         self.senha = senha
-        self.session = requests.Session()
-        self.base_url = "https://musical.congregacao.org.br"
-        
-    def fazer_login_e_obter_cookies(self):
-        """Faz login via Playwright e obtém cookies para requests"""
+        self.captured_requests = []
+        self.captured_responses = []
+    
+    def capture_network_traffic(self):
+        """Captura todo tráfego de rede para descobrir APIs ocultas"""
         with sync_playwright() as p:
-            navegador = p.chromium.launch(headless=True)
-            pagina = navegador.new_page()
+            navegador = p.chromium.launch(headless=False)  # Visível para debug
+            context = navegador.new_context()
+            pagina = context.new_page()
             
-            # Interceptar requisições para descobrir APIs
-            requisicoes = []
-            def interceptar_request(request):
-                if 'api' in request.url or '.json' in request.url or 'ajax' in request.url:
-                    requisicoes.append({
+            # Interceptar todas as requisições
+            def handle_request(request):
+                if any(keyword in request.url.lower() for keyword in 
+                      ['api', 'ajax', 'json', 'data', 'licoes', 'historico', 'alunos']):
+                    
+                    request_info = {
                         'url': request.url,
                         'method': request.method,
                         'headers': dict(request.headers),
-                        'post_data': request.post_data
-                    })
+                        'post_data': request.post_data,
+                        'timestamp': time.time()
+                    }
+                    self.captured_requests.append(request_info)
+                    print(f"📡 Request: {request.method} {request.url}")
             
-            pagina.on('request', interceptar_request)
+            def handle_response(response):
+                if any(keyword in response.url.lower() for keyword in 
+                      ['api', 'ajax', 'json', 'data', 'licoes', 'historico', 'alunos']):
+                    
+                    try:
+                        # Tentar capturar o body da resposta
+                        body = response.body() if response.status == 200 else None
+                        content_type = response.headers.get('content-type', '')
+                        
+                        response_info = {
+                            'url': response.url,
+                            'status': response.status,
+                            'headers': dict(response.headers),
+                            'content_type': content_type,
+                            'body_size': len(body) if body else 0,
+                            'timestamp': time.time()
+                        }
+                        
+                        # Se for JSON, tentar parsear
+                        if 'json' in content_type and body:
+                            try:
+                                json_data = json.loads(body.decode('utf-8'))
+                                response_info['json_structure'] = self.analyze_json_structure(json_data)
+                            except:
+                                pass
+                        
+                        self.captured_responses.append(response_info)
+                        print(f"📥 Response: {response.status} {response.url} ({response_info['body_size']} bytes)")
+                        
+                    except Exception as e:
+                        print(f"⚠️ Erro ao capturar resposta: {e}")
             
-            # Login
-            pagina.goto(f"{self.base_url}/")
+            # Configurar interceptadores
+            pagina.on('request', handle_request)
+            pagina.on('response', handle_response)
+            
+            print("🌐 Iniciando captura de tráfego de rede...")
+            
+            # 1. Login
+            pagina.goto("https://musical.congregacao.org.br/")
             pagina.fill('input[name="login"]', self.email)
             pagina.fill('input[name="password"]', self.senha)
             pagina.click('button[type="submit"]')
@@ -39,189 +79,175 @@ class MusicalAPIExtractor:
             pagina.wait_for_selector("nav", timeout=15000)
             print("✅ Login realizado!")
             
-            # Navegar para área de alunos para interceptar APIs
-            pagina.goto(f"{self.base_url}/alunos/listagem")
-            time.sleep(3)  # Aguardar carregamento das APIs
+            # 2. Navegar por diferentes seções para capturar APIs
+            secoes_para_testar = [
+                ("/alunos/listagem", "Lista de alunos"),
+                ("/licoes", "Lições"),
+                ("/dashboard", "Dashboard"),
+                ("/ministerios", "Ministérios"),
+                ("/instrumentos", "Instrumentos")
+            ]
             
-            # Extrair cookies
-            cookies = pagina.context.cookies()
-            cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies}
-            self.session.cookies.update(cookies_dict)
+            for url_secao, nome_secao in secoes_para_testar:
+                try:
+                    print(f"📂 Navegando para: {nome_secao}")
+                    pagina.goto(f"https://musical.congregacao.org.br{url_secao}")
+                    
+                    # Aguardar carregamento e possíveis chamadas AJAX
+                    time.sleep(3)
+                    
+                    # Tentar interagir com elementos que podem fazer chamadas API
+                    # Buscar por datatables, dropdowns, etc.
+                    datatables = pagina.query_selector_all('table[id*="datatable"]')
+                    for dt in datatables:
+                        try:
+                            # Tentar filtrar/ordenar para gerar mais requisições
+                            search_input = pagina.query_selector('input[type="search"]')
+                            if search_input:
+                                search_input.fill("teste")
+                                time.sleep(1)
+                                search_input.fill("")
+                                time.sleep(1)
+                        except:
+                            pass
+                    
+                except Exception as e:
+                    print(f"⚠️ Erro ao navegar para {nome_secao}: {e}")
+            
+            # 3. Tentar acessar histórico de um aluno específico
+            if self.captured_requests:
+                # Procurar por requests que retornaram dados de alunos
+                for req in self.captured_requests:
+                    if 'alunos' in req['url'] and 'listagem' in req['url']:
+                        print("🎯 Tentando acessar histórico de aluno...")
+                        pagina.goto("https://musical.congregacao.org.br/licoes/index/1")
+                        time.sleep(3)
+                        break
             
             navegador.close()
             
-            # Mostrar APIs descobertas
-            print(f"🔍 APIs descobertas: {len(requisicoes)}")
-            for req in requisicoes:
-                print(f"   {req['method']} - {req['url']}")
-            
-            return cookies_dict, requisicoes
+        return self.captured_requests, self.captured_responses
     
-    def descobrir_endpoints_api(self):
-        """Tenta descobrir todos os endpoints da API"""
-        endpoints_conhecidos = [
-            "/api/alunos",
-            "/api/alunos/listagem", 
-            "/api/historico",
-            "/alunos/api",
-            "/licoes/api",
-            "/ajax/alunos",
-            "/data/alunos",
-            # Baseado no seu código atual
-            "/alunos/listagem",  # DataTable endpoint
-        ]
-        
-        endpoints_funcionais = []
-        
-        for endpoint in endpoints_conhecidos:
-            try:
-                url = f"{self.base_url}{endpoint}"
-                
-                # Tentar GET primeiro
-                resp_get = self.session.get(url, timeout=10)
-                if resp_get.status_code == 200:
-                    content_type = resp_get.headers.get('content-type', '')
-                    if 'json' in content_type:
-                        endpoints_funcionais.append({
-                            'endpoint': endpoint,
-                            'method': 'GET',
-                            'status': resp_get.status_code,
-                            'sample_data': str(resp_get.text)[:200]
-                        })
-                        continue
-                
-                # Tentar POST (como DataTables)
-                data = {
-                    'draw': '1',
-                    'start': '0', 
-                    'length': '10000',
-                    'search[value]': '',
-                    'search[regex]': 'false'
-                }
-                headers = {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                }
-                
-                resp_post = self.session.post(url, data=data, headers=headers, timeout=10)
-                if resp_post.status_code == 200:
-                    endpoints_funcionais.append({
-                        'endpoint': endpoint,
-                        'method': 'POST',
-                        'status': resp_post.status_code,
-                        'sample_data': str(resp_post.text)[:200]
-                    })
-                
-            except Exception as e:
-                continue
-        
-        return endpoints_funcionais
-    
-    def obter_todos_alunos_direto(self):
-        """Obtém todos os alunos direto da API sem scraping HTML"""
-        try:
-            url = f"{self.base_url}/alunos/listagem"
-            headers = {
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': f'{self.base_url}/alunos/listagem',
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+    def analyze_json_structure(self, json_data):
+        """Analisa a estrutura de dados JSON"""
+        if isinstance(json_data, dict):
+            return {
+                'type': 'dict',
+                'keys': list(json_data.keys()),
+                'key_count': len(json_data.keys())
             }
-            
-            # Buscar TODOS os alunos de uma vez
-            data = {
-                'draw': '1',
-                'start': '0',
-                'length': '50000',  # Número bem alto
-                'search[value]': '',
-                'search[regex]': 'false',
-                # Tentar adicionar mais parâmetros se necessário
-                'order[0][column]': '1',
-                'order[0][dir]': 'asc'
+        elif isinstance(json_data, list):
+            return {
+                'type': 'list',
+                'length': len(json_data),
+                'first_item_type': type(json_data[0]).__name__ if json_data else None,
+                'first_item_keys': list(json_data[0].keys()) if json_data and isinstance(json_data[0], dict) else None
             }
-            
-            resp = self.session.post(url, data=data, headers=headers, timeout=30)
-            
-            if resp.status_code == 200:
-                dados_json = resp.json()
-                print(f"✅ API retornou {dados_json.get('recordsTotal', 0)} registros")
-                return dados_json
-            else:
-                print(f"❌ Erro na API: {resp.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erro ao acessar API: {e}")
-            return None
+        else:
+            return {
+                'type': type(json_data).__name__,
+                'value_sample': str(json_data)[:100]
+            }
     
-    def obter_historico_api_direto(self, aluno_id):
-        """Tenta obter histórico direto da API em vez de scraping"""
-        endpoints_historico = [
-            f"/api/alunos/{aluno_id}/historico",
-            f"/licoes/api/{aluno_id}",
-            f"/ajax/historico/{aluno_id}",
-            f"/alunos/{aluno_id}/historico.json",
-        ]
+    def generate_api_map(self, requests, responses):
+        """Gera um mapa das APIs descobertas"""
+        api_map = {}
         
-        for endpoint in endpoints_historico:
-            try:
-                url = f"{self.base_url}{endpoint}"
-                resp = self.session.get(url, timeout=10)
-                
-                if resp.status_code == 200:
-                    content_type = resp.headers.get('content-type', '')
-                    if 'json' in content_type:
-                        return resp.json()
-                        
-            except Exception:
-                continue
-        
-        return None
-    
-    def explorar_estrutura_dados(self):
-        """Explora a estrutura completa de dados disponível"""
-        print("🔍 Explorando estrutura de dados...")
-        
-        # 1. Fazer login e obter cookies
-        cookies, requisicoes_interceptadas = self.fazer_login_e_obter_cookies()
-        
-        # 2. Descobrir endpoints
-        endpoints = self.descobrir_endpoints_api()
-        print(f"\n📊 Endpoints funcionais encontrados: {len(endpoints)}")
-        for ep in endpoints:
-            print(f"   {ep['method']} {ep['endpoint']} - Status: {ep['status']}")
-            print(f"      Sample: {ep['sample_data'][:100]}...")
-        
-        # 3. Testar API de alunos
-        dados_alunos = self.obter_todos_alunos_direto()
-        if dados_alunos:
-            print(f"\n📋 Estrutura dos dados de alunos:")
-            print(f"   Total records: {dados_alunos.get('recordsTotal')}")
-            print(f"   Filtered: {dados_alunos.get('recordsFiltered')}")
+        # Agrupar por endpoint base
+        for req in requests:
+            parsed_url = urlparse(req['url'])
+            base_path = parsed_url.path
             
-            if dados_alunos.get('data'):
-                print(f"   Campos por aluno: {len(dados_alunos['data'][0])}")
-                print(f"   Exemplo primeiro aluno: {dados_alunos['data'][0]}")
+            if base_path not in api_map:
+                api_map[base_path] = {
+                    'methods': set(),
+                    'parameters': set(),
+                    'call_count': 0,
+                    'responses': []
+                }
+            
+            api_map[base_path]['methods'].add(req['method'])
+            api_map[base_path]['call_count'] += 1
+            
+            # Analisar parâmetros
+            if req['post_data']:
+                try:
+                    params = parse_qs(req['post_data'])
+                    for param in params.keys():
+                        api_map[base_path]['parameters'].add(param)
+                except:
+                    pass
+            
+            if parsed_url.query:
+                params = parse_qs(parsed_url.query)
+                for param in params.keys():
+                    api_map[base_path]['parameters'].add(param)
         
-        # 4. Testar API de histórico em alguns alunos
-        if dados_alunos and dados_alunos.get('data'):
-            print(f"\n🔍 Testando APIs de histórico...")
-            for i, aluno in enumerate(dados_alunos['data'][:3]):  # Testar 3 primeiros
-                aluno_id = aluno[0]  # ID geralmente é o primeiro campo
-                historico = self.obter_historico_api_direto(aluno_id)
-                if historico:
-                    print(f"   ✅ Aluno {aluno_id}: Histórico via API encontrado!")
-                    print(f"      Estrutura: {type(historico)} com {len(historico) if isinstance(historico, (list, dict)) else 'N/A'} elementos")
-                else:
-                    print(f"   ❌ Aluno {aluno_id}: Histórico via API não encontrado")
+        # Adicionar informações de resposta
+        for resp in responses:
+            parsed_url = urlparse(resp['url'])
+            base_path = parsed_url.path
+            
+            if base_path in api_map:
+                api_map[base_path]['responses'].append({
+                    'status': resp['status'],
+                    'content_type': resp['content_type'],
+                    'size': resp['body_size'],
+                    'json_structure': resp.get('json_structure')
+                })
         
-        return {
-            'cookies': cookies,
-            'requisicoes_interceptadas': requisicoes_interceptadas,
-            'endpoints': endpoints,
-            'dados_alunos': dados_alunos
+        # Converter sets para lists para serialização JSON
+        for path in api_map:
+            api_map[path]['methods'] = list(api_map[path]['methods'])
+            api_map[path]['parameters'] = list(api_map[path]['parameters'])
+        
+        return api_map
+    
+    def discover_all_apis(self):
+        """Método principal para descobrir todas as APIs"""
+        print("🚀 Iniciando descoberta completa de APIs...")
+        
+        requests, responses = self.capture_network_traffic()
+        
+        print(f"\n📊 Estatísticas de captura:")
+        print(f"   📡 Requisições capturadas: {len(requests)}")
+        print(f"   📥 Respostas capturadas: {len(responses)}")
+        
+        # Gerar mapa de APIs
+        api_map = self.generate_api_map(requests, responses)
+        
+        print(f"\n🗺️ APIs descobertas: {len(api_map)}")
+        for path, info in api_map.items():
+            print(f"   {path}")
+            print(f"      Métodos: {info['methods']}")
+            print(f"      Parâmetros: {info['parameters']}")
+            print(f"      Chamadas: {info['call_count']}")
+            if info['responses']:
+                unique_statuses = set(r['status'] for r in info['responses'])
+                print(f"      Status codes: {list(unique_statuses)}")
+        
+        # Salvar descobertas
+        discovery_data = {
+            'timestamp': time.time(),
+            'requests': requests,
+            'responses': responses,
+            'api_map': api_map,
+            'summary': {
+                'total_requests': len(requests),
+                'total_responses': len(responses),
+                'unique_endpoints': len(api_map),
+                'successful_responses': len([r for r in responses if r['status'] == 200])
+            }
         }
+        
+        with open('network_discovery.json', 'w', encoding='utf-8') as f:
+            json.dump(discovery_data, f, ensure_ascii=False, indent=2, default=str)
+        
+        print(f"\n💾 Descobertas salvas em 'network_discovery.json'")
+        
+        return discovery_data
 
-# Exemplo de uso
+# Uso
 if __name__ == "__main__":
     from dotenv import load_dotenv
     import os
@@ -235,13 +261,13 @@ if __name__ == "__main__":
         print("❌ Credenciais não encontradas")
         exit(1)
     
-    extractor = MusicalAPIExtractor(EMAIL, SENHA)
+    discoverer = NetworkAPIDiscovery(EMAIL, SENHA)
+    resultado = discoverer.discover_all_apis()
     
-    # Explorar toda a estrutura
-    resultado = extractor.explorar_estrutura_dados()
+    # Mostrar os endpoints mais promissores
+    print("\n🎯 ENDPOINTS MAIS PROMISSORES:")
+    api_map = resultado['api_map']
     
-    # Salvar descobertas em arquivo
-    with open('descobertas_api.json', 'w', encoding='utf-8') as f:
-        json.dump(resultado, f, ensure_ascii=False, indent=2, default=str)
-    
-    print("\n💾 Descobertas salvas em 'descobertas_api.json'")
+    for path, info in sorted(api_map.items(), key=lambda x: x[1]['call_count'], reverse=True):
+        if any(keyword in path.lower() for keyword in ['api', 'ajax', 'data', 'json']):
+            print(f"⭐ {path} - {info['call_count']} calls - {info['methods']}")
