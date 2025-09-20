@@ -15,7 +15,7 @@ from threading import Lock
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxVW_i69_DL_UQQqVjxLsAcEv5edorXSD4g-PZUu4LC9TkGd9yEfNiTL0x92ELDNm8M/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxhthGne_F6y_rmFkqJenpuvMPN6nWPO2h8WU5D7nulMape6rYbxcEPZ9Sxhi0gEeWm/exec'
 
 # Lock para thread safety
 print_lock = Lock()
