@@ -58,10 +58,10 @@ jobs:
           echo "🐍 Scripts Python encontrados:"
           find . -name "*.py" -type f
           
-      - name: Executar script de debug
+      - name: Executar script com URL correta
         run: |
-          echo "🐛 Executando versão DEBUG do script"
-          python script_debug_completo.py
+          echo "🎵 Executando script com URL CORRETA: grp_musical/editar"
+          python script_grp_musical_correto.py
           
       - name: Listar arquivos gerados
         if: always()
