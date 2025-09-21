@@ -5,12 +5,10 @@ import requests
 import time
 import concurrent.futures
 from playwright.sync_api import sync_playwright
-import asyncio
-import aiohttp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Configurações AGRESSIVAS
+# Configurações
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
@@ -18,16 +16,16 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwV-0AChSp5-JyBc3NysU
 
 # Range menor para teste de velocidade
 RANGE_INICIO = 600000
-RANGE_FIM = 610000  # Apenas 10k para teste
-INSTANCIA_ID = "GHA_ultra_test"
+RANGE_FIM = 605000  # 5K para teste
+INSTANCIA_ID = "GHA_speed_test"
 
 # Configurações ULTRA AGRESSIVAS
-NUM_THREADS = 30  # Aumentado
-TIMEOUT_REQUEST = 5  # Reduzido drasticamente
-PAUSA_MINIMA = 0.01  # Quase zero
-BATCH_SIZE = 100  # Batches maiores
+NUM_THREADS = 30
+TIMEOUT_REQUEST = 3
+PAUSA_MINIMA = 0.01
+BATCH_SIZE = 100
 
-# Regex pré-compiladas para velocidade
+# Regex pré-compiladas
 REGEX_NOME = re.compile(r'name="nome"[^>]*value="([^"]*)"')
 REGEX_IGREJA = re.compile(r'igreja_selecionada\s*\(\s*(\d+)\s*\)')
 REGEX_CARGO = re.compile(r'id_cargo"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
@@ -35,13 +33,12 @@ REGEX_NIVEL = re.compile(r'id_nivel"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOT
 REGEX_INSTRUMENTO = re.compile(r'id_instrumento"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
 REGEX_TONALIDADE = re.compile(r'id_tonalidade"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
 
-def extrair_dados_otimizado(html_content, membro_id):
-    """Extração com regex pré-compiladas"""
+def extrair_dados_turbo(html_content, membro_id):
     try:
         if len(html_content) < 1000:
             return None
         
-        # Nome obrigatório
+        # Nome obrigatório - busca rápida
         nome_match = REGEX_NOME.search(html_content)
         if not nome_match:
             return None
@@ -60,7 +57,7 @@ def extrair_dados_otimizado(html_content, membro_id):
             'tonalidade': ''
         }
         
-        # Outros campos - usar regex pré-compiladas
+        # Outros campos - busca rápida
         igreja_match = REGEX_IGREJA.search(html_content)
         if igreja_match:
             dados['igreja_selecionada'] = igreja_match.group(1)
@@ -82,26 +79,26 @@ def extrair_dados_otimizado(html_content, membro_id):
             dados['tonalidade'] = tonalidade_match.group(1).strip()
         
         return dados
-        
     except:
         return None
 
-class ColetorUltraRapido:
+class ColetorTurbo:
     def __init__(self, cookies, thread_id):
         self.thread_id = thread_id
         self.sucessos = 0
         self.falhas = 0
+        self.timeouts = 0
         self.start_time = time.time()
         
         # Sessão ultra otimizada
         self.session = requests.Session()
         self.session.cookies.update(cookies)
         
-        # Sem retry para velocidade máxima
+        # Adapter agressivo - SEM RETRY
         adapter = HTTPAdapter(
-            pool_connections=30,
-            pool_maxsize=30,
-            max_retries=0  # SEM RETRY
+            pool_connections=40,
+            pool_maxsize=40,
+            max_retries=0
         )
         self.session.mount("https://", adapter)
         
@@ -111,7 +108,7 @@ class ColetorUltraRapido:
             'Connection': 'keep-alive'
         }
     
-    def coletar_ultra_rapido(self, ids_lista):
+    def coletar_sem_pausa(self, ids_lista):
         membros = []
         
         for i, membro_id in enumerate(ids_lista):
@@ -120,31 +117,35 @@ class ColetorUltraRapido:
                 resp = self.session.get(url, headers=self.headers, timeout=TIMEOUT_REQUEST)
                 
                 if resp.status_code == 200 and len(resp.text) > 3000:
-                    dados = extrair_dados_otimizado(resp.text, membro_id)
+                    dados = extrair_dados_turbo(resp.text, membro_id)
                     if dados:
                         membros.append(dados)
                         self.sucessos += 1
                         
-                        # Log apenas a cada 200 sucessos
-                        if self.sucessos % 200 == 0:
+                        # Log apenas a cada 250 sucessos
+                        if self.sucessos % 250 == 0:
                             elapsed = time.time() - self.start_time
-                            rate = self.sucessos / elapsed * 60  # por minuto
+                            rate = self.sucessos / elapsed * 60
                             print(f"T{self.thread_id}: {self.sucessos} ({rate:.0f}/min)")
                     else:
                         self.falhas += 1
                 else:
                     self.falhas += 1
                 
-                # Pausa quase zero
-                if i % 50 == 0:  # Só pausa a cada 50
+                # Pausa MUITO esporádica
+                if i % 200 == 0 and i > 0:
                     time.sleep(PAUSA_MINIMA)
                 
+            except requests.exceptions.Timeout:
+                self.timeouts += 1
             except:
                 self.falhas += 1
         
         return membros
 
-def fazer_login():
+def fazer_login_rapido():
+    print("Login rápido...")
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -154,10 +155,7 @@ def fazer_login():
                 '--disable-gpu',
                 '--disable-web-security',
                 '--disable-background-timer-throttling',
-                '--disable-renderer-backgrounding',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-features=TranslateUI',
-                '--disable-ipc-flooding-protection'
+                '--disable-renderer-backgrounding'
             ]
         )
         
@@ -172,13 +170,11 @@ def fazer_login():
         browser.close()
         return cookies
 
-def executar_coleta_ultra_rapida(cookies):
+def executar_teste_velocidade(cookies):
     total_ids = RANGE_FIM - RANGE_INICIO + 1
-    
-    # Dividir em chunks menores para paralelismo máximo
     chunk_size = total_ids // NUM_THREADS
-    chunks = []
     
+    chunks = []
     for i in range(NUM_THREADS):
         start = RANGE_INICIO + (i * chunk_size)
         end = start + chunk_size - 1
@@ -187,52 +183,48 @@ def executar_coleta_ultra_rapida(cookies):
         chunks.append(list(range(start, end + 1)))
     
     print(f"Dividindo {total_ids} IDs em {NUM_THREADS} threads")
-    for i, chunk in enumerate(chunks):
-        print(f"T{i}: {len(chunk)} IDs ({chunk[0]}-{chunk[-1]})")
     
-    # Executar com timeout mais agressivo
     todos_membros = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        coletores = [ColetorUltraRapido(cookies, i) for i in range(NUM_THREADS)]
-        futures = [executor.submit(coletores[i].coletar_ultra_rapido, chunks[i]) for i in range(NUM_THREADS)]
+        coletores = [ColetorTurbo(cookies, i) for i in range(NUM_THREADS)]
+        futures = [executor.submit(coletores[i].coletar_sem_pausa, chunks[i]) for i in range(NUM_THREADS)]
         
         for i, future in enumerate(futures):
             try:
-                membros = future.result(timeout=3000)  # 50 min timeout
+                membros = future.result(timeout=1800)  # 30 min
                 todos_membros.extend(membros)
                 
                 coletor = coletores[i]
                 elapsed = time.time() - coletor.start_time
                 rate = coletor.sucessos / elapsed * 60 if elapsed > 0 else 0
                 
-                print(f"T{i} FINAL: {len(membros)} membros | {coletor.sucessos} sucessos | "
-                      f"{coletor.falhas} falhas | {rate:.0f} sucessos/min")
+                print(f"T{i} FINAL: {len(membros)} membros | "
+                      f"✅{coletor.sucessos} ❌{coletor.falhas} ⏱️{coletor.timeouts} | "
+                      f"{rate:.0f}/min")
                 
             except concurrent.futures.TimeoutError:
-                print(f"T{i}: TIMEOUT após 50 min")
+                print(f"T{i}: TIMEOUT")
             except Exception as e:
-                print(f"T{i}: ERRO - {str(e)[:30]}")
+                print(f"T{i}: ERRO - {str(e)[:20]}")
     
     return todos_membros
 
-def enviar_dados_rapido(membros, tempo_total):
+def enviar_resultado(membros, tempo_total):
     if not membros:
+        print("Nada para enviar")
         return
     
-    print("Preparando envio...")
-    
-    # Criar relatório compacto
     relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
     
     for membro in membros:
         relatorio.append([
             str(membro['id']),
-            membro['nome'][:100],  # Limitar tamanho
+            membro['nome'][:80],
             membro['igreja_selecionada'],
-            membro['cargo_ministerio'][:50],
-            membro['nivel'][:30],
-            membro['instrumento'][:30],
-            membro['tonalidade'][:20]
+            membro['cargo_ministerio'][:40],
+            membro['nivel'][:25],
+            membro['instrumento'][:25],
+            membro['tonalidade'][:15]
         ])
     
     payload = {
@@ -246,77 +238,78 @@ def enviar_dados_rapido(membros, tempo_total):
             "tempo_execucao_min": round(tempo_total/60, 2),
             "threads_utilizadas": NUM_THREADS,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "versao": "ULTRA_OTIMIZADA"
+            "versao": "TURBO_TEST"
         }
     }
     
     try:
-        print("Enviando para Google Sheets...")
-        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=180)
-        
+        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
         if response.status_code == 200:
-            print("ENVIADO COM SUCESSO!")
+            print("DADOS ENVIADOS!")
         else:
-            print(f"Erro HTTP: {response.status_code}")
-            
+            print(f"Erro envio: {response.status_code}")
     except Exception as e:
-        print(f"Erro no envio: {e}")
+        print(f"Erro: {e}")
 
 def main():
-    print("MODO ULTRA RÁPIDO - TESTE DE VELOCIDADE")
-    print("=" * 50)
+    print("TESTE DE VELOCIDADE TURBO")
+    print("=" * 40)
     print(f"Range: {RANGE_INICIO:,} - {RANGE_FIM:,} ({RANGE_FIM-RANGE_INICIO+1:,} IDs)")
-    print(f"Threads: {NUM_THREADS} | Timeout: {TIMEOUT_REQUEST}s | Pausa: {PAUSA_MINIMA}s")
+    print(f"Config: {NUM_THREADS} threads, timeout {TIMEOUT_REQUEST}s")
     
     if not EMAIL or not SENHA:
-        print("ERRO: Credenciais não encontradas")
+        print("ERRO: Sem credenciais")
         sys.exit(1)
     
     tempo_inicio = time.time()
     
-    print("\nLogin...")
-    cookies = fazer_login()
+    cookies = fazer_login_rapido()
     if not cookies:
-        print("ERRO: Falha no login")
+        print("ERRO: Login falhou")
         sys.exit(1)
     
-    print(f"Cookies obtidos: {len(cookies)}")
+    print(f"Cookies: {len(cookies)} obtidos")
+    print("\nINICIANDO TESTE...")
     
-    print("\nINICIANDO COLETA ULTRA RÁPIDA...")
-    print("-" * 50)
-    
-    membros = executar_coleta_ultra_rapida(cookies)
+    membros = executar_teste_velocidade(cookies)
     
     tempo_total = time.time() - tempo_inicio
     
-    print("\n" + "=" * 50)
-    print("RESULTADO FINAL")
-    print("=" * 50)
-    print(f"Membros coletados: {len(membros):,}")
-    print(f"Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
+    print("\n" + "=" * 40)
+    print("RESULTADO DO TESTE")
+    print("=" * 40)
+    print(f"Coletados: {len(membros):,} membros")
+    print(f"Tempo: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
     
     if membros:
-        rate_per_min = len(membros) / (tempo_total/60)
-        rate_per_hour = rate_per_min * 60
+        rate_min = len(membros) / (tempo_total/60)
+        rate_hour = rate_min * 60
         
-        print(f"Velocidade: {rate_per_min:.0f} membros/min | {rate_per_hour:.0f} membros/hora")
+        print(f"VELOCIDADE: {rate_min:.0f} membros/min")
+        print(f"          : {rate_hour:.0f} membros/hora")
         
-        # Projeção para 1 milhão
-        tempo_1m = 1000000 / rate_per_hour
-        print(f"Projeção p/ 1M: {tempo_1m:.1f} horas")
+        # Análise da velocidade
+        if rate_min >= 1000:
+            tempo_1m = 1000000 / rate_hour
+            print(f"EXCELENTE! 1M em {tempo_1m:.1f} horas")
+        elif rate_min >= 500:
+            tempo_1m = 1000000 / rate_hour
+            print(f"BOA! 1M em {tempo_1m:.1f} horas")
+        elif rate_min >= 200:
+            print("RAZOÁVEL - pode melhorar")
+        else:
+            print("MUITO LENTA - precisa otimizar")
         
         # Amostras
-        print(f"\nAMOSTRAS ({min(5, len(membros))} primeiros):")
-        for i, m in enumerate(membros[:5], 1):
-            nome = m['nome'][:25]
-            instr = m['instrumento'][:15]
-            print(f"{i}. ID {m['id']} - {nome} - {instr}")
+        print(f"\nAMOSTRAS:")
+        for i, m in enumerate(membros[:3], 1):
+            print(f"{i}. ID {m['id']} - {m['nome'][:25]} - {m['instrumento'][:15]}")
         
-        enviar_dados_rapido(membros, tempo_total)
+        enviar_resultado(membros, tempo_total)
     else:
         print("NENHUM MEMBRO COLETADO!")
     
-    print(f"\nFINALIZADO: {INSTANCIA_ID}")
+    print(f"\nTESTE FINALIZADO")
 
 if __name__ == "__main__":
     main()
