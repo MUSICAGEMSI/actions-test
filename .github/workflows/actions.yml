@@ -1,95 +1,38 @@
-name: Executar Scripts Diariamente
+name: Coleta Musical
 
 on:
-  schedule:
-    - cron: '0 12 12 * *'  # Todo dia 12 às 12:00 UTC (09h Brasília)
-  workflow_dispatch:       # Permite disparo manual
-  
+  workflow_dispatch:
+    inputs:
+      script_name:
+        description: 'Script para executar'
+        required: true
+        default: 'script_batch_1.py'
+        type: choice
+        options:
+          - script_batch_1.py
+          - script_batch_2.py
+          - script_batch_3.py
+          - script_batch_4.py
+          - script_batch_5.py
+
 jobs:
-  run-scripts:
+  coleta:
     runs-on: ubuntu-latest
-    timeout-minutes: 60    # Timeout de 60 minutos para evitar execução infinita
+    timeout-minutes: 360  # 6 horas
     
-    env:
-      LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
-      SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
-      
     steps:
-      - name: Clonar o repositório
-        uses: actions/checkout@v4  # Versão mais recente
-        
-      - name: Configurar Python
-        uses: actions/setup-python@v5  # Versão mais recente
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # Versão mais estável
-          
-      - name: Cache de dependências Python
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-            
-      - name: Criar requirements.txt se não existir
+          python-version: '3.11'
+      
+      - name: Instalar dependências
         run: |
-          if [ ! -f requirements.txt ]; then
-            echo "playwright==1.40.0" > requirements.txt
-            echo "requests==2.31.0" >> requirements.txt
-            echo "beautifulsoup4==4.12.2" >> requirements.txt
-            echo "lxml==4.9.3" >> requirements.txt
-            echo "urllib3==2.0.7" >> requirements.txt
-          fi
-          
-      - name: Instalar dependências Python
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          
-      - name: Instalar navegadores Playwright
-        run: |
+          pip install playwright requests
           python -m playwright install chromium
-          python -m playwright install-deps
-          
-      - name: Verificar arquivos do projeto
-        run: |
-          echo "📁 Arquivos no diretório:"
-          ls -la
-          echo "🐍 Scripts Python encontrados:"
-          find . -name "*.py" -type f
-          
-      - name: Executar script com URL correta
-        run: |
-          echo "🎵 Executando script com URL CORRETA: grp_musical/editar"
-          python script_grp_musical_correto.py
-          
-      - name: Listar arquivos gerados
-        if: always()
-        run: |
-          echo "📄 Arquivos HTML gerados:"
-          ls -la debug_*.html 2>/dev/null || echo "Nenhum arquivo HTML encontrado"
-          echo "📄 Outros arquivos de debug:"
-          ls -la debug_* 2>/dev/null || echo "Nenhum arquivo de debug encontrado"
-          
-      - name: Upload arquivos de debug
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-files
-          path: |
-            debug_*.html
-            debug_*.txt
-            *.log
-          retention-days: 3
-          if-no-files-found: warn
-          
-      - name: Upload de logs em caso de erro
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: execution-logs
-          path: |
-            *.log
-            /home/runner/.cache/ms-playwright/
-          retention-days: 7
-          if-no-files-found: warn
+      
+      - name: Executar coleta
+        env:
+          LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
+          SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
+        run: python ${{ github.event.inputs.script_name }}
