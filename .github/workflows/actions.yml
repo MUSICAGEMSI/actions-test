@@ -24,7 +24,7 @@ jobs:
           python-version: '3.11'  # Versão mais estável
           
       - name: Cache de dependências Python
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -38,6 +38,7 @@ jobs:
             echo "requests==2.31.0" >> requirements.txt
             echo "beautifulsoup4==4.12.2" >> requirements.txt
             echo "lxml==4.9.3" >> requirements.txt
+            echo "urllib3==2.0.7" >> requirements.txt
           fi
           
       - name: Instalar dependências Python
@@ -62,22 +63,33 @@ jobs:
           echo "🐛 Executando versão DEBUG do script"
           python script_debug_completo.py
           
+      - name: Listar arquivos gerados
+        if: always()
+        run: |
+          echo "📄 Arquivos HTML gerados:"
+          ls -la debug_*.html 2>/dev/null || echo "Nenhum arquivo HTML encontrado"
+          echo "📄 Outros arquivos de debug:"
+          ls -la debug_* 2>/dev/null || echo "Nenhum arquivo de debug encontrado"
+          
       - name: Upload arquivos de debug
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: debug-files
           path: |
             debug_*.html
             debug_*.txt
+            *.log
           retention-days: 3
+          if-no-files-found: warn
           
       - name: Upload de logs em caso de erro
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: execution-logs
           path: |
             *.log
             /home/runner/.cache/ms-playwright/
           retention-days: 7
+          if-no-files-found: warn
