@@ -6,14 +6,14 @@ on:
       script_name:
         description: 'Script para executar'
         required: true
-        default: 'script_batch_1.py'
+        default: 'script_orquestraccb1.py'
         type: choice
         options:
-          - script_batch_1.py
-          - script_batch_2.py
-          - script_batch_3.py
-          - script_batch_4.py
-          - script_batch_5.py
+          - script_orquestraccb1.py
+          - script_orquestraccb2.py
+          - script_orquestraccb3.py
+          - script_orquestraccb4.py
+          - script_orquestraccb5.py
 
 jobs:
   coleta:
