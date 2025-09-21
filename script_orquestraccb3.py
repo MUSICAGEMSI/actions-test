@@ -15,7 +15,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwV-0AChSp5-JyBc3NysUQI0UlFJ7AycvE6CSRKWxldnJ8EBiaNHtj3oYx5jiiHxQbzOw/exec'
 
 # BATCH 1: IDs 1 - 200.000
-RANGE_INICIO = 500001
+RANGE_INICIO = 400001
 RANGE_FIM = 600000
 INSTANCIA_ID = "GHA_batch_1"
 NUM_THREADS = 15
