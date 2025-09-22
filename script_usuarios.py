@@ -132,9 +132,7 @@ async def processar_lote_async(cookies_dict, ids_lote):
     connector = aiohttp.TCPConnector(
         limit=500,           # 500 conexões totais
         limit_per_host=300,  # 300 por host
-        keepalive_timeout=60,
         enable_cleanup_closed=True,
-        force_close=True,
         ttl_dns_cache=300
     )
     
@@ -272,17 +270,19 @@ def main():
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(lotes)) as executor:
             # Submeter TODOS os lotes ao mesmo tempo
-            futures = []
+            future_to_lote = {}
             for i, lote in enumerate(lotes):
                 future = executor.submit(processar_lote_sync, cookies_dict, lote)
-                futures.append((future, i + 1, len(lotes)))
+                future_to_lote[future] = (i + 1, len(lotes))
             
             safe_print(f"⚡ {len(lotes)} lotes processando simultaneamente...")
             
             # Coletar resultados conforme completam
-            for future, lote_num, total_lotes in concurrent.futures.as_completed([(f[0], f[1], f[2]) for f in futures]):
+            for future in concurrent.futures.as_completed(future_to_lote):
                 try:
+                    lote_num, total_lotes = future_to_lote[future]
                     resultado_lote = future.result()
+                    
                     if resultado_lote:
                         resultado_final.extend(resultado_lote)
                         
@@ -299,11 +299,11 @@ def main():
                     # Status do lote completado
                     tempo_decorrido = (time.time() - tempo_inicio) / 60
                     velocidade = len(resultado_final) / tempo_decorrido if tempo_decorrido > 0 else 0
-                    lotes_restantes = sum(1 for f in futures if not f[0].done())
+                    lotes_restantes = sum(1 for f in future_to_lote if not f.done())
                     safe_print(f"🏁 Lote {lote_num} CONCLUÍDO - Coletados: {len(resultado_lote)} - Total: {len(resultado_final)} - {velocidade:.0f}/min - Restantes: {lotes_restantes}")
                     
                 except Exception as e:
-                    safe_print(f"⚠️ Erro no lote {lote_num}: {e}")
+                    safe_print(f"⚠️ Erro no lote: {e}")
         
         # Finalizar
         tempo_total = (time.time() - tempo_inicio) / 60
