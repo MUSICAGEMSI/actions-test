@@ -28,7 +28,7 @@ jobs:
       - name: Instalar dependências
         run: |
           pip install --upgrade pip
-          pip install playwright requests beautifulsoup4 python-dotenv
+          pip install playwright requests beautifulsoup4 python-dotenv aiohttp
           python -m playwright install chromium --with-deps
       
       - name: Executar coleta
@@ -36,13 +36,6 @@ jobs:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
         run: |
-          # Verificar se os secrets estão configurados
-          if [[ -z "$LOGIN_MUSICAL" || -z "$SENHA_MUSICAL" ]]; then
-            echo "❌ Erro: Secrets LOGIN_MUSICAL ou SENHA_MUSICAL não configurados!"
-            exit 1
-          fi
-          
-          # Executar o script
           echo "🚀 Executando script: ${{ github.event.inputs.script_name }}"
           python ${{ github.event.inputs.script_name }}
       
@@ -50,7 +43,23 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
+          name: debug-screenshots-${{ github.run_number }}
+          path: |
+            debug_*.png
+            backup_*.json
+          retention-days: 7
+          if-no-files-found: ignore
+      
+      - name: Upload de logs e backups
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coleta-completa-${{ github.run_number }}
+          path: |
+            backup_usuarios_completo_*.json
+            *.log
+          retention-days: 30
+          if-no-files-found: ignorename: debug-screenshots
           path: |
             debug_*.png
             backup_*.json
