@@ -10,6 +10,7 @@ on:
         options:
           - script_usuarios.py
 
+
 jobs:
   coleta:
     runs-on: ubuntu-latest
