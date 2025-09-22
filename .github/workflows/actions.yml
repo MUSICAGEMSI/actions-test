@@ -9,11 +9,6 @@ on:
         type: choice
         options:
           - script_usuarios.py
-          - script_orquestraccb1.py
-          - script_orquestraccb2.py
-          - script_orquestraccb3.py
-          - script_orquestraccb4.py
-          - script_orquestraccb5.py
 
 jobs:
   coleta:
