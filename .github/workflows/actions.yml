@@ -1,5 +1,4 @@
 name: Coleta Musical
-
 on:
   workflow_dispatch:
     inputs:
@@ -10,24 +9,99 @@ on:
         type: choice
         options:
           - script_usuarios.py
+      id_range:
+        description: 'Range de IDs para usuários (formato: inicio-fim)'
+        required: false
+        default: '300-350'
+        type: string
+      max_workers:
+        description: 'Número de workers paralelos'
+        required: false
+        default: '3'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+
 jobs:
   coleta:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 horas
     
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout código
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
       - name: Instalar dependências
         run: |
-          pip install playwright requests
-          python -m playwright install chromium
+          pip install --upgrade pip
+          pip install playwright requests beautifulsoup4 python-dotenv
+          python -m playwright install chromium --with-deps
+      
+      - name: Configurar variáveis de ambiente
+        run: |
+          echo "LOGIN_MUSICAL=${{ secrets.LOGIN_MUSICAL }}" >> $GITHUB_ENV
+          echo "SENHA_MUSICAL=${{ secrets.SENHA_MUSICAL }}" >> $GITHUB_ENV
+          
+          # Configurar range de IDs se for script de usuários
+          if [[ "${{ github.event.inputs.script_name }}" == "script_usuarios.py" ]]; then
+            IFS='-' read -r ID_INICIO ID_FIM <<< "${{ github.event.inputs.id_range }}"
+            echo "ID_INICIO=${ID_INICIO:-300}" >> $GITHUB_ENV
+            echo "ID_FIM=${ID_FIM:-350}" >> $GITHUB_ENV
+            echo "MAX_WORKERS=${{ github.event.inputs.max_workers }}" >> $GITHUB_ENV
+          fi
+      
+      - name: Verificar configuração
+        run: |
+          echo "🚀 Executando script: ${{ github.event.inputs.script_name }}"
+          if [[ "${{ github.event.inputs.script_name }}" == "script_usuarios.py" ]]; then
+            echo "🎯 Range de IDs: ${{ github.event.inputs.id_range }}"
+            echo "⚡ Workers: ${{ github.event.inputs.max_workers }}"
+          fi
+          echo "🔧 Python version: $(python --version)"
+          echo "📦 Playwright version: $(python -m playwright --version)"
       
       - name: Executar coleta
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
-        run: python ${{ github.event.inputs.script_name }}
+        run: |
+          # Verificar se os secrets estão configurados
+          if [[ -z "$LOGIN_MUSICAL" || -z "$SENHA_MUSICAL" ]]; then
+            echo "❌ Erro: Secrets LOGIN_MUSICAL ou SENHA_MUSICAL não configurados!"
+            exit 1
+          fi
+          
+          # Executar o script
+          echo "🎬 Iniciando execução do script..."
+          python ${{ github.event.inputs.script_name }}
+      
+      - name: Upload de artefatos em caso de erro
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            debug_*.png
+            backup_*.json
+          retention-days: 7
+      
+      - name: Upload de logs e backups
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coleta-logs-${{ github.event.inputs.script_name }}-${{ github.run_number }}
+          path: |
+            backup_*.json
+            *.log
+          retention-days: 30
+          if-no-files-found: ignore
