@@ -20,14 +20,14 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxhthGne_F6y_rmFkqJenpuvMPN6nWPO2h8WU5D7nulMape6rYbxcEPZ9Sxhi0gEeWm/exec'
 
-# CONFIGURAÇÃO ULTRA RÁPIDA - 47.100 usuários em ~30-45 minutos
+# CONFIGURAÇÃO MÁXIMA VELOCIDADE - 47.100 usuários em ~5 MINUTOS! 🔥🔥🔥
 ID_INICIO = 1
 ID_FIM = 47100
-MAX_WORKERS = 50  # Muito mais workers
-BATCH_SIZE = 1000  # Processa em lotes
-CHUNK_SIZE = 100   # Chunks para Google Sheets
-TIMEOUT = 3        # Timeout reduzido
-DELAY = 0.01       # Delay mínimo entre requests
+MAX_WORKERS = 200   # 200 workers por lote = POWER MÁXIMO!
+BATCH_SIZE = 500    # Lotes menores = mais paralelismo
+CHUNK_SIZE = 50     # Chunks menores = envios mais rápidos
+TIMEOUT = 1.5       # Timeout mínimo
+DELAY = 0.001       # Delay quase zero
 
 # Locks e contadores
 print_lock = Lock()
@@ -49,10 +49,10 @@ def update_progress(sucesso=False):
         if sucesso:
             sucessos_count += 1
         
-        if processados_count % 500 == 0:
+        if processados_count % 1000 == 0:  # Status a cada 1000 (mais frequente)
             progresso = (processados_count / total_usuarios) * 100
             taxa_sucesso = (sucessos_count / processados_count) * 100 if processados_count > 0 else 0
-            safe_print(f"🚀 Progresso: {processados_count}/{total_usuarios} ({progresso:.1f}%) - Sucessos: {sucessos_count} ({taxa_sucesso:.1f}%)")
+            safe_print(f"🚀💨 {processados_count}/{total_usuarios} ({progresso:.1f}%) - Sucessos: {sucessos_count} ({taxa_sucesso:.1f}%)")
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright para usar em requests"""
@@ -130,10 +130,12 @@ async def coletar_dados_usuario_async(session, usuario_id, semaforo):
 async def processar_lote_async(cookies_dict, ids_lote):
     """Processa um lote de IDs de forma assíncrona"""
     connector = aiohttp.TCPConnector(
-        limit=100,
-        limit_per_host=50,
-        keepalive_timeout=30,
-        enable_cleanup_closed=True
+        limit=500,           # 500 conexões totais
+        limit_per_host=300,  # 300 por host
+        keepalive_timeout=60,
+        enable_cleanup_closed=True,
+        force_close=True,
+        ttl_dns_cache=300
     )
     
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
@@ -207,9 +209,9 @@ def main():
     global total_usuarios, processados_count, sucessos_count
     tempo_inicio = time.time()
     
-    safe_print("🚀 INICIANDO COLETA ULTRA RÁPIDA")
+    safe_print("🔥🔥🔥 MODO VELOCIDADE EXTREMA - META: 5 MINUTOS! 🔥🔥🔥")
     safe_print(f"🎯 Range: {ID_INICIO} até {ID_FIM} ({ID_FIM - ID_INICIO + 1} usuários)")
-    safe_print(f"⚡ Workers: {MAX_WORKERS} | Batch: {BATCH_SIZE} | Timeout: {TIMEOUT}s")
+    safe_print(f"⚡ Workers: {MAX_WORKERS} | Lotes: {BATCH_SIZE} | Timeout: {TIMEOUT}s | Delay: {DELAY}s")
     
     with sync_playwright() as p:
         navegador = p.chromium.launch(
@@ -257,41 +259,48 @@ def main():
         processados_count = 0
         sucessos_count = 0
         
-        # Dividir em lotes para processamento paralelo
+        # Dividir em lotes menores para MÁXIMO PARALELISMO
         lotes = [ids_usuarios[i:i + BATCH_SIZE] for i in range(0, len(ids_usuarios), BATCH_SIZE)]
-        safe_print(f"📦 Dividido em {len(lotes)} lotes de até {BATCH_SIZE} usuários")
+        safe_print(f"📦 Dividido em {len(lotes)} lotes de {BATCH_SIZE} usuários")
+        safe_print(f"🔥 TOTAL DE WORKERS SIMULTÂNEOS: {len(lotes)} × {MAX_WORKERS} = {len(lotes) * MAX_WORKERS}")
+        safe_print(f"💥 EXPLOSÃO DE VELOCIDADE INICIANDO...")
         
         resultado_final = []
         
-        # Processar lotes em paralelo (mais conservador para não sobrecarregar)
-        max_lotes_paralelos = 5
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_lotes_paralelos) as executor:
+        # Processar TODOS os lotes simultaneamente para máxima velocidade
+        safe_print("🔥 Iniciando processamento de TODOS os lotes simultaneamente...")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(lotes)) as executor:
+            # Submeter TODOS os lotes ao mesmo tempo
             futures = []
-            
             for i, lote in enumerate(lotes):
                 future = executor.submit(processar_lote_sync, cookies_dict, lote)
                 futures.append((future, i + 1, len(lotes)))
             
-            # Coletar resultados e enviar para sheets em tempo real
-            for future, lote_num, total_lotes in futures:
+            safe_print(f"⚡ {len(lotes)} lotes processando simultaneamente...")
+            
+            # Coletar resultados conforme completam
+            for future, lote_num, total_lotes in concurrent.futures.as_completed([(f[0], f[1], f[2]) for f in futures]):
                 try:
                     resultado_lote = future.result()
                     if resultado_lote:
                         resultado_final.extend(resultado_lote)
                         
-                        # Enviar para sheets em chunks se temos dados suficientes
+                        # Enviar para sheets em chunks em thread separada
                         if len(resultado_lote) >= CHUNK_SIZE:
                             chunks = [resultado_lote[i:i + CHUNK_SIZE] for i in range(0, len(resultado_lote), CHUNK_SIZE)]
                             for chunk_idx, chunk in enumerate(chunks):
                                 Thread(
                                     target=enviar_dados_para_sheets, 
-                                    args=(chunk, f"{lote_num}-{chunk_idx + 1}", f"lote-{total_lotes}")
+                                    args=(chunk, f"{lote_num}-{chunk_idx + 1}", f"total-{total_lotes}"),
+                                    daemon=True
                                 ).start()
                     
-                    # Status do lote
+                    # Status do lote completado
                     tempo_decorrido = (time.time() - tempo_inicio) / 60
                     velocidade = len(resultado_final) / tempo_decorrido if tempo_decorrido > 0 else 0
-                    safe_print(f"📊 Lote {lote_num}/{total_lotes} concluído - Total coletado: {len(resultado_final)} - {velocidade:.0f} usuários/min")
+                    lotes_restantes = sum(1 for f in futures if not f[0].done())
+                    safe_print(f"🏁 Lote {lote_num} CONCLUÍDO - Coletados: {len(resultado_lote)} - Total: {len(resultado_final)} - {velocidade:.0f}/min - Restantes: {lotes_restantes}")
                     
                 except Exception as e:
                     safe_print(f"⚠️ Erro no lote {lote_num}: {e}")
@@ -300,11 +309,13 @@ def main():
         tempo_total = (time.time() - tempo_inicio) / 60
         velocidade_final = len(resultado_final) / tempo_total if tempo_total > 0 else 0
         
-        safe_print(f"\n🎉 COLETA FINALIZADA!")
-        safe_print(f"   ⏱️  Tempo total: {tempo_total:.1f} minutos")
+        safe_print(f"\n💥💥💥 COLETA CONCLUÍDA EM VELOCIDADE EXTREMA! 💥💥💥")
+        safe_print(f"   ⏱️  Tempo total: {tempo_total:.1f} minutos ({tempo_total*60:.0f} segundos)")
         safe_print(f"   👥 Usuários coletados: {len(resultado_final)}")
         safe_print(f"   📊 Processados: {processados_count}")
-        safe_print(f"   🚀 Velocidade: {velocidade_final:.0f} usuários/minuto")
+        safe_print(f"   🚀 Velocidade BRUTAL: {velocidade_final:.0f} usuários/minuto")
+        if tempo_total < 10:
+            safe_print(f"   🔥 VELOCIDADE POR SEGUNDO: {len(resultado_final)/(tempo_total*60):.0f} usuários/segundo")
         safe_print(f"   📈 Taxa de sucesso: {(len(resultado_final)/processados_count)*100:.1f}%" if processados_count > 0 else "0%")
         
         # Backup final
