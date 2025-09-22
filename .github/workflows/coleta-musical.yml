@@ -1,4 +1,4 @@
-name: Coleta Musical
+name: Coleta Musical Geral
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +18,7 @@ on:
 jobs:
   coleta:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 horas
+    timeout-minutes: 360
     
     steps:
       - name: Checkout código
@@ -62,21 +62,6 @@ jobs:
           name: coleta-completa-${{ github.run_number }}
           path: |
             backup_usuarios_completo_*.json
-            *.log
-          retention-days: 30
-          if-no-files-found: ignorename: debug-screenshots
-          path: |
-            debug_*.png
-            backup_*.json
-          retention-days: 7
-      
-      - name: Upload de logs e backups
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coleta-logs-${{ github.run_number }}
-          path: |
-            backup_*.json
             *.log
           retention-days: 30
           if-no-files-found: ignore
