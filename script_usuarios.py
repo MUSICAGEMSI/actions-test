@@ -16,9 +16,10 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxhthGne_F6y_rmFkqJenpuvMPN6nWPO2h8WU5D7nulMape6rYbxcEPZ9Sxhi0gEeWm/exec'
 
-# Configuração para IDs específicos (300 até 350)
-ID_INICIO = 300
-ID_FIM = 350
+# Configuração para IDs específicos - pode ser sobrescrita por variáveis de ambiente
+ID_INICIO = int(os.environ.get("ID_INICIO", "300"))
+ID_FIM = int(os.environ.get("ID_FIM", "350"))
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "3"))
 
 # Lock para thread safety
 print_lock = Lock()
@@ -199,8 +200,11 @@ def processar_usuario_individual(session, usuario_id):
     """Processa um usuário individual"""
     return coletar_dados_usuario(session, usuario_id)
 
-def criar_sessoes_otimizadas(cookies_dict, num_sessoes=3):
+def criar_sessoes_otimizadas(cookies_dict, num_sessoes=None):
     """Cria múltiplas sessões otimizadas"""
+    if num_sessoes is None:
+        num_sessoes = MAX_WORKERS
+    
     sessoes = []
     for i in range(num_sessoes):
         session = requests.Session()
@@ -336,8 +340,8 @@ def main():
         
         resultado_final = []
         
-        # Criar sessões (reduzido para 3 para evitar rate limiting)
-        max_workers = 3
+        # Criar sessões (configurável via variável de ambiente)
+        max_workers = MAX_WORKERS
         sessoes = criar_sessoes_otimizadas(cookies_dict, max_workers)
         
         # Processar usuários em paralelo
