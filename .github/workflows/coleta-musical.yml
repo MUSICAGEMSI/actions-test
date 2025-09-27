@@ -8,7 +8,9 @@ on:
         default: 'script_usuarios.py'
         type: choice
         options:
-          - script_usuarios.py
+          - script_expandido.py 
+          - script_turmas.py 
+          - script_nivel.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
