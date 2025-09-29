@@ -8,9 +8,7 @@ on:
         default: 'script_usuarios.py'
         type: choice
         options:
-          - script_expandido.py 
-          - script_turmas.py 
-          - script_nivel.py
+          - script_hortocityforms.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
