@@ -61,9 +61,9 @@ def fazer_login_e_obter_session():
         browser.close()
         return session
 
-def buscar_turmas_hortolandia(session):
-    """Busca todas as turmas de Hortolândia via listagem"""
-    print("\nBuscando turmas de Hortolândia...")
+def buscar_todas_turmas(session):
+    """Busca todas as turmas via listagem"""
+    print("\nBuscando todas as turmas...")
     
     url = f"{BASE_URL}/turmas/listagem"
     headers = {
@@ -76,7 +76,7 @@ def buscar_turmas_hortolandia(session):
     
     # Buscar todas as páginas
     start = 0
-    length = 1000  # Buscar muitas de uma vez
+    length = 1000
     
     while True:
         params = {
@@ -94,43 +94,22 @@ def buscar_turmas_hortolandia(session):
                 break
             
             for reg in registros:
-                # Extrair ID da congregação do HTML
-                soup = BeautifulSoup(str(reg), 'html.parser')
-                
                 # Buscar link de edição para pegar ID da turma
-                link_editar = None
+                turma_id = None
                 for item in reg:
                     if isinstance(item, str) and 'turmas/editar' in item:
                         match = re.search(r'turmas/editar/(\d+)', item)
                         if match:
                             turma_id = int(match.group(1))
-                            link_editar = turma_id
                             break
                 
-                if not link_editar:
-                    continue
-                
-                # Pegar congregação do registro
-                congregacao_html = str(reg[2]) if len(reg) > 2 else ""
-                
-                # Verificar se contém ID de Hortolândia
-                encontrou_horto = False
-                for id_cong in IDS_CONGREGACOES_HORTOLANDIA:
-                    if f'value="{id_cong}"' in congregacao_html or f'/{id_cong}' in congregacao_html:
-                        encontrou_horto = True
-                        break
-                
-                if encontrou_horto:
-                    turmas.append({
-                        'turma_id': link_editar,
-                        'registro_bruto': reg
-                    })
+                if turma_id:
+                    turmas.append(turma_id)
             
-            print(f"Processadas {start + len(registros)} turmas, encontradas {len(turmas)} de Hortolândia")
+            print(f"Processadas {start + len(registros)} turmas, total: {len(turmas)}")
             
             start += length
             
-            # Se retornou menos que o esperado, acabou
             if len(registros) < length:
                 break
                 
@@ -138,7 +117,7 @@ def buscar_turmas_hortolandia(session):
             print(f"Erro ao buscar turmas: {e}")
             break
     
-    print(f"\nTotal de turmas de Hortolândia encontradas: {len(turmas)}")
+    print(f"\nTotal de turmas encontradas: {len(turmas)}")
     return turmas
 
 def obter_detalhes_turma(session, turma_id):
@@ -174,12 +153,18 @@ def obter_detalhes_turma(session, turma_id):
         # Extrair congregação
         congregacao_select = soup.find('select', {'name': 'id_igreja'})
         congregacao = "N/A"
-        congregacao_id = "N/A"
+        congregacao_id = None
         if congregacao_select:
             cong_option = congregacao_select.find('option', selected=True)
             if cong_option:
                 congregacao = cong_option.get_text(strip=True)
-                congregacao_id = cong_option.get('value', 'N/A')
+                congregacao_id = cong_option.get('value')
+                if congregacao_id:
+                    congregacao_id = int(congregacao_id)
+        
+        # Verificar se é de Hortolândia
+        if congregacao_id not in IDS_CONGREGACOES_HORTOLANDIA:
+            return None
         
         # Contar alunos matriculados (se houver uma seção de alunos)
         # Isso pode variar dependendo da estrutura da página
@@ -310,17 +295,17 @@ def obter_detalhes_aula(session, aula_id, turma_id):
     except Exception as e:
         return None
 
-def processar_turma_completa(session, turma_info):
+def processar_turma_completa(session, turma_id):
     """Processa uma turma: detalhes + aulas"""
-    turma_id = turma_info['turma_id']
     
     # Obter detalhes da turma
     detalhes = obter_detalhes_turma(session, turma_id)
     
+    # Se não for de Hortolândia, retorna None
     if not detalhes:
         return None, []
     
-    print(f"\nProcessando turma {turma_id} - {detalhes['curso']} - {detalhes['congregacao']}")
+    print(f"\n✓ Turma {turma_id} - {detalhes['curso']} - {detalhes['congregacao']}")
     
     # Buscar aulas da turma
     aulas = buscar_aulas_da_turma(session, turma_id)
@@ -447,18 +432,25 @@ def main():
         return
     
     # Buscar turmas de Hortolândia
-    turmas_info = buscar_turmas_hortolandia(session)
+    todas_turmas_ids = buscar_todas_turmas(session)
     
-    if not turmas_info:
+    if not todas_turmas_ids:
         print("Nenhuma turma encontrada!")
         return
     
-    # Processar cada turma
+    # Processar cada turma e filtrar por Hortolândia
+    print(f"\nProcessando {len(todas_turmas_ids)} turmas para filtrar Hortolândia...")
     todas_turmas = []
     todas_aulas = []
     
-    for turma_info in turmas_info:
-        turma, aulas = processar_turma_completa(session, turma_info)
+    contador = 0
+    for turma_id in todas_turmas_ids:
+        contador += 1
+        
+        if contador % 10 == 0:
+            print(f"Progresso: {contador}/{len(todas_turmas_ids)} turmas processadas, {len(todas_turmas)} de Hortolândia encontradas")
+        
+        turma, aulas = processar_turma_completa(session, turma_id)
         
         if turma:
             todas_turmas.append(turma)
