@@ -13,7 +13,7 @@ import concurrent.futures
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwV-0AChSp5-JyBc3NysUQI0UlFJ7AycvE6CSRKWxldnJ8EBiaNHtj3oYx5jiiHxQbzOw/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbysZ9IbdgG8Vayz8B4Kp-C5_Pd0NZiBCIIo-uA5GmJbaLMpvHcT-qQLYnrQyuUsI1fX/exec'
 
 DIAS_SEMANA = {
     "0": "DOMINGO",
