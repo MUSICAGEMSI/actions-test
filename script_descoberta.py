@@ -9,26 +9,61 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 import json
+import re
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 BASE_URL = "https://musical.congregacao.org.br"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxGBDSwoFQTJ8m-H1keAEMOm-iYAZpnQc5CVkcNNgilDDL3UL8ptdTP45TiaxHDw8Am/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyvzPcDI3I1zWl3YOxpAzG5O41eyYp7chybtLIjWhhrmGMf7FUreDLiSqHCuvfbFXfwig/exec'
 
-# RANGE DE BUSCA: Julho/2025 até o mais recente
+# RANGE DE BUSCA
 ID_INICIO = 327184  # Início julho 2025
-ID_FIM = 400000     # Ajustar conforme necessário (ou buscar o último ID da listagem)
+ID_FIM = 400000
 
 # PERÍODO DO SEGUNDO SEMESTRE 2025
 DATA_INICIO = datetime.strptime("04/07/2025", "%d/%m/%Y")
 DATA_FIM = datetime.strptime("31/12/2025", "%d/%m/%Y")
 
-# Termos que identificam Hortolândia
+# Congregações específicas de Hortolândia
 CONGREGACOES_HORTOLANDIA = [
-    "HORTOLÂNDIA", "HORTOLANDIA",
-    "BELLAVILLE", "BELLA VILLE",
-    "REMANSO CAMPINEIRO",
-    "AMANDA", "NOVA HORTOLÂNDIA",
+    "JARDIM SANTANA",
+    "JARDIM SANTA IZABEL",
+    "JARDIM SÃO PEDRO",
+    "JARDIM MIRANTE",
+    "JARDIM NOVO ÂNGULO",
+    "VILA REAL",
+    "JARDIM AMANDA I",
+    "JARDIM SANTA ESMERALDA",
+    "JARDIM SANTA LUZIA",
+    "PARQUE DO HORTO",
+    "JARDIM SANTA CLARA DO LAGO",
+    "JARDIM AMANDA II",
+    "JARDIM ADELAIDE",
+    "PARQUE ORESTES ÔNGARO",
+    "JARDIM SÃO JORGE",
+    "JARDIM SÃO SEBASTIÃO",
+    "JARDIM DO BOSQUE",
+    "VILA INEMA",
+    "JARDIM ALINE",
+    "JARDIM AMANDA III",
+    "CHÁCARAS RECREIO 2000",
+    "JARDIM NOVA EUROPA",
+    "JARDIM DAS COLINAS",
+    "RESIDENCIAL JOÃO LUIZ",
+    "JARDIM AUXILIADORA",
+    "JARDIM NOVO HORIZONTE",
+    "JARDIM NOVA AMÉRICA",
+    "JARDIM INTERLAGOS",
+    "JARDIM TERRAS DE SANTO ANTÔNIO",
+    "JARDIM RESIDENCIAL FIRENZE",
+    "JARDIM BOA VISTA",
+    "JARDIM NOVO CAMBUI I",
+    "ESTRADA DO FURLAN, 1121",
+    "RECANTO DO SOL",
+    "NOVA HORTOLÂNDIA",
+    "JARDIM AMANDA IV",
+    "RESIDENCIAL BELLAVILLE",
+    "PARQUE TERRAS DE SANTA MARIA"
 ]
 
 def fazer_login_e_obter_session():
@@ -61,7 +96,7 @@ def fazer_login_e_obter_session():
         return session
 
 def buscar_ultimo_id_da_listagem(session):
-    """Busca o ID mais recente na listagem para definir range"""
+    """Busca o ID mais recente na listagem"""
     print("\nBuscando ID mais recente da listagem...")
     
     url = f"{BASE_URL}/aulas_abertas/listagem"
@@ -70,7 +105,7 @@ def buscar_ultimo_id_da_listagem(session):
         'start': 0,
         'length': 100,
         'order[0][column]': 0,
-        'order[0][dir]': 'desc',  # Ordenar por ID decrescente
+        'order[0][dir]': 'desc',
     }
     headers = {
         'User-Agent': 'Mozilla/5.0',
@@ -97,7 +132,7 @@ def buscar_ultimo_id_da_listagem(session):
         return ID_FIM
 
 def verificar_aula(session, aula_id):
-    """Verifica se uma aula existe e é de Hortolândia"""
+    """Verifica se uma aula existe e coleta dados simplificados"""
     try:
         url = f"{BASE_URL}/aulas_abertas/visualizar_aula/{aula_id}"
         headers = {
@@ -111,18 +146,11 @@ def verificar_aula(session, aula_id):
             return None
         
         html = response.text
-        
-        # Verificar se é de Hortolândia
-        if not any(termo.upper() in html.upper() for termo in CONGREGACOES_HORTOLANDIA):
-            return None
-        
-        # Parsear dados básicos
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Extrair congregação e seu ID
+        # Extrair congregação
         congregacao_cell = soup.find('strong', string='Comum Congregação')
         congregacao = "N/A"
-        congregacao_id = "N/A"
         if congregacao_cell:
             td_parent = congregacao_cell.find_parent('td')
             if td_parent:
@@ -130,11 +158,9 @@ def verificar_aula(session, aula_id):
                 if next_td:
                     congregacao = next_td.get_text(strip=True)
         
-        # Tentar extrair congregacao_id da URL ou de elementos ocultos
-        import re
-        match_cong_id = re.search(r'congregacao[_\-]?id["\s:=]+(\d+)', html, re.IGNORECASE)
-        if match_cong_id:
-            congregacao_id = match_cong_id.group(1)
+        # Verificar se é uma das congregações de Hortolândia
+        if congregacao not in CONGREGACOES_HORTOLANDIA:
+            return None
         
         # Extrair data do cabeçalho
         data_span = soup.find('span', class_='pull-right')
@@ -145,169 +171,18 @@ def verificar_aula(session, aula_id):
             if match:
                 data_str = match.group(0)
         
-        # Extrair curso do cabeçalho da tabela
-        curso_header = soup.find('td', class_='bg-blue-gradient')
-        curso = "N/A"
-        if curso_header:
-            curso_text = curso_header.get_text(strip=True)
-            curso = curso_text.replace('', '').strip()
-        
-        # Extrair turma e turma_id
-        turma = "N/A"
-        turma_id = "N/A"
-        
-        # Tentar extrair turma_id da URL ou de elementos
-        match_turma_id = re.search(r'turma[_\-]?id["\s:=]+(\d+)', html, re.IGNORECASE)
-        if match_turma_id:
-            turma_id = match_turma_id.group(1)
-        
-        # Verificar ATA
-        tem_ata = "OK" if "ATA DA AULA" in html else "FANTASMA"
-        
-        # Extrair frequência do mesmo HTML
-        freq_data = extrair_frequencia_do_html_aula(html)
-        
-        # Calcular quantidade de presentes
-        qtd_presentes = len(freq_data['presentes_ids'])
-        qtd_ausentes = len(freq_data['ausentes_ids'])
+        # Verificar se tem ATA
+        tem_ata = "SIM" if "ATA DA AULA" in html else "NÃO"
         
         return {
             'aula_id': aula_id,
-            'congregacao_id': congregacao_id,
             'congregacao': congregacao,
-            'turma_id': turma_id,
-            'curso': curso,
-            'turma': turma,
             'data': data_str,
-            'qtd_presentes': qtd_presentes,
-            'qtd_ausentes': qtd_ausentes,
-            'presentes_ids': freq_data['presentes_ids'],
-            'presentes_nomes': freq_data['presentes_nomes'],
-            'ausentes_ids': freq_data['ausentes_ids'],
-            'ausentes_nomes': freq_data['ausentes_nomes'],
-            'tem_presenca': freq_data['tem_presenca'],
             'tem_ata': tem_ata
         }
         
     except Exception as e:
         return None
-
-def extrair_frequencia_do_html_aula(html):
-    """Extrai frequência diretamente do HTML da página de visualização da aula"""
-    try:
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        presentes_ids = []
-        presentes_nomes = []
-        ausentes_ids = []
-        ausentes_nomes = []
-        
-        # Buscar tabela de frequência (pode estar em uma seção específica)
-        # Procurar por tabelas com classe table-bordered
-        tabelas = soup.find_all('table', class_='table-bordered')
-        
-        for tabela in tabelas:
-            linhas = tabela.find_all('tr')
-            
-            for linha in linhas:
-                colunas = linha.find_all('td')
-                
-                # Precisa ter pelo menos 2 colunas (nome e status)
-                if len(colunas) < 2:
-                    continue
-                
-                # Pegar nome da primeira coluna
-                nome = colunas[0].get_text(strip=True)
-                
-                # Ignorar linhas vazias ou cabeçalhos
-                if not nome or nome in ['Nome', 'Aluno', 'Membro']:
-                    continue
-                
-                # Buscar link com status na última coluna
-                link_status = colunas[-1].find('a')
-                
-                if link_status:
-                    # Extrair ID do membro
-                    id_membro = link_status.get('data-id-membro')
-                    
-                    if not id_membro:
-                        continue
-                    
-                    # Verificar ícone de presença/ausência
-                    icone = link_status.find('i')
-                    
-                    if icone:
-                        classes = ' '.join(icone.get('class', []))
-                        
-                        # Presente: fa-check ou text-success
-                        if 'fa-check' in classes or 'text-success' in classes:
-                            presentes_ids.append(id_membro)
-                            presentes_nomes.append(nome)
-                        
-                        # Ausente: fa-remove, fa-times ou text-danger
-                        elif any(cls in classes for cls in ['fa-remove', 'fa-times', 'text-danger']):
-                            ausentes_ids.append(id_membro)
-                            ausentes_nomes.append(nome)
-        
-        # Determinar status de presença
-        if presentes_ids or ausentes_ids:
-            tem_presenca = "OK"
-        else:
-            tem_presenca = "FANTASMA"
-        
-        return {
-            'presentes_ids': presentes_ids,
-            'presentes_nomes': presentes_nomes,
-            'ausentes_ids': ausentes_ids,
-            'ausentes_nomes': ausentes_nomes,
-            'tem_presenca': tem_presenca
-        }
-        
-    except Exception as e:
-        return {
-            'presentes_ids': [],
-            'presentes_nomes': [],
-            'ausentes_ids': [],
-            'ausentes_nomes': [],
-            'tem_presenca': "ERRO"
-        }
-
-def extrair_frequencia_via_modal(session, aula_id, professor_id):
-    """Tenta extrair frequência via endpoint do modal (se existir)"""
-    
-    endpoints_possiveis = [
-        f"/frequencias/aula/{aula_id}",
-        f"/aulas_abertas/frequencia/{aula_id}",
-        f"/frequencias/visualizar/{aula_id}/{professor_id}",
-        f"/aulas_abertas/get_frequencia?aula_id={aula_id}",
-    ]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Accept': 'text/html, application/json',
-        'Referer': f'{BASE_URL}/aulas_abertas/listagem',
-    }
-    
-    for endpoint in endpoints_possiveis:
-        try:
-            url = BASE_URL + endpoint
-            response = session.get(url, headers=headers, timeout=5)
-            
-            if response.status_code == 200:
-                html = response.text
-                return extrair_frequencia_do_html_aula(html)
-        except:
-            continue
-    
-    # Se nenhum endpoint funcionou
-    return {
-        'presentes_ids': [],
-        'presentes_nomes': [],
-        'ausentes_ids': [],
-        'ausentes_nomes': [],
-        'tem_presenca': "ERRO"
-    }
 
 def buscar_aulas_paralelo(session, id_inicio, id_fim, max_workers=30):
     """Busca aulas em paralelo dentro de um range"""
@@ -323,22 +198,19 @@ def buscar_aulas_paralelo(session, id_inicio, id_fim, max_workers=30):
     tempo_inicio = time.time()
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submeter todas as tarefas
         futures = {
             executor.submit(verificar_aula, session, aula_id): aula_id 
             for aula_id in range(id_inicio, id_fim + 1)
         }
         
-        # Processar resultados conforme completam
         for future in as_completed(futures):
             contador += 1
             resultado = future.result()
             
             if resultado:
                 aulas_encontradas.append(resultado)
-                print(f"ENCONTRADA [{contador}/{total_testados}] ID {resultado['aula_id']} - {resultado['congregacao']} - {resultado['data']} - Presentes: {resultado['qtd_presentes']}")
+                print(f"✓ [{contador}/{total_testados}] ID {resultado['aula_id']} - {resultado['congregacao']} - {resultado['data']} - ATA: {resultado['tem_ata']}")
             else:
-                # Mostrar progresso a cada 500 aulas testadas
                 if contador - ultimo_print >= 500:
                     tempo_decorrido = time.time() - tempo_inicio
                     velocidade = contador / tempo_decorrido if tempo_decorrido > 0 else 0
@@ -352,13 +224,12 @@ def buscar_aulas_paralelo(session, id_inicio, id_fim, max_workers=30):
     
     tempo_total = time.time() - tempo_inicio
     print(f"\nBusca concluída em {tempo_total/60:.1f} minutos")
-    print(f"Total encontrado: {len(aulas_encontradas)} aulas de Hortolândia")
+    print(f"Total encontrado: {len(aulas_encontradas)} aulas")
     
     return aulas_encontradas
 
 def filtrar_por_periodo(aulas):
     """Filtra aulas do período desejado"""
-    
     aulas_periodo = []
     
     for aula in aulas:
@@ -368,16 +239,10 @@ def filtrar_por_periodo(aulas):
             continue
         
         try:
-            # Tentar diferentes formatos
-            for formato in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"]:
-                try:
-                    data = datetime.strptime(data_str, formato)
-                    
-                    if DATA_INICIO <= data <= DATA_FIM:
-                        aulas_periodo.append(aula)
-                    break
-                except:
-                    continue
+            data = datetime.strptime(data_str, "%d/%m/%Y")
+            
+            if DATA_INICIO <= data <= DATA_FIM:
+                aulas_periodo.append(aula)
         except:
             continue
     
@@ -397,49 +262,28 @@ def enviar_para_sheets(aulas):
     for aula in aulas:
         linha = [
             aula['aula_id'],
-            aula.get('congregacao_id', 'N/A'),
             aula['congregacao'],
-            aula.get('turma_id', 'N/A'),
-            aula['curso'],
-            aula['turma'],
             aula['data'],
-            aula.get('qtd_presentes', 0),
-            aula.get('qtd_ausentes', 0),
-            "; ".join(aula.get('presentes_ids', [])),
-            "; ".join(aula.get('presentes_nomes', [])),
-            "; ".join(aula.get('ausentes_ids', [])),
-            "; ".join(aula.get('ausentes_nomes', [])),
-            aula.get('tem_presenca', 'N/A'),
             aula['tem_ata']
         ]
         linhas.append(linha)
     
     headers = [
         "ID AULA",
-        "ID CONGREGAÇÃO",
         "CONGREGAÇÃO",
-        "ID TURMA",
-        "CURSO",
-        "TURMA",
         "DATA",
-        "QTD PRESENTES",
-        "QTD AUSENTES",
-        "PRESENTES IDs",
-        "PRESENTES Nomes",
-        "AUSENTES IDs",
-        "AUSENTES Nomes",
-        "TEM PRESENÇA",
-        "ATA DA AULA"
+        "TEM ATA"
     ]
     
     body = {
-        "tipo": "historico_aulas_hortolandia_2sem_2025",
+        "tipo": "aulas_hortolandia_simples",
         "dados": linhas,
         "headers": headers,
         "resumo": {
             "total_aulas": len(aulas),
             "periodo": f"{DATA_INICIO.strftime('%d/%m/%Y')} a {DATA_FIM.strftime('%d/%m/%Y')}",
-            "range_ids": f"{ID_INICIO} a {ID_FIM}"
+            "range_ids": f"{ID_INICIO} a {ID_FIM}",
+            "aulas_com_ata": sum(1 for a in aulas if a['tem_ata'] == 'SIM')
         }
     }
     
@@ -452,13 +296,13 @@ def enviar_para_sheets(aulas):
         print(f"Erro ao enviar: {e}")
         
         # Salvar localmente como backup
-        with open('backup_aulas_hortolandia.json', 'w', encoding='utf-8') as f:
+        with open('backup_aulas_simples.json', 'w', encoding='utf-8') as f:
             json.dump(body, f, indent=2, ensure_ascii=False)
-        print("Backup salvo em: backup_aulas_hortolandia.json")
+        print("Backup salvo em: backup_aulas_simples.json")
 
 def main():
     print("="*60)
-    print("BUSCA DE AULAS DE HORTOLÂNDIA - 2º SEMESTRE 2025")
+    print("BUSCA SIMPLIFICADA DE AULAS - HORTOLÂNDIA 2º SEM 2025")
     print("="*60)
     
     tempo_inicio_total = time.time()
@@ -468,9 +312,9 @@ def main():
     if not session:
         return
     
-    # Buscar último ID para otimizar range
+    # Buscar último ID
     ultimo_id = buscar_ultimo_id_da_listagem(session)
-    id_fim_ajustado = min(ID_FIM, ultimo_id + 1000)  # Adicionar margem de segurança
+    id_fim_ajustado = min(ID_FIM, ultimo_id + 1000)
     
     print(f"\nRange de busca: {ID_INICIO} a {id_fim_ajustado}")
     print(f"Total de IDs a verificar: {id_fim_ajustado - ID_INICIO + 1}")
@@ -485,7 +329,7 @@ def main():
     print("\n" + "="*60)
     print("RESULTADOS FINAIS")
     print("="*60)
-    print(f"Aulas de Hortolândia encontradas: {len(aulas)}")
+    print(f"Aulas encontradas: {len(aulas)}")
     print(f"No período 2º semestre 2025: {len(aulas_periodo)}")
     
     tempo_total = time.time() - tempo_inicio_total
@@ -493,32 +337,22 @@ def main():
     
     # Salvar resultados
     if aulas_periodo:
-        with open('aulas_hortolandia_2sem2025.json', 'w', encoding='utf-8') as f:
+        with open('aulas_hortolandia_simples.json', 'w', encoding='utf-8') as f:
             json.dump(aulas_periodo, f, indent=2, ensure_ascii=False)
-        print(f"\nResultados salvos em: aulas_hortolandia_2sem2025.json")
+        print(f"\nResultados salvos em: aulas_hortolandia_simples.json")
         
         # Estatísticas
         congregacoes = {}
-        total_presentes = 0
-        total_ausentes = 0
-        
         for aula in aulas_periodo:
             cong = aula['congregacao']
             congregacoes[cong] = congregacoes.get(cong, 0) + 1
-            total_presentes += len(aula.get('presentes_ids', []))
-            total_ausentes += len(aula.get('ausentes_ids', []))
         
         print("\nAulas por congregação:")
         for cong, qtd in sorted(congregacoes.items(), key=lambda x: x[1], reverse=True):
             print(f"  {cong}: {qtd} aulas")
         
-        aulas_com_ata = sum(1 for a in aulas_periodo if a['tem_ata'] == "OK")
-        aulas_com_presenca = sum(1 for a in aulas_periodo if a.get('tem_presenca') == "OK")
-        
-        print(f"\nAulas com ATA: {aulas_com_ata}/{len(aulas_periodo)}")
-        print(f"Aulas com frequência: {aulas_com_presenca}/{len(aulas_periodo)}")
-        print(f"Total de presenças: {total_presentes}")
-        print(f"Total de ausências: {total_ausentes}")
+        aulas_com_ata = sum(1 for a in aulas_periodo if a['tem_ata'] == "SIM")
+        print(f"\nAulas com ATA: {aulas_com_ata}/{len(aulas_periodo)} ({aulas_com_ata*100/len(aulas_periodo):.1f}%)")
         
         # Enviar para Sheets
         enviar_para_sheets(aulas_periodo)
