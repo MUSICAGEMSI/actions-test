@@ -8,7 +8,7 @@ on:
         default: 'script_usuarios.py'
         type: choice
         options:
-          - script_hortocityforms.py
+          - script_descoberta.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
