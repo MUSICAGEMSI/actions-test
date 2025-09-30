@@ -2,6 +2,7 @@
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
 import requests
 import time
@@ -12,19 +13,19 @@ import threading
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
-URL_LOGIN = "https://musical.congregacao.org.br/login/logar"
+URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_TURMA_BASE = "https://musical.congregacao.org.br/turmas/editar"
 URL_MATRICULADOS_BASE = "https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyw2E0QH0ucHRdCMNOY_La7r4ElK6xcf0OWlnQGa9w7yCcg82mG_bJV_5fxbhuhbfuY/exec'
 
 RANGE_INICIO = 1
 RANGE_FIM = 60000
-MAX_VAZIOS_SEQUENCIAIS = 500  # Para após 500 IDs vazios seguidos
-MAX_WORKERS = 10  # Threads paralelas
+MAX_VAZIOS_SEQUENCIAIS = 500
+MAX_WORKERS = 10
 TIMEOUT_REQUEST = 10
 
 if not EMAIL or not SENHA:
-    print("Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
+    print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
 
 # Controle de progresso thread-safe
@@ -36,62 +37,20 @@ progresso = {
     'erros': 0
 }
 
-def criar_sessao_autenticada():
-    """Cria uma sessão requests autenticada"""
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright para usar em requests"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def criar_sessao_com_cookies(cookies_dict):
+    """Cria sessão requests com cookies do Playwright"""
     session = requests.Session()
+    session.cookies.update(cookies_dict)
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+        'Referer': 'https://musical.congregacao.org.br/painel'
     })
-    
-    try:
-        print(f"  Tentando login com usuário: {EMAIL[:3]}***")
-        
-        # Primeiro: acessar a página de login para obter cookies/tokens
-        print("  [1/3] Acessando página inicial...")
-        resp_inicial = session.get("https://musical.congregacao.org.br/", timeout=15)
-        print(f"      Status: {resp_inicial.status_code}")
-        
-        # Fazer login
-        print("  [2/3] Enviando credenciais...")
-        payload = {
-            'login': EMAIL,
-            'password': SENHA
-        }
-        
-        resp = session.post(URL_LOGIN, data=payload, timeout=15, allow_redirects=True)
-        
-        print(f"      Status: {resp.status_code}")
-        print(f"      URL final: {resp.url}")
-        print(f"      Cookies: {len(session.cookies)}")
-        
-        # Verificar se login foi bem sucedido
-        print("  [3/3] Verificando autenticação...")
-        
-        # Tentar acessar o painel
-        resp_painel = session.get("https://musical.congregacao.org.br/painel", timeout=15)
-        
-        if resp_painel.status_code == 200 and 'painel' in resp_painel.url.lower():
-            print("  ✓ Autenticação bem-sucedida!")
-            return session
-        else:
-            print(f"  ✗ Falha: redirecionado para {resp_painel.url}")
-            print(f"  HTML contém 'login': {'login' in resp_painel.text.lower()}")
-            
-            # Debug adicional
-            if 'incorreto' in resp_painel.text.lower() or 'inválid' in resp_painel.text.lower():
-                print("  MOTIVO: Credenciais incorretas")
-            
-            return None
-            
-    except Exception as e:
-        print(f"  ✗ Erro ao criar sessão: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+    return session
 
 def extrair_dados_turma(session, turma_id):
     """
@@ -158,7 +117,6 @@ def extrair_dados_turma(session, turma_id):
         hr_inicio_input = soup.find('input', {'name': 'hr_inicio'})
         if hr_inicio_input and hr_inicio_input.get('value'):
             hora_raw = hr_inicio_input['value'].strip()
-            # Limpar formato HH:MM:SS para HH:MM
             dados['hora_inicio'] = hora_raw[:5] if len(hora_raw) >= 5 else hora_raw
         
         # Extrair HORA DE FIM
@@ -175,13 +133,10 @@ def extrair_dados_turma(session, turma_id):
     except requests.Timeout:
         return None
     except Exception as e:
-        print(f"Erro ao processar turma {turma_id}: {e}")
         return None
 
 def obter_matriculados(session, turma_id):
-    """
-    Conta o número real de alunos matriculados em uma turma
-    """
+    """Conta o número real de alunos matriculados em uma turma"""
     try:
         url = f"{URL_MATRICULADOS_BASE}/{turma_id}"
         resp = session.get(url, timeout=TIMEOUT_REQUEST)
@@ -227,9 +182,8 @@ def processar_lote(session, ids):
                 progresso['validos'] += 1
                 resultados.append(dados)
                 
-                # Log a cada turma válida encontrada
                 if progresso['validos'] % 10 == 0:
-                    print(f"[{progresso['processados']}/{RANGE_FIM}] Encontradas: {progresso['validos']} | "
+                    print(f"📊 [{progresso['processados']}/{RANGE_FIM}] Encontradas: {progresso['validos']} | "
                           f"Inválidas: {progresso['invalidos']} | Última: ID {turma_id}")
             else:
                 progresso['invalidos'] += 1
@@ -238,24 +192,54 @@ def processar_lote(session, ids):
 
 def main():
     tempo_inicio = time.time()
-    print("Iniciando coleta detalhada de turmas...")
-    print(f"Range: {RANGE_INICIO} a {RANGE_FIM}")
-    print(f"Workers: {MAX_WORKERS}")
-    print("-" * 60)
+    print("=" * 70)
+    print("🎵 COLETA DETALHADA DE TURMAS - Sistema Musical Congregação")
+    print("=" * 70)
+    print(f"📍 Range: {RANGE_INICIO} a {RANGE_FIM}")
+    print(f"⚡ Workers paralelos: {MAX_WORKERS}")
+    print(f"🛑 Parada automática: {MAX_VAZIOS_SEQUENCIAIS} IDs vazios sequenciais")
+    print("-" * 70)
     
-    # ÚNICO LOGIN - Criar sessão autenticada que será compartilhada
-    print("Realizando login único...")
-    sessao_master = criar_sessao_autenticada()
-    if not sessao_master:
-        print("Falha na
+    # Login via Playwright (igual ao script original)
+    with sync_playwright() as p:
+        print("🌐 Abrindo navegador...")
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        })
+        
+        print("🔐 Realizando login...")
+        pagina.goto(URL_INICIAL)
+        
+        pagina.fill('input[name="login"]', EMAIL)
+        pagina.fill('input[name="password"]', SENHA)
+        pagina.click('button[type="submit"]')
+        
+        try:
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login. Verifique suas credenciais.")
+            navegador.close()
+            return
+        
+        # Extrair cookies para usar com requests
+        print("🍪 Extraindo cookies da sessão...")
+        cookies_dict = extrair_cookies_playwright(pagina)
+        navegador.close()
+    
+    print(f"✅ Cookies obtidos: {len(cookies_dict)} cookies")
+    print("-" * 70)
     
     # Preparar lotes de IDs
     todos_ids = list(range(RANGE_INICIO, RANGE_FIM + 1))
-    tamanho_lote = 50  # Cada worker processa 50 IDs por vez
+    tamanho_lote = 100
     lotes = [todos_ids[i:i + tamanho_lote] for i in range(0, len(todos_ids), tamanho_lote)]
     
-    print(f"Total de lotes: {len(lotes)}")
-    print("-" * 60)
+    print(f"📦 Total de lotes: {len(lotes)} (de {tamanho_lote} IDs cada)")
+    print("🚀 Iniciando coleta paralela...\n")
     
     todos_resultados = []
     vazios_sequenciais = 0
@@ -263,15 +247,8 @@ def main():
     
     # Processar em paralelo
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Criar sessões para cada worker
-        sessoes = []
-        for _ in range(MAX_WORKERS):
-            s = criar_sessao_autenticada()
-            if s:
-                sessoes.append(s)
-        
-        if len(sessoes) < MAX_WORKERS:
-            print(f"Aviso: apenas {len(sessoes)} sessões criadas de {MAX_WORKERS}")
+        # Criar sessões para cada worker com os cookies
+        sessoes = [criar_sessao_com_cookies(cookies_dict) for _ in range(MAX_WORKERS)]
         
         # Submeter tarefas
         futures = {}
@@ -280,7 +257,7 @@ def main():
         for lote in lotes:
             sessao = sessoes[sessao_idx % len(sessoes)]
             future = executor.submit(processar_lote, sessao, lote)
-            futures[future] = lote[0]  # Guarda primeiro ID do lote
+            futures[future] = lote[0]
             sessao_idx += 1
         
         # Coletar resultados
@@ -293,38 +270,36 @@ def main():
                     ultimo_valido_id = max([r['id'] for r in resultados_lote])
                     vazios_sequenciais = 0
                 else:
-                    # Verificar se devemos parar (muitos vazios seguidos)
                     primeiro_id_lote = futures[future]
                     if primeiro_id_lote > ultimo_valido_id:
-                        vazios_sequenciais += len(lote)
+                        vazios_sequenciais += tamanho_lote
                         
                         if vazios_sequenciais >= MAX_VAZIOS_SEQUENCIAIS:
-                            print(f"\n{MAX_VAZIOS_SEQUENCIAIS} IDs vazios sequenciais detectados.")
-                            print("Encerrando coleta prematuramente...")
+                            print(f"\n⏹️  {MAX_VAZIOS_SEQUENCIAIS} IDs vazios sequenciais detectados.")
+                            print("   Encerrando coleta (fim dos dados)...")
                             executor.shutdown(wait=False, cancel_futures=True)
                             break
                 
             except Exception as e:
-                print(f"Erro no processamento do lote: {e}")
                 with lock:
                     progresso['erros'] += 1
         
-        # Fechar sessões
         for sessao in sessoes:
             sessao.close()
     
-    # Preparar dados para envio
-    print("\n" + "=" * 60)
-    print("COLETA FINALIZADA")
-    print("=" * 60)
-    print(f"Total processados: {progresso['processados']}")
-    print(f"Turmas válidas: {progresso['validos']}")
-    print(f"IDs inválidos: {progresso['invalidos']}")
-    print(f"Erros: {progresso['erros']}")
-    print(f"Tempo decorrido: {time.time() - tempo_inicio:.2f}s")
+    # Resumo final
+    print("\n" + "=" * 70)
+    print("📈 RESUMO DA COLETA")
+    print("=" * 70)
+    print(f"✅ Turmas válidas encontradas: {progresso['validos']}")
+    print(f"❌ IDs inválidos/vazios: {progresso['invalidos']}")
+    print(f"🔢 Total processados: {progresso['processados']}")
+    print(f"⚠️  Erros: {progresso['erros']}")
+    print(f"⏱️  Tempo total: {time.time() - tempo_inicio:.2f}s")
+    print("=" * 70)
     
     if not todos_resultados:
-        print("\nNenhuma turma encontrada!")
+        print("\n❌ Nenhuma turma encontrada!")
         return
     
     # Converter para formato de envio
@@ -357,19 +332,19 @@ def main():
     }
     
     # Enviar para Apps Script
-    print("\nEnviando dados para Google Apps Script...")
+    print("\n📤 Enviando dados para Google Apps Script...")
     try:
         resp = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-        print(f"Status: {resp.status_code}")
-        print(f"Resposta: {resp.text[:200]}")
-        print("\nDados enviados com sucesso!")
+        print(f"   Status: {resp.status_code}")
+        print(f"   Resposta: {resp.text[:200]}")
+        print("\n✅ Dados enviados com sucesso!")
     except Exception as e:
-        print(f"Erro ao enviar: {e}")
-        print("\nSalvando dados localmente como backup...")
+        print(f"❌ Erro ao enviar: {e}")
+        print("\n💾 Salvando backup local...")
         import json
         with open('turmas_backup.json', 'w', encoding='utf-8') as f:
             json.dump(body, f, ensure_ascii=False, indent=2)
-        print("Backup salvo em: turmas_backup.json")
+        print("✅ Backup salvo: turmas_backup.json")
 
 if __name__ == "__main__":
     main()
