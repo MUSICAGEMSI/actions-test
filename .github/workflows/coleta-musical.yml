@@ -8,7 +8,7 @@ on:
         default: 'script_usuarios.py'
         type: choice
         options:
-          - script_turmasht.py
+          - script_historicoht.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
