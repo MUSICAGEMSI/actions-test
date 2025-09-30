@@ -167,20 +167,14 @@ def coletar_data_e_ata(session, aula_id):
                 data_aula = texto.strip()
         
         # Verificar se tem ata
+        # A tabela de ata só aparece no HTML quando existe uma ata cadastrada
         tem_ata = "Não"
-        ata_header = soup.find('td', string=lambda text: text and 'ATA DA AULA' in text)
-        if ata_header:
-            # Encontrou o header da ata, verificar se tem conteúdo
-            ata_table = ata_header.find_parent('table')
-            if ata_table:
-                ata_tbody = ata_table.find('tbody')
-                if ata_tbody:
-                    ata_td = ata_tbody.find('td')
-                    if ata_td:
-                        ata_texto = ata_td.get_text(strip=True)
-                        # Se tem texto na ata, considera que tem ata
-                        if ata_texto:
-                            tem_ata = "Sim"
+        ata_thead = soup.find('thead', class_='bg-green-gradient')
+        if ata_thead:
+            # Se encontrou o thead com bg-green-gradient, é porque tem a tabela de ata
+            ata_td = ata_thead.find('td')
+            if ata_td and 'ATA DA AULA' in ata_td.get_text():
+                tem_ata = "Sim"
         
         return data_aula, tem_ata
         
@@ -268,7 +262,7 @@ def main():
     
     # Range de IDs (pode ajustar conforme necessário)
     ID_INICIAL = 327184
-    ID_FINAL = 335000
+    ID_FINAL = 330000
     
     # Processar em lotes
     LOTE_SIZE = 100
