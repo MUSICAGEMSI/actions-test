@@ -40,24 +40,57 @@ def criar_sessao_autenticada():
     """Cria uma sessão requests autenticada"""
     session = requests.Session()
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
     })
     
     try:
+        print(f"  Tentando login com usuário: {EMAIL[:3]}***")
+        
+        # Primeiro: acessar a página de login para obter cookies/tokens
+        print("  [1/3] Acessando página inicial...")
+        resp_inicial = session.get("https://musical.congregacao.org.br/", timeout=15)
+        print(f"      Status: {resp_inicial.status_code}")
+        
         # Fazer login
+        print("  [2/3] Enviando credenciais...")
         payload = {
             'login': EMAIL,
             'password': SENHA
         }
-        resp = session.post(URL_LOGIN, data=payload, timeout=15)
         
-        if resp.status_code == 200 and 'painel' in resp.url:
+        resp = session.post(URL_LOGIN, data=payload, timeout=15, allow_redirects=True)
+        
+        print(f"      Status: {resp.status_code}")
+        print(f"      URL final: {resp.url}")
+        print(f"      Cookies: {len(session.cookies)}")
+        
+        # Verificar se login foi bem sucedido
+        print("  [3/3] Verificando autenticação...")
+        
+        # Tentar acessar o painel
+        resp_painel = session.get("https://musical.congregacao.org.br/painel", timeout=15)
+        
+        if resp_painel.status_code == 200 and 'painel' in resp_painel.url.lower():
+            print("  ✓ Autenticação bem-sucedida!")
             return session
         else:
-            print("Falha na autenticação")
+            print(f"  ✗ Falha: redirecionado para {resp_painel.url}")
+            print(f"  HTML contém 'login': {'login' in resp_painel.text.lower()}")
+            
+            # Debug adicional
+            if 'incorreto' in resp_painel.text.lower() or 'inválid' in resp_painel.text.lower():
+                print("  MOTIVO: Credenciais incorretas")
+            
             return None
+            
     except Exception as e:
-        print(f"Erro ao criar sessão: {e}")
+        print(f"  ✗ Erro ao criar sessão: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def extrair_dados_turma(session, turma_id):
@@ -210,14 +243,11 @@ def main():
     print(f"Workers: {MAX_WORKERS}")
     print("-" * 60)
     
-    # Criar sessão principal para testar autenticação
-    print("Autenticando...")
-    sessao_teste = criar_sessao_autenticada()
-    if not sessao_teste:
-        print("Falha na autenticação. Encerrando.")
-        return
-    print("Autenticação bem-sucedida!")
-    sessao_teste.close()
+    # ÚNICO LOGIN - Criar sessão autenticada que será compartilhada
+    print("Realizando login único...")
+    sessao_master = criar_sessao_autenticada()
+    if not sessao_master:
+        print("Falha na
     
     # Preparar lotes de IDs
     todos_ids = list(range(RANGE_INICIO, RANGE_FIM + 1))
