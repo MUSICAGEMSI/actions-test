@@ -8,33 +8,66 @@ import requests
 import time
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyvEGIUPIvgbSuT_yikqg03nEjqXryd6RfI121A3pRt75v9oJoFNLTdvo3-onNdEsJd/exec'
 
-# Lista de comuns de Hortolândia
-COMUNS_HORTOLANDIA = [
-    "JARDIM SANTANA", "JARDIM SANTA IZABEL", "JARDIM SÃO PEDRO",
-    "JARDIM MIRANTE", "JARDIM NOVO ÂNGULO", "VILA REAL",
-    "JARDIM AMANDA I", "JARDIM SANTA ESMERALDA", "JARDIM SANTA LUZIA",
-    "PARQUE DO HORTO", "JARDIM SANTA CLARA DO LAGO", "JARDIM AMANDA II",
-    "JARDIM ADELAIDE", "PARQUE ORESTES ÔNGARO", "JARDIM SÃO JORGE",
-    "JARDIM SÃO SEBASTIÃO", "JARDIM DO BOSQUE", "VILA INEMA",
-    "JARDIM ALINE", "JARDIM AMANDA III", "CHÁCARAS RECREIO 2000",
-    "JARDIM NOVA EUROPA", "JARDIM DAS COLINAS", "RESIDENCIAL JOÃO LUIZ",
-    "JARDIM AUXILIADORA", "JARDIM NOVO HORIZONTE", "JARDIM NOVA AMÉRICA",
-    "JARDIM INTERLAGOS", "JARDIM TERRAS DE SANTO ANTÔNIO",
-    "JARDIM RESIDENCIAL FIRENZE", "JARDIM BOA VISTA", "JARDIM NOVO CAMBUI I",
-    "ESTRADA DO FURLAN, 1121", "RECANTO DO SOL", "NOVA HORTOLÂNDIA",
-    "JARDIM AMANDA IV", "RESIDENCIAL BELLAVILLE", "PARQUE TERRAS DE SANTA MARIA"
-]
+# Cache de instrutores (será preenchido no início)
+INSTRUTORES_HORTOLANDIA = {}  # {id: nome_completo}
+NOMES_INSTRUTORES = set()     # Set com nomes para busca rápida
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright"""
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def carregar_instrutores_hortolandia(session):
+    """
+    Carrega a lista completa de instrutores de Hortolândia
+    Retorna dicionário {id: nome_completo}
+    """
+    print("\n🔍 Carregando lista de instrutores de Hortolândia...")
+    
+    try:
+        url = "https://musical.congregacao.org.br/licoes/instrutores?q=a"
+        resp = session.get(url, timeout=10)
+        
+        if resp.status_code != 200:
+            print("❌ Erro ao carregar instrutores")
+            return {}, set()
+        
+        # Parse do JSON
+        instrutores = json.loads(resp.text)
+        
+        ids_dict = {}
+        nomes_set = set()
+        
+        for instrutor in instrutores:
+            id_instrutor = instrutor['id']
+            texto_completo = instrutor['text']
+            
+            # Extrair apenas o nome (antes do " - ")
+            nome = texto_completo.split(' - ')[0].strip()
+            
+            ids_dict[id_instrutor] = nome
+            nomes_set.add(nome)
+        
+        print(f"✅ {len(ids_dict)} instrutores de Hortolândia carregados!")
+        return ids_dict, nomes_set
+        
+    except Exception as e:
+        print(f"❌ Erro ao carregar instrutores: {e}")
+        return {}, set()
+
+def normalizar_nome(nome):
+    """
+    Normaliza nome para comparação
+    Remove espaços extras, converte para maiúsculas
+    """
+    return ' '.join(nome.upper().split())
 
 def coletar_dados_aula(session, aula_id):
     """
@@ -81,10 +114,6 @@ def coletar_dados_aula(session, aula_id):
                 input_field = parent.find('input', class_='form-control')
                 if input_field:
                     comum = input_field.get('value', '').strip().upper()
-        
-        # Verificar se é de Hortolândia
-        if comum not in COMUNS_HORTOLANDIA:
-            return None
         
         # Dia da Semana
         dia_input = soup.find('label', string='Dia da Semana')
@@ -135,10 +164,10 @@ def coletar_dados_aula(session, aula_id):
     except Exception as e:
         return None
 
-def coletar_data_e_ata(session, aula_id):
+def coletar_data_ata_e_instrutor(session, aula_id):
     """
-    Coleta a data correta da aula e se tem ata através do endpoint visualizar_aula
-    Retorna: (data_aula, tem_ata)
+    Coleta a data correta da aula, se tem ata e o nome do instrutor
+    Retorna: (data_aula, tem_ata, nome_instrutor, eh_hortolandia)
     """
     try:
         url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
@@ -151,35 +180,55 @@ def coletar_data_e_ata(session, aula_id):
         resp = session.get(url, headers=headers, timeout=10)
         
         if resp.status_code != 200:
-            return "", "Não"
+            return "", "Não", "", False
         
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # Extrair data da aula (no cabeçalho do modal)
+        # Extrair data da aula
         data_aula = ""
         modal_header = soup.find('div', class_='modal-header')
         if modal_header:
             date_span = modal_header.find('span', class_='pull-right')
             if date_span:
-                # Extrair o texto após o ícone
                 texto = date_span.get_text(strip=True)
-                # Remover possíveis espaços extras
                 data_aula = texto.strip()
         
         # Verificar se tem ata
-        # A tabela de ata só aparece no HTML quando existe uma ata cadastrada
         tem_ata = "Não"
         ata_thead = soup.find('thead', class_='bg-green-gradient')
         if ata_thead:
-            # Se encontrou o thead com bg-green-gradient, é porque tem a tabela de ata
             ata_td = ata_thead.find('td')
             if ata_td and 'ATA DA AULA' in ata_td.get_text():
                 tem_ata = "Sim"
         
-        return data_aula, tem_ata
+        # Extrair nome do instrutor que ministrou a aula
+        nome_instrutor = ""
+        tbody = soup.find('tbody')
+        if tbody:
+            rows = tbody.find_all('tr')
+            for row in rows:
+                td_strong = row.find('strong')
+                if td_strong and 'Instrutor(a) que ministrou a aula' in td_strong.get_text():
+                    td_valor = row.find_all('td')[1]
+                    nome_completo = td_valor.get_text(strip=True)
+                    # Extrair apenas o nome (antes do " - ")
+                    nome_instrutor = nome_completo.split(' - ')[0].strip()
+                    break
+        
+        # Verificar se o instrutor é de Hortolândia
+        eh_hortolandia = False
+        if nome_instrutor:
+            nome_normalizado = normalizar_nome(nome_instrutor)
+            # Verificar se o nome está na lista de instrutores de Hortolândia
+            for nome_htl in NOMES_INSTRUTORES:
+                if normalizar_nome(nome_htl) == nome_normalizado:
+                    eh_hortolandia = True
+                    break
+        
+        return data_aula, tem_ata, nome_instrutor, eh_hortolandia
         
     except Exception:
-        return "", "Não"
+        return "", "Não", "", False
 
 def coletar_frequencias(session, aula_id, turma_id):
     """
@@ -221,9 +270,13 @@ def coletar_frequencias(session, aula_id, turma_id):
         return 0, 0
 
 def main():
+    global INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES
+    
     tempo_inicio = time.time()
     
-    print("Iniciando coleta de HISTÓRICO DE AULAS de Hortolândia...")
+    print("=" * 70)
+    print("🎵 COLETOR DE HISTÓRICO DE AULAS - HORTOLÂNDIA")
+    print("=" * 70)
     
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
@@ -242,9 +295,9 @@ def main():
         
         try:
             pagina.wait_for_selector("nav", timeout=15000)
-            print("Login realizado!")
+            print("✅ Login realizado!")
         except PlaywrightTimeoutError:
-            print("Falha no login.")
+            print("❌ Falha no login.")
             navegador.close()
             return
         
@@ -254,6 +307,13 @@ def main():
         session.cookies.update(cookies_dict)
         
         navegador.close()
+    
+    # Carregar lista de instrutores de Hortolândia
+    INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES = carregar_instrutores_hortolandia(session)
+    
+    if not INSTRUTORES_HORTOLANDIA:
+        print("❌ Não foi possível carregar a lista de instrutores. Abortando.")
+        return
     
     # Coletar aulas
     resultado = []
@@ -267,8 +327,10 @@ def main():
     # Processar em lotes
     LOTE_SIZE = 100
     
-    print(f"\nProcessando aulas de {ID_INICIAL} a {ID_FINAL}...")
-    print(f"Filtrando apenas comuns de Hortolândia...\n")
+    print(f"\n{'=' * 70}")
+    print(f"📊 Processando aulas de {ID_INICIAL} a {ID_FINAL}...")
+    print(f"🎯 Filtrando por instrutores de Hortolândia")
+    print(f"{'=' * 70}\n")
     
     for lote_inicio in range(ID_INICIAL, ID_FINAL + 1, LOTE_SIZE):
         lote_fim = min(lote_inicio + LOTE_SIZE - 1, ID_FINAL)
@@ -285,11 +347,15 @@ def main():
                 dados_aula = future.result()
                 
                 if dados_aula:
-                    # Coletar data correta e ata
-                    data_aula, tem_ata = coletar_data_e_ata(
+                    # Coletar data, ata e instrutor
+                    data_aula, tem_ata, nome_instrutor, eh_hortolandia = coletar_data_ata_e_instrutor(
                         session,
                         dados_aula['id_aula']
                     )
+                    
+                    # FILTRO PRINCIPAL: Só prossegue se o instrutor for de Hortolândia
+                    if not eh_hortolandia:
+                        continue
                     
                     # Coletar frequências
                     total_alunos, presentes = coletar_frequencias(
@@ -300,6 +366,7 @@ def main():
                     
                     dados_aula['data_aula'] = data_aula
                     dados_aula['tem_ata'] = tem_ata
+                    dados_aula['instrutor'] = nome_instrutor
                     dados_aula['total_alunos'] = total_alunos
                     dados_aula['presentes'] = presentes
                     
@@ -313,24 +380,30 @@ def main():
                         dados_aula['hora_termino'],
                         dados_aula['data_aula'],
                         dados_aula['tem_ata'],
+                        dados_aula['instrutor'],
                         dados_aula['total_alunos'],
                         dados_aula['presentes']
                     ])
                     
                     aulas_hortolandia += 1
-                    print(f"[{aulas_processadas}/{ID_FINAL-ID_INICIAL+1}] Aula {dados_aula['id_aula']}: {dados_aula['descricao']} - {dados_aula['comum']} - {data_aula} - Ata: {tem_ata} ({presentes}/{total_alunos} presentes)")
+                    print(f"✅ [{aulas_processadas}/{ID_FINAL-ID_INICIAL+1}] ID {dados_aula['id_aula']}: {dados_aula['descricao']} | {dados_aula['comum']} | {data_aula} | {nome_instrutor} | Ata: {tem_ata} | {presentes}/{total_alunos}")
                 
                 # Mostrar progresso a cada 100
                 if aulas_processadas % 100 == 0:
                     tempo_decorrido = time.time() - tempo_inicio
-                    print(f"\n--- PROGRESSO: {aulas_processadas} aulas verificadas | {aulas_hortolandia} de Hortolândia | {tempo_decorrido:.1f}s ---\n")
+                    print(f"\n{'─' * 70}")
+                    print(f"📈 PROGRESSO: {aulas_processadas} verificadas | {aulas_hortolandia} de Hortolândia | {tempo_decorrido:.1f}s")
+                    print(f"{'─' * 70}\n")
         
         time.sleep(1)  # Pausa entre lotes
     
-    print(f"\n\nCOLETA FINALIZADA!")
-    print(f"Total processado: {aulas_processadas}")
-    print(f"Aulas de Hortolândia: {aulas_hortolandia}")
-    print(f"Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
+    print(f"\n{'=' * 70}")
+    print(f"🎉 COLETA FINALIZADA!")
+    print(f"{'=' * 70}")
+    print(f"📊 Total processado: {aulas_processadas}")
+    print(f"✅ Aulas de Hortolândia: {aulas_hortolandia}")
+    print(f"⏱️  Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
+    print(f"{'=' * 70}\n")
     
     # Preparar envio
     body = {
@@ -338,27 +411,29 @@ def main():
         "dados": resultado,
         "headers": [
             "ID_Aula", "ID_Turma", "Descrição", "Comum", "Dia_Semana",
-            "Hora_Início", "Hora_Término", "Data_Aula", "Tem_Ata", "Total_Alunos", "Presentes"
+            "Hora_Início", "Hora_Término", "Data_Aula", "Tem_Ata", "Instrutor",
+            "Total_Alunos", "Presentes"
         ],
         "resumo": {
             "total_aulas": len(resultado),
             "aulas_processadas": aulas_processadas,
+            "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2)
         }
     }
     
     # Enviar para Apps Script
+    print("📤 Enviando dados para Google Sheets...")
     try:
         resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
-        print(f"\nDados enviados! Status: {resposta_post.status_code}")
-        print(f"Resposta: {resposta_post.text}")
+        print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
+        print(f"📝 Resposta: {resposta_post.text}")
     except Exception as e:
-        print(f"\nErro ao enviar: {e}")
+        print(f"❌ Erro ao enviar: {e}")
         # Salvar localmente como backup
-        import json
         with open('backup_aulas.json', 'w', encoding='utf-8') as f:
             json.dump(body, f, ensure_ascii=False, indent=2)
-        print("Dados salvos em backup_aulas.json")
+        print("💾 Dados salvos em backup_aulas.json")
 
 if __name__ == "__main__":
     main()
