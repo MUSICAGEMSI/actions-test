@@ -18,8 +18,8 @@ URL_TURMA_BASE = "https://musical.congregacao.org.br/turmas/editar"
 URL_MATRICULADOS_BASE = "https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyw2E0QH0ucHRdCMNOY_La7r4ElK6xcf0OWlnQGa9w7yCcg82mG_bJV_5fxbhuhbfuY/exec'
 
-RANGE_INICIO = 1
-RANGE_FIM = 60000
+RANGE_INICIO = 43000
+RANGE_FIM = 53000
 MAX_VAZIOS_SEQUENCIAIS = 500
 MAX_WORKERS = 10
 TIMEOUT_REQUEST = 10
