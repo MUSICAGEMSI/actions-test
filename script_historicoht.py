@@ -1,4 +1,3 @@
-# script_historico_aulas.py
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
@@ -63,7 +62,6 @@ def coletar_dados_aula(session, aula_id):
         dia_semana = ""
         hora_inicio = ""
         hora_termino = ""
-        data_aula = ""
         id_turma = ""
         
         # Descrição (Curso)
@@ -104,7 +102,7 @@ def coletar_dados_aula(session, aula_id):
             if parent:
                 input_field = parent.find('input', class_='form-control')
                 if input_field:
-                    hora_inicio = input_field.get('value', '').strip()[:5]  # Primeiros 5 caracteres (HH:MM)
+                    hora_inicio = input_field.get('value', '').strip()[:5]
         
         # Hora de Término
         hora_fim_input = soup.find('label', string='Hora de Término')
@@ -114,11 +112,6 @@ def coletar_dados_aula(session, aula_id):
                 input_field = parent.find('input', class_='form-control')
                 if input_field:
                     hora_termino = input_field.get('value', '').strip()[:5]
-        
-        # Data da Aula
-        data_input = soup.find('input', {'name': 'dt_abertura'})
-        if data_input:
-            data_aula = data_input.get('value', '').strip()
         
         # ID da Turma
         turma_input = soup.find('input', {'name': 'id_turma'})
@@ -136,12 +129,63 @@ def coletar_dados_aula(session, aula_id):
             'comum': comum,
             'dia_semana': dia_semana,
             'hora_inicio': hora_inicio,
-            'hora_termino': hora_termino,
-            'data_aula': data_aula
+            'hora_termino': hora_termino
         }
         
     except Exception as e:
         return None
+
+def coletar_data_e_ata(session, aula_id):
+    """
+    Coleta a data correta da aula e se tem ata através do endpoint visualizar_aula
+    Retorna: (data_aula, tem_ata)
+    """
+    try:
+        url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        resp = session.get(url, headers=headers, timeout=10)
+        
+        if resp.status_code != 200:
+            return "", "Não"
+        
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # Extrair data da aula (no cabeçalho do modal)
+        data_aula = ""
+        modal_header = soup.find('div', class_='modal-header')
+        if modal_header:
+            date_span = modal_header.find('span', class_='pull-right')
+            if date_span:
+                # Extrair o texto após o ícone
+                texto = date_span.get_text(strip=True)
+                # Remover possíveis espaços extras
+                data_aula = texto.strip()
+        
+        # Verificar se tem ata
+        tem_ata = "Não"
+        ata_header = soup.find('td', string=lambda text: text and 'ATA DA AULA' in text)
+        if ata_header:
+            # Encontrou o header da ata, verificar se tem conteúdo
+            ata_table = ata_header.find_parent('table')
+            if ata_table:
+                ata_tbody = ata_table.find('tbody')
+                if ata_tbody:
+                    ata_td = ata_tbody.find('td')
+                    if ata_td:
+                        ata_texto = ata_td.get_text(strip=True)
+                        # Se tem texto na ata, considera que tem ata
+                        if ata_texto:
+                            tem_ata = "Sim"
+        
+        return data_aula, tem_ata
+        
+    except Exception:
+        return "", "Não"
 
 def coletar_frequencias(session, aula_id, turma_id):
     """
@@ -224,7 +268,7 @@ def main():
     
     # Range de IDs (pode ajustar conforme necessário)
     ID_INICIAL = 327184
-    ID_FINAL = 360000
+    ID_FINAL = 335000
     
     # Processar em lotes
     LOTE_SIZE = 100
@@ -247,6 +291,12 @@ def main():
                 dados_aula = future.result()
                 
                 if dados_aula:
+                    # Coletar data correta e ata
+                    data_aula, tem_ata = coletar_data_e_ata(
+                        session,
+                        dados_aula['id_aula']
+                    )
+                    
                     # Coletar frequências
                     total_alunos, presentes = coletar_frequencias(
                         session, 
@@ -254,6 +304,8 @@ def main():
                         dados_aula['id_turma']
                     )
                     
+                    dados_aula['data_aula'] = data_aula
+                    dados_aula['tem_ata'] = tem_ata
                     dados_aula['total_alunos'] = total_alunos
                     dados_aula['presentes'] = presentes
                     
@@ -266,12 +318,13 @@ def main():
                         dados_aula['hora_inicio'],
                         dados_aula['hora_termino'],
                         dados_aula['data_aula'],
+                        dados_aula['tem_ata'],
                         dados_aula['total_alunos'],
                         dados_aula['presentes']
                     ])
                     
                     aulas_hortolandia += 1
-                    print(f"[{aulas_processadas}/{ID_FINAL-ID_INICIAL+1}] Aula {dados_aula['id_aula']}: {dados_aula['descricao']} - {dados_aula['comum']} ({presentes}/{total_alunos} presentes)")
+                    print(f"[{aulas_processadas}/{ID_FINAL-ID_INICIAL+1}] Aula {dados_aula['id_aula']}: {dados_aula['descricao']} - {dados_aula['comum']} - {data_aula} - Ata: {tem_ata} ({presentes}/{total_alunos} presentes)")
                 
                 # Mostrar progresso a cada 100
                 if aulas_processadas % 100 == 0:
@@ -291,7 +344,7 @@ def main():
         "dados": resultado,
         "headers": [
             "ID_Aula", "ID_Turma", "Descrição", "Comum", "Dia_Semana",
-            "Hora_Início", "Hora_Término", "Data_Aula", "Total_Alunos", "Presentes"
+            "Hora_Início", "Hora_Término", "Data_Aula", "Tem_Ata", "Total_Alunos", "Presentes"
         ],
         "resumo": {
             "total_aulas": len(resultado),
