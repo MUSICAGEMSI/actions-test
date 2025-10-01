@@ -9,78 +9,48 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-# Configurações do Google Sheets
-SPREADSHEET_ID = '1lnzzToyBao-c5sptw4IcnXA0QCvS4bKFpyiQUcxbA3Q'
-RANGE_NAME = 'alunos_hortolandia!A2:A'  # Assumindo que os IDs estão na coluna A
-
-def obter_ids_alunos_google_sheets():
-    """
-    Busca os IDs dos alunos diretamente do Google Sheets
-    Requer arquivo de credenciais JSON (service account)
-    """
-    print("\n📋 Obtendo lista de IDs dos alunos do Google Sheets...")
-    try:
-        # Carregar credenciais (você precisa criar um service account)
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-        
-        # Caminho para o arquivo de credenciais (você precisa baixar do Google Cloud Console)
-        SERVICE_ACCOUNT_FILE = 'credenciais_google.json'
-        
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            print(f"❌ Arquivo de credenciais não encontrado: {SERVICE_ACCOUNT_FILE}")
-            print("📖 Consulte: https://developers.google.com/sheets/api/quickstart/python")
-            return []
-        
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        service = build('sheets', 'v4', credentials=creds)
-        
-        # Buscar dados
-        sheet = service.spreadsheets()
-        result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
-        values = result.get('values', [])
-        
-        # Extrair IDs (primeira coluna)
-        ids = [row[0] for row in values if row and row[0]]
-        
-        print(f"✅ {len(ids)} IDs obtidos da planilha!")
-        return ids
-        
-    except Exception as e:
-        print(f"❌ Erro ao obter IDs do Google Sheets: {e}")
-        return []
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
 
 def obter_ids_alunos():
     """
     Busca os IDs dos alunos do Google Apps Script
     """
-    print("\n📋 Obtendo lista de IDs dos alunos via Apps Script...")
+    print("\n📋 Obtendo lista de IDs dos alunos...")
     try:
         response = requests.get(f"{URL_APPS_SCRIPT}?acao=obter_ids", timeout=30)
+        
         if response.status_code == 200:
             dados = json.loads(response.text)
+            status = dados.get('status', 'unknown')
+            
+            if status == 'error':
+                print(f"❌ Erro no Apps Script: {dados.get('mensagem', 'Erro desconhecido')}")
+                return []
+            
             ids = dados.get('ids', [])
             print(f"✅ {len(ids)} IDs obtidos da planilha!")
+            
+            if len(ids) > 0:
+                print(f"🔍 Primeiros 5 IDs: {ids[:5]}")
+                print(f"🔍 Últimos 5 IDs: {ids[-5:]}")
+            
             return ids
         else:
-            print(f"❌ Erro ao obter IDs: Status {response.status_code}")
-            print(f"📝 Resposta: {response.text}")
+            print(f"❌ Erro HTTP {response.status_code}")
             return []
+            
     except Exception as e:
         print(f"❌ Erro ao obter IDs: {e}")
         return []
-
-def extrair_cookies_playwright(pagina):
-    """Extrai cookies do Playwright"""
-    cookies = pagina.context.cookies()
-    return {cookie['name']: cookie['value'] for cookie in cookies}
 
 def coletar_dados_aluno(session, id_aluno):
     """
@@ -477,13 +447,8 @@ def main():
         
         navegador.close()
     
-    # Tentar obter IDs via Apps Script primeiro
+    # Obter lista de IDs dos alunos
     ids_alunos = obter_ids_alunos()
-    
-    # Se falhar, tentar via Google Sheets API
-    if not ids_alunos:
-        print("\n⚠️  Tentando método alternativo (Google Sheets API)...")
-        ids_alunos = obter_ids_alunos_google_sheets()
     
     if not ids_alunos:
         print("❌ Nenhum ID de aluno encontrado. Abortando.")
