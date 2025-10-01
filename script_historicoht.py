@@ -148,21 +148,17 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             elif 'Instrutor(a) que ministrou a aula' in label:
                 nome_instrutor = valor.split(' - ')[0].strip()
         
-        # Extrair descrição do header
-        modal_title = soup.find('h4', class_='modal-title')
-        if modal_title:
-            # Pegar o texto do <td> dentro da tabela que tem bg-blue-gradient
-            table = soup.find('table', class_='table')
-            if table:
-                thead = table.find('thead')
-                if thead:
-                    td_desc = thead.find('td', class_='bg-blue-gradient')
-                    if td_desc:
-                        texto_desc = td_desc.get_text(strip=True)
-                        # Remove o ícone e pega só o texto
-                        descricao = texto_desc.replace('CLARINETE', '').strip()
-                        if not descricao:
-                            descricao = texto_desc.split()[-1] if texto_desc else ""
+        # Extrair descrição do header da tabela
+        table = soup.find('table', class_='table')
+        if table:
+            thead = table.find('thead')
+            if thead:
+                td_desc = thead.find('td', class_='bg-blue-gradient')
+                if td_desc:
+                    # Pega todo o texto e remove o ícone
+                    texto_completo = td_desc.get_text(strip=True)
+                    # Remove possíveis ícones do Font Awesome
+                    descricao = re.sub(r'\s+', ' ', texto_completo).strip()
         
         # Se não achou descrição, tenta pegar do colspan
         if not descricao:
@@ -183,23 +179,33 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         if not eh_hortolandia:
             return None
         
-        # Verificar se tem ata e extrair o texto
+        # ====================================================================
+        # CORREÇÃO PRINCIPAL: VERIFICAÇÃO CORRETA DA ATA
+        # ====================================================================
         tem_ata = "Não"
         texto_ata = ""
-        ata_table = soup.find_all('table', class_='table table-bordered table-striped table-hover')
         
-        for table in ata_table:
-            thead = table.find('thead', class_='bg-green-gradient')
+        # Buscar TODAS as tabelas
+        todas_tabelas = soup.find_all('table', class_='table')
+        
+        for tabela in todas_tabelas:
+            # Procurar especificamente por thead com bg-green-gradient
+            thead = tabela.find('thead')
             if thead:
-                td_thead = thead.find('td')
-                if td_thead and 'ATA DA AULA' in td_thead.get_text():
-                    tem_ata = "Sim"
-                    tbody_ata = table.find('tbody')
-                    if tbody_ata:
-                        td_ata = tbody_ata.find('td')
-                        if td_ata:
-                            texto_ata = td_ata.get_text(strip=True)
-                    break
+                tr_green = thead.find('tr', class_='bg-green-gradient')
+                if tr_green:
+                    td_ata = tr_green.find('td')
+                    if td_ata and 'ATA DA AULA' in td_ata.get_text():
+                        tem_ata = "Sim"
+                        
+                        # Extrair o texto da ata do tbody
+                        tbody_ata = tabela.find('tbody')
+                        if tbody_ata:
+                            td_texto = tbody_ata.find('td')
+                            if td_texto:
+                                texto_ata = td_texto.get_text(strip=True)
+                        
+                        break  # Encontrou a ata, pode parar
         
         # Pegar dia da semana do data_aula
         dia_semana = ""
@@ -213,9 +219,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             except:
                 dia_semana = ""
         
-        # REQUEST 2: Frequências (só se passou no filtro de Hortolândia)
-        # Primeiro precisamos do id_turma - vamos tentar extrair do visualizar_aula
-        # Mas não temos ele aqui... vamos fazer um request extra rápido
+        # REQUEST 2: Pegar ID da turma
         url_editar = f"https://musical.congregacao.org.br/aulas_abertas/editar/{aula_id}"
         resp_editar = session.get(url_editar, headers=headers, timeout=5)
         
@@ -225,7 +229,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             if turma_input:
                 id_turma = turma_input.get('value', '').strip()
         
-        # Agora sim, buscar frequências
+        # REQUEST 3: Buscar frequências
         total_alunos = 0
         presentes = 0
         lista_presentes = ""
@@ -298,7 +302,7 @@ def main():
     tempo_inicio = time.time()
     
     print("=" * 70)
-    print("🚀 COLETOR ULTRA-RÁPIDO - HORTOLÂNDIA (META: 15 MINUTOS)")
+    print("🚀 COLETOR ULTRA-RÁPIDO - HORTOLÂNDIA (COM DETECÇÃO DE ATA CORRIGIDA)")
     print("=" * 70)
     
     with sync_playwright() as p:
@@ -342,20 +346,21 @@ def main():
     resultado = []
     aulas_processadas = 0
     aulas_hortolandia = 0
+    aulas_com_ata = 0
     
     # Range de IDs
     ID_INICIAL = 327184
     ID_FINAL = 360000
     
     # OTIMIZAÇÃO: Aumentar paralelismo e reduzir timeout
-    LOTE_SIZE = 200  # Dobrado
-    MAX_WORKERS = 20  # Quadruplicado!
+    LOTE_SIZE = 200
+    MAX_WORKERS = 20
     
     print(f"\n{'=' * 70}")
     print(f"⚡ MODO TURBO ATIVADO!")
     print(f"📊 Range: {ID_INICIAL} a {ID_FINAL} ({ID_FINAL - ID_INICIAL + 1} IDs)")
     print(f"🔥 {MAX_WORKERS} threads paralelas | Lotes de {LOTE_SIZE}")
-    print(f"🎯 Apenas 2-3 requests por aula válida")
+    print(f"🎯 Detecção de ATA corrigida!")
     print(f"{'=' * 70}\n")
     
     for lote_inicio in range(ID_INICIAL, ID_FINAL + 1, LOTE_SIZE):
@@ -393,7 +398,15 @@ def main():
                     ])
                     
                     aulas_hortolandia += 1
-                    print(f"✅ [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:25]:25s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
+                    
+                    # Contar atas
+                    if dados_completos['tem_ata'] == "Sim":
+                        aulas_com_ata += 1
+                        ata_status = "📝"
+                    else:
+                        ata_status = "  "
+                    
+                    print(f"{ata_status} [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:25]:25s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
                 
                 # Mostrar progresso a cada 200
                 if aulas_processadas % 200 == 0:
@@ -401,7 +414,7 @@ def main():
                     velocidade = aulas_processadas / tempo_decorrido
                     tempo_estimado = (ID_FINAL - ID_INICIAL + 1 - aulas_processadas) / velocidade / 60
                     print(f"\n{'─' * 70}")
-                    print(f"⚡ {aulas_processadas} processadas | {aulas_hortolandia} HTL | {velocidade:.1f} aulas/s | ETA: {tempo_estimado:.1f}min")
+                    print(f"⚡ {aulas_processadas} processadas | {aulas_hortolandia} HTL | {aulas_com_ata} com ATA | {velocidade:.1f} aulas/s | ETA: {tempo_estimado:.1f}min")
                     print(f"{'─' * 70}\n")
         
         time.sleep(0.5)  # Pausa mínima entre lotes
@@ -411,6 +424,7 @@ def main():
     print(f"{'=' * 70}")
     print(f"📊 Total processado: {aulas_processadas}")
     print(f"✅ Aulas de Hortolândia: {aulas_hortolandia}")
+    print(f"📝 Aulas com ATA: {aulas_com_ata} ({aulas_com_ata/aulas_hortolandia*100:.1f}%)")
     print(f"⏱️  Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
     print(f"⚡ Velocidade média: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
     print(f"{'=' * 70}\n")
@@ -428,6 +442,7 @@ def main():
         "resumo": {
             "total_aulas": len(resultado),
             "aulas_processadas": aulas_processadas,
+            "aulas_com_ata": aulas_com_ata,
             "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
             "velocidade_aulas_por_segundo": round(aulas_processadas/(time.time() - tempo_inicio), 2)
