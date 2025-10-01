@@ -8,9 +8,7 @@ on:
         default: 'script_usuarios.py'
         type: choice
         options:
-          - script_alunosht.py
-          - script_localidadesht.py
-          - script_historicoht.py
+          - script_individualht.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
