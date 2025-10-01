@@ -9,23 +9,59 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-def extrair_cookies_playwright(pagina):
-    """Extrai cookies do Playwright"""
-    cookies = pagina.context.cookies()
-    return {cookie['name']: cookie['value'] for cookie in cookies}
+# Configurações do Google Sheets
+SPREADSHEET_ID = '1lnzzToyBao-c5sptw4IcnXA0QCvS4bKFpyiQUcxbA3Q'
+RANGE_NAME = 'alunos_hortolandia!A2:A'  # Assumindo que os IDs estão na coluna A
+
+def obter_ids_alunos_google_sheets():
+    """
+    Busca os IDs dos alunos diretamente do Google Sheets
+    Requer arquivo de credenciais JSON (service account)
+    """
+    print("\n📋 Obtendo lista de IDs dos alunos do Google Sheets...")
+    try:
+        # Carregar credenciais (você precisa criar um service account)
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        
+        # Caminho para o arquivo de credenciais (você precisa baixar do Google Cloud Console)
+        SERVICE_ACCOUNT_FILE = 'credenciais_google.json'
+        
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            print(f"❌ Arquivo de credenciais não encontrado: {SERVICE_ACCOUNT_FILE}")
+            print("📖 Consulte: https://developers.google.com/sheets/api/quickstart/python")
+            return []
+        
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        service = build('sheets', 'v4', credentials=creds)
+        
+        # Buscar dados
+        sheet = service.spreadsheets()
+        result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+        values = result.get('values', [])
+        
+        # Extrair IDs (primeira coluna)
+        ids = [row[0] for row in values if row and row[0]]
+        
+        print(f"✅ {len(ids)} IDs obtidos da planilha!")
+        return ids
+        
+    except Exception as e:
+        print(f"❌ Erro ao obter IDs do Google Sheets: {e}")
+        return []
 
 def obter_ids_alunos():
     """
     Busca os IDs dos alunos do Google Apps Script
-    O Apps Script deve retornar um JSON com a lista de IDs
     """
-    print("\n📋 Obtendo lista de IDs dos alunos...")
+    print("\n📋 Obtendo lista de IDs dos alunos via Apps Script...")
     try:
         response = requests.get(f"{URL_APPS_SCRIPT}?acao=obter_ids", timeout=30)
         if response.status_code == 200:
@@ -35,15 +71,20 @@ def obter_ids_alunos():
             return ids
         else:
             print(f"❌ Erro ao obter IDs: Status {response.status_code}")
+            print(f"📝 Resposta: {response.text}")
             return []
     except Exception as e:
         print(f"❌ Erro ao obter IDs: {e}")
         return []
 
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
 def coletar_dados_aluno(session, id_aluno):
     """
     Coleta TODOS os dados de um aluno específico
-    URL: https://musical.congregacao.org.br/alunos/editar/{id_aluno}
     """
     try:
         url = f"https://musical.congregacao.org.br/alunos/editar/{id_aluno}"
@@ -58,7 +99,6 @@ def coletar_dados_aluno(session, id_aluno):
         
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # Extrair dados do formulário
         dados_aluno = {
             'id_aluno': id_aluno,
             'nome': '',
@@ -143,7 +183,6 @@ def coletar_dados_aluno(session, id_aluno):
             for p in paragrafos:
                 texto = p.get_text(strip=True)
                 if 'Cadastrado em:' in texto:
-                    # Ex: "Cadastrado em: 12/09/2024 08:25:18 por: PRISCILA RIBEIRO DA FONSECA"
                     match = re.search(r'Cadastrado em:\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})\s+por:\s*(.+)', texto)
                     if match:
                         dados_aluno['cadastrado_em'] = match.group(1)
@@ -179,7 +218,6 @@ def coletar_dados_aluno(session, id_aluno):
 def coletar_historico_aluno(session, id_aluno):
     """
     Coleta o histórico completo de lições de um aluno
-    URL: https://musical.congregacao.org.br/licoes/index/{id_aluno}
     """
     try:
         url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
@@ -208,7 +246,7 @@ def coletar_historico_aluno(session, id_aluno):
             'escalas_grupo': []
         }
         
-        # ===== MSA GRUPO (ÚNICO COM DADOS NO EXEMPLO) =====
+        # MSA GRUPO
         msa_grupo_table = None
         h3_tags = soup.find_all('h3')
         for h3 in h3_tags:
@@ -227,11 +265,7 @@ def coletar_historico_aluno(session, id_aluno):
                         observacoes = tds[1].get_text(strip=True)
                         data_licao = tds[2].get_text(strip=True)
                         
-                        # Parsear o conteúdo complexo
-                        # Ex: "Fase(s): de 2.5 até 3.5; Página(s): de 10 até 15; Clave(s): Sol"
-                        fases = ""
-                        paginas = ""
-                        claves = ""
+                        fases = paginas = claves = ""
                         
                         if 'Fase(s):' in conteudo:
                             match_fase = re.search(r'Fase\(s\):\s*(.+?);', conteudo)
@@ -256,8 +290,7 @@ def coletar_historico_aluno(session, id_aluno):
                             'data_licao': data_licao
                         })
         
-        # ===== MTS INDIVIDUAL (TABELA VAZIA NO EXEMPLO) =====
-        # Buscar pela tab-pane#mts
+        # MTS INDIVIDUAL
         mts_pane = soup.find('div', {'id': 'mts'})
         if mts_pane:
             mts_table = mts_pane.find('table', {'id': 'datatable1'})
@@ -278,7 +311,7 @@ def coletar_historico_aluno(session, id_aluno):
                                 'observacoes': tds[6].get_text(strip=True)
                             })
         
-        # ===== MSA INDIVIDUAL =====
+        # MSA INDIVIDUAL
         msa_pane = soup.find('div', {'id': 'msa'})
         if msa_pane:
             msa_table = msa_pane.find('table', {'id': 'datatable1'})
@@ -299,7 +332,7 @@ def coletar_historico_aluno(session, id_aluno):
                                 'autorizante': tds[6].get_text(strip=True)
                             })
         
-        # ===== PROVAS =====
+        # PROVAS
         provas_pane = soup.find('div', {'id': 'provas'})
         if provas_pane:
             provas_table = provas_pane.find('table', {'id': 'datatable2'})
@@ -318,7 +351,7 @@ def coletar_historico_aluno(session, id_aluno):
                                 'data_cadastro': tds[4].get_text(strip=True)
                             })
         
-        # ===== HINOS INDIVIDUAL =====
+        # HINOS INDIVIDUAL
         hinario_pane = soup.find('div', {'id': 'hinario'})
         if hinario_pane:
             hinos_table = hinario_pane.find('table', {'id': 'datatable4'})
@@ -339,7 +372,7 @@ def coletar_historico_aluno(session, id_aluno):
                                 'observacoes': tds[6].get_text(strip=True)
                             })
         
-        # ===== MÉTODOS =====
+        # MÉTODOS
         metodos_pane = soup.find('div', {'id': 'metodos'})
         if metodos_pane:
             metodos_table = metodos_pane.find('table', {'id': 'datatable3'})
@@ -360,7 +393,7 @@ def coletar_historico_aluno(session, id_aluno):
                                 'observacoes': tds[6].get_text(strip=True)
                             })
         
-        # ===== ESCALAS INDIVIDUAL =====
+        # ESCALAS INDIVIDUAL
         escalas_pane = soup.find('div', {'id': 'escalas'})
         if escalas_pane:
             escalas_table = escalas_pane.find('table', {'id': 'datatable4'})
@@ -387,24 +420,19 @@ def coletar_historico_aluno(session, id_aluno):
         return None
 
 def processar_aluno_completo(session, id_aluno):
-    """
-    Coleta dados gerais + histórico de um aluno
-    """
+    """Coleta dados gerais + histórico de um aluno"""
     print(f"🔄 Processando aluno {id_aluno}...")
     
-    # Coletar dados gerais
     dados_aluno = coletar_dados_aluno(session, id_aluno)
     if not dados_aluno:
         print(f"❌ Falha ao coletar dados do aluno {id_aluno}")
         return None
     
-    # Coletar histórico
     historico = coletar_historico_aluno(session, id_aluno)
     if not historico:
         print(f"⚠️  Histórico vazio para aluno {id_aluno}")
         historico = {}
     
-    # Combinar
     dados_completos = {
         'dados_aluno': dados_aluno,
         'historico': historico
@@ -431,7 +459,6 @@ def main():
         
         pagina.goto(URL_INICIAL)
         
-        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
@@ -444,15 +471,19 @@ def main():
             navegador.close()
             return
         
-        # Extrair cookies
         cookies_dict = extrair_cookies_playwright(pagina)
         session = requests.Session()
         session.cookies.update(cookies_dict)
         
         navegador.close()
     
-    # Obter lista de IDs dos alunos
+    # Tentar obter IDs via Apps Script primeiro
     ids_alunos = obter_ids_alunos()
+    
+    # Se falhar, tentar via Google Sheets API
+    if not ids_alunos:
+        print("\n⚠️  Tentando método alternativo (Google Sheets API)...")
+        ids_alunos = obter_ids_alunos_google_sheets()
     
     if not ids_alunos:
         print("❌ Nenhum ID de aluno encontrado. Abortando.")
@@ -465,7 +496,7 @@ def main():
     resultado = []
     processados = 0
     
-    MAX_WORKERS = 5  # Menos threads para não sobrecarregar
+    MAX_WORKERS = 5
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
@@ -509,7 +540,6 @@ def main():
         print(f"📝 Resposta: {resposta_post.text}")
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        # Salvar backup local
         with open('backup_alunos.json', 'w', encoding='utf-8') as f:
             json.dump(resultado, f, ensure_ascii=False, indent=2)
         print("💾 Dados salvos em backup_alunos.json")
