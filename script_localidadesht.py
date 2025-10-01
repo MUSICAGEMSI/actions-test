@@ -13,21 +13,17 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpx
 RANGE_INICIO = 1
 RANGE_FIM = 30000
 NUM_THREADS = 20
-
-print(f"🔍 COLETOR DE IDs - IGREJAS DE HORTOLÂNDIA")
-print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
-print(f"🧵 Threads: {NUM_THREADS}")
+BATCH_SIZE_ENVIO = 3000   # envios em batches de X IDs
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2.0  # segundos, multiplicativo
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
     exit(1)
 
-# =========================
-# Funções auxiliares
-# =========================
-
 def verificar_hortolandia(texto: str) -> bool:
-    if not texto: return False
+    if not texto:
+        return False
     texto_upper = texto.upper()
     variacoes = ["HORTOL", "HORTOLANDIA", "HORTOLÃNDIA", "HORTOLÂNDIA"]
     return any(var in texto_upper for var in variacoes)
@@ -60,12 +56,13 @@ class ColetorIDsHortolandia:
                             if verificar_hortolandia(texto_completo):
                                 self.ids_encontrados.add(igreja_id)
                                 print(f"✅ T{self.thread_id}: ID {igreja_id} | {texto_completo[:60]}")
-                    except:
+                    except Exception:
                         pass
                 time.sleep(0.05)
             except Exception as e:
                 if "timeout" in str(e).lower():
                     print(f"⏱️ T{self.thread_id}: Timeout no ID {igreja_id}")
+                # ignora e segue
                 continue
         return self.ids_encontrados
 
@@ -90,7 +87,8 @@ def executar_coleta_paralela_ids(session, range_inicio: int, range_fim: int, num
             try:
                 ids_thread = future.result(timeout=1800)
                 todos_ids.update(ids_thread)
-                print(f"✅ Thread {i}: {len(ids_thread)} IDs encontrados")
+                coletor = coletores[i]
+                print(f"✅ Thread {i}: {len(ids_thread)} IDs encontrados | {coletor.requisicoes_feitas} requisições")
             except Exception as e:
                 print(f"❌ Thread {i}: Erro - {e}")
     return sorted(list(todos_ids))
@@ -111,31 +109,66 @@ def salvar_ids_em_arquivo(ids: List[int], nome_arquivo: str = "ids_hortolandia.t
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_para_planilha(ids: List[int]):
+def enviar_chunk_para_planilha(chunk: List[int], total_ids: int, chunk_index: int, total_chunks: int) -> bool:
     payload = {
         "tipo": "ids_hortolandia",
         "headers": ["ID_Igreja"],
-        "dados": [[igreja_id] for igreja_id in ids],
+        "dados": [[igreja_id] for igreja_id in chunk],
         "resumo": {
-            "total_ids": len(ids),
+            "total_ids": total_ids,
+            "batch": f"{chunk_index}/{total_chunks}",
             "range_inicio": RANGE_INICIO,
             "range_fim": RANGE_FIM
         }
     }
-    try:
-        resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=20)
-        if resp.status_code == 200:
-            print("✅ Dados enviados para planilha com sucesso!")
-            print("Resposta:", resp.json())
-        else:
-            print(f"⚠️ Erro ao enviar: {resp.status_code} | {resp.text}")
-    except Exception as e:
-        print(f"❌ Erro na requisição: {e}")
+
+    attempt = 0
+    while attempt < MAX_RETRIES:
+        try:
+            resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=30)
+            # Apps Script retorna um JSON com campo statusCode no body — validamos 200 HTTP
+            if resp.status_code == 200:
+                try:
+                    j = resp.json()
+                    print(f"✅ Envio chunk {chunk_index}/{total_chunks} OK. Resposta: {j}")
+                except Exception:
+                    print(f"✅ Envio chunk {chunk_index}/{total_chunks} OK. (resposta não JSON)")
+                return True
+            else:
+                print(f"⚠️ Erro HTTP ({resp.status_code}) no envio chunk {chunk_index}: {resp.text[:200]}")
+        except Exception as e:
+            print(f"❌ Erro envio chunk {chunk_index}: {e}")
+        attempt += 1
+        backoff = RETRY_BACKOFF * (attempt)
+        print(f"🔁 Tentando novamente em {backoff}s (attempt {attempt}/{MAX_RETRIES})...")
+        time.sleep(backoff)
+    print(f"❌ Falha no envio do chunk {chunk_index} após {MAX_RETRIES} tentativas.")
+    return False
+
+def enviar_para_planilha(ids: List[int], batch_size: int = BATCH_SIZE_ENVIO):
+    total = len(ids)
+    if total == 0:
+        print("⚠️ Nenhum ID para enviar.")
+        return
+
+    chunks = [ids[i:i+batch_size] for i in range(0, total, batch_size)]
+    total_chunks = len(chunks)
+    print(f"📤 Enviando {total} IDs em {total_chunks} chunk(s) (batch_size={batch_size})")
+
+    all_ok = True
+    for idx, chunk in enumerate(chunks, start=1):
+        ok = enviar_chunk_para_planilha(chunk, total, idx, total_chunks)
+        if not ok:
+            all_ok = False
+            # decide se para ou continua; aqui continuamos para tentar enviar o máximo possível
+    if all_ok:
+        print("✅ Todos os chunks enviados com sucesso.")
+    else:
+        print("⚠️ Alguns chunks falharam — verifique logs e reenvie os chunks faltantes manualmente, se necessário.")
 
 # =========================
 # MAIN
 # =========================
-
 def main():
     tempo_inicio = time.time()
     print("🔐 Realizando login...")
@@ -143,12 +176,18 @@ def main():
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
-        pagina.goto(URL_INICIAL)
-        pagina.fill('input[name="login"]', EMAIL)
-        pagina.fill('input[name="password"]', SENHA)
-        pagina.click('button[type="submit"]')
-        pagina.wait_for_selector("nav", timeout=15000)
-        print("✅ Login realizado com sucesso!")
+        pagina.set_extra_http_headers({'User-Agent': 'Mozilla/5.0'})
+        try:
+            pagina.goto(URL_INICIAL)
+            pagina.fill('input[name="login"]', EMAIL)
+            pagina.fill('input[name="password"]', SENHA)
+            pagina.click('button[type="submit"]')
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except Exception as e:
+            print(f"❌ Erro no login: {e}")
+            navegador.close()
+            return
         cookies_dict = extrair_cookies_playwright(pagina)
         navegador.close()
 
@@ -161,13 +200,15 @@ def main():
     ids_hortolandia = executar_coleta_paralela_ids(session, RANGE_INICIO, RANGE_FIM, NUM_THREADS)
     tempo_total = time.time() - tempo_inicio
 
-    print(f"\n🏁 COLETA DE IDs FINALIZADA!")
+    print("\n🏁 COLETA DE IDs FINALIZADA!")
     print(f"📊 IDs de Hortolândia encontrados: {len(ids_hortolandia)}")
     print(f"⏱️ Tempo total: {tempo_total:.1f}s")
 
     if ids_hortolandia:
         salvar_ids_em_arquivo(ids_hortolandia)
         enviar_para_planilha(ids_hortolandia)
+    else:
+        print("⚠️ Nenhum ID de Hortolândia foi encontrado neste range")
 
 if __name__ == "__main__":
     main()
