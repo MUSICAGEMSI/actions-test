@@ -322,7 +322,7 @@ def main():
     
     # Range de IDs (pode ajustar conforme necessário)
     ID_INICIAL = 327184
-    ID_FINAL = 330000
+    ID_FINAL = 360000
     
     # Processar em lotes
     LOTE_SIZE = 100
