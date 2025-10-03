@@ -925,6 +925,12 @@ def main():
     
     tempo_total = time.time() - tempo_inicio
     
+   # ========================================
+# SUBSTITUIR A PARTIR DA LINHA ~930
+# ========================================
+
+    tempo_total = time.time() - tempo_inicio
+    
     # Estatísticas
     print(f"\n{'='*70}")
     print(f"🏁 COLETA DE LIÇÕES FINALIZADA!")
@@ -933,7 +939,6 @@ def main():
     print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
     print(f"\n📊 DADOS COLETADOS:")
     print(f"   📗 MTS Individual: {len(todos_dados['mts_individual'])} registros")
-    print(f"   📗 MTS Grupo: {print(f"   📗 MTS Individual: {len(todos_dados['mts_individual'])} registros")
     print(f"   📗 MTS Grupo: {len(todos_dados['mts_grupo'])} registros")
     print(f"   📘 MSA Individual: {len(todos_dados['msa_individual'])} registros")
     print(f"   📘 MSA Grupo: {len(todos_dados['msa_grupo'])} registros")
