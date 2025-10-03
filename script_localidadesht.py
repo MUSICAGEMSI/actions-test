@@ -36,8 +36,21 @@ def verificar_hortolandia(texto: str) -> bool:
 
 def extrair_dados_localidade(texto_completo: str, igreja_id: int) -> Dict:
     try:
+        # Corrigir encoding apenas se necessário
         if isinstance(texto_completo, str):
-            texto_completo = texto_completo.encode('latin1').decode('utf-8')
+            try:
+                # Tentar diferentes encodings
+                if '\\u' in texto_completo:
+                    # JSON unicode escape
+                    texto_completo = texto_completo.encode().decode('unicode-escape')
+                elif any(ord(c) > 127 for c in texto_completo):
+                    # Tentar latin1 -> utf8
+                    try:
+                        texto_completo = texto_completo.encode('latin1').decode('utf-8')
+                    except:
+                        pass  # Manter original se falhar
+            except:
+                pass  # Manter original em caso de erro
         
         partes = texto_completo.split(' - ')
         
@@ -123,15 +136,25 @@ def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Dict 
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
             'User-Agent': 'Mozilla/5.0',
-            'Accept': 'application/json'
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Charset': 'utf-8'
         }
         
         resp = session.get(url, headers=headers, timeout=5)
         cache_verificados.add(igreja_id)
         
         if resp.status_code == 200:
+            # Forçar encoding UTF-8 correto
             resp.encoding = 'utf-8'
-            json_data = resp.json()
+            
+            try:
+                json_data = resp.json()
+            except:
+                # Se falhar, tentar decodificar manualmente
+                try:
+                    json_data = json.loads(resp.content.decode('utf-8'))
+                except:
+                    return None
             
             if isinstance(json_data, list) and len(json_data) > 0:
                 texto_completo = json_data[0].get('text', '')
