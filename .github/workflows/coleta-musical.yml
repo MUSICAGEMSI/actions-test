@@ -1,16 +1,18 @@
 name: Coleta Musical
+
 on:
   workflow_dispatch:
     inputs:
       script_name:
         description: 'Script para executar'
         required: true
-        default: 'script_usuarios.py'
+        default: 'script_individualht.py'
         type: choice
         options:
           - script_individualht.py
           - script_localidadesht.py
           - script_alunosht.py
+
 jobs:
   coleta:
     runs-on: ubuntu-latest
@@ -26,11 +28,22 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: Instalar dependências
+      - name: Instalar dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev
+      
+      - name: Instalar dependências Python
         run: |
           pip install --upgrade pip
-          pip install playwright requests beautifulsoup4 python-dotenv aiohttp
+          pip install -r requirements.txt
           python -m playwright install chromium --with-deps
+      
+      - name: Verificar instalação (Debug)
+        run: |
+          echo "Verificando pacotes instalados..."
+          pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
+          python -c "import httpx; print(f'httpx version: {httpx.__version__}')"
       
       - name: Executar coleta
         env:
@@ -47,6 +60,7 @@ jobs:
           name: debug-screenshots-${{ github.run_number }}
           path: |
             debug_*.png
+            debug_*.html
             backup_*.json
           retention-days: 7
           if-no-files-found: ignore
@@ -57,7 +71,7 @@ jobs:
         with:
           name: coleta-completa-${{ github.run_number }}
           path: |
-            backup_usuarios_completo_*.json
+            backup_*.json
             *.log
           retention-days: 30
           if-no-files-found: ignore
