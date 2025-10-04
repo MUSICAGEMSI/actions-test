@@ -15,29 +15,18 @@ import threading
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ========================================
-# CONFIGURAÇÕES ALTA PERFORMANCE
-# ========================================
-
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-NUM_THREADS = 80
+# Configuração otimizada
+NUM_THREADS = 30
 TIMEOUT_REQUEST = 12
-BATCH_SIZE = 500
-MAX_RETRIES = 2
-POOL_CONNECTIONS = 20
-POOL_MAXSIZE = 100
+MAX_RETRIES = 3
 
-print(f"═══════════════════════════════════════════════")
-print(f"  COLETOR DE LIÇÕES - ALTA PERFORMANCE")
-print(f"═══════════════════════════════════════════════")
-print(f"  Threads: {NUM_THREADS}")
-print(f"  Timeout: {TIMEOUT_REQUEST}s")
-print(f"  Batch: {BATCH_SIZE} alunos")
-print(f"═══════════════════════════════════════════════\n")
+print("COLETOR DE LIÇÕES - SESSÕES PERSISTENTES")
+print(f"Threads: {NUM_THREADS} | Timeout: {TIMEOUT_REQUEST}s")
 
 if not EMAIL or not SENHA:
     print("ERRO: Credenciais não definidas")
@@ -45,13 +34,13 @@ if not EMAIL or not SENHA:
 
 print_lock = threading.Lock()
 stats_lock = threading.Lock()
+
 global_stats = {
     'processados': 0,
     'erros': 0,
     'sem_dados': 0,
     'com_dados': 0,
-    'tempo_inicio': None,
-    'pausar': False
+    'tempo_inicio': None
 }
 
 def safe_print(msg):
@@ -61,43 +50,48 @@ def safe_print(msg):
 def update_stats(tipo: str):
     with stats_lock:
         global_stats[tipo] += 1
-        # Circuit breaker: pausar se taxa de erro > 30%
-        if global_stats['processados'] > 50:
-            taxa_erro = global_stats['erros'] / global_stats['processados']
-            if taxa_erro > 0.3:
-                global_stats['pausar'] = True
-
-# ========================================
-# BUSCAR ALUNOS
-# ========================================
 
 def buscar_alunos_hortolandia() -> List[Dict]:
-    print("Buscando lista de alunos...")
-    
+    print("\nBuscando alunos...")
     try:
-        params = {"acao": "listar_ids_alunos"}
-        response = requests.get(URL_APPS_SCRIPT, params=params, timeout=30)
-        
+        response = requests.get(URL_APPS_SCRIPT, params={"acao": "listar_ids_alunos"}, timeout=30)
         if response.status_code == 200:
             data = response.json()
             if data.get('sucesso'):
                 alunos = data.get('alunos', [])
-                print(f"OK: {len(alunos)} alunos carregados\n")
+                print(f"OK: {len(alunos)} alunos\n")
                 return alunos
-            else:
-                print(f"Erro: {data.get('erro')}")
-                return []
-        else:
-            print(f"Erro HTTP: {response.status_code}")
-            return []
-            
+        return []
     except Exception as e:
-        print(f"Erro ao buscar alunos: {e}")
+        print(f"Erro: {e}")
         return []
 
-# ========================================
-# EXTRAÇÃO DE DADOS
-# ========================================
+def fazer_login() -> Dict:
+    print("Fazendo login...")
+    with sync_playwright() as p:
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        
+        try:
+            pagina.goto(URL_INICIAL, timeout=30000)
+            pagina.fill('input[name="login"]', EMAIL)
+            pagina.fill('input[name="password"]', SENHA)
+            pagina.click('button[type="submit"]')
+            pagina.wait_for_selector("nav", timeout=15000)
+            time.sleep(2)
+            
+            if "login" in pagina.url.lower():
+                navegador.close()
+                raise Exception("Login falhou")
+            
+            cookies = pagina.context.cookies()
+            cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies}
+            navegador.close()
+            print("Login OK\n")
+            return cookies_dict
+        except Exception as e:
+            navegador.close()
+            raise Exception(f"Erro no login: {e}")
 
 def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
     dados = {
@@ -121,7 +115,6 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             dados['mts_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
-            
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
@@ -141,7 +134,6 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             dados['msa_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
-            
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
@@ -186,7 +178,6 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             dados['hinario_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
-            
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
@@ -218,7 +209,6 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 6:
                             dados['escalas_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:6]])
-            
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
@@ -226,31 +216,26 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             dados['escalas_grupo'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]])
-    
     except Exception:
         pass
     
     return dados
 
-# ========================================
-# SESSÃO HTTP
-# ========================================
-
-def criar_sessao(cookies_dict: Dict) -> requests.Session:
+def criar_sessao_persistente(cookies_dict: Dict) -> requests.Session:
+    """Sessão HTTP com keep-alive e pool otimizado"""
     session = requests.Session()
     session.cookies.update(cookies_dict)
     
-    retry_strategy = Retry(
+    retry = Retry(
         total=MAX_RETRIES,
-        backoff_factor=0.2,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504]
     )
     
     adapter = HTTPAdapter(
-        max_retries=retry_strategy,
-        pool_connections=POOL_CONNECTIONS,
-        pool_maxsize=POOL_MAXSIZE,
+        max_retries=retry,
+        pool_connections=10,
+        pool_maxsize=50,
         pool_block=False
     )
     
@@ -265,51 +250,79 @@ def criar_sessao(cookies_dict: Dict) -> requests.Session:
     
     return session
 
-# ========================================
-# WORKER
-# ========================================
-
-def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
-    if global_stats['pausar']:
-        return None
+# Pool de sessões thread-safe
+class SessionPool:
+    def __init__(self, cookies_dict: Dict, size: int):
+        self.sessions = [criar_sessao_persistente(cookies_dict) for _ in range(size)]
+        self.lock = threading.Lock()
+        self.index = 0
     
+    def get_session(self):
+        with self.lock:
+            session = self.sessions[self.index]
+            self.index = (self.index + 1) % len(self.sessions)
+            return session
+    
+    def close_all(self):
+        for session in self.sessions:
+            session.close()
+
+session_pool = None
+
+def worker_coletar_aluno(aluno: Dict) -> Dict:
+    """Worker usando pool de sessões persistentes"""
     id_aluno = aluno['id_aluno']
     nome_aluno = aluno['nome']
-    session = criar_sessao(cookies_dict)
     
-    try:
-        url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
-        resp = session.get(url, timeout=TIMEOUT_REQUEST)
-        
-        if resp.status_code != 200 or len(resp.text) < 1000 or "login" in resp.text.lower():
-            update_stats('erros')
-            return None
-        
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        dados = extrair_dados_completos(soup, id_aluno, nome_aluno)
-        
-        total = sum(len(v) for v in dados.values())
-        if total > 0:
-            update_stats('com_dados')
-        else:
-            update_stats('sem_dados')
-        
-        update_stats('processados')
-        return dados
-        
-    except Exception:
-        update_stats('erros')
-        update_stats('processados')
-        return None
-    finally:
-        session.close()
+    session = session_pool.get_session()
+    
+    for tentativa in range(MAX_RETRIES):
+        try:
+            url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
+            resp = session.get(url, timeout=TIMEOUT_REQUEST)
+            
+            if resp.status_code != 200 or len(resp.text) < 1000:
+                if tentativa < MAX_RETRIES - 1:
+                    time.sleep(0.5)
+                    continue
+                update_stats('erros')
+                return None
+            
+            if "login" in resp.text.lower():
+                if tentativa < MAX_RETRIES - 1:
+                    time.sleep(1)
+                    continue
+                update_stats('erros')
+                return None
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            dados = extrair_dados_completos(soup, id_aluno, nome_aluno)
+            
+            total = sum(len(v) for v in dados.values())
+            if total > 0:
+                update_stats('com_dados')
+            else:
+                update_stats('sem_dados')
+            
+            update_stats('processados')
+            return dados
+            
+        except Exception:
+            if tentativa < MAX_RETRIES - 1:
+                time.sleep(0.5)
+                continue
+    
+    update_stats('erros')
+    update_stats('processados')
+    return None
 
-# ========================================
-# COLETA PARALELA COM BATCHING
-# ========================================
-
-def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads: int):
-    print(f"Iniciando coleta com {num_threads} threads paralelas...\n")
+def executar_coleta_paralela(alunos: List[Dict], num_threads: int, cookies_dict: Dict):
+    global session_pool
+    
+    print(f"Iniciando coleta com {num_threads} threads...\n")
+    
+    # Criar pool de sessões
+    session_pool = SessionPool(cookies_dict, num_threads)
     
     todos_dados = {
         'mts_individual': [], 'mts_grupo': [],
@@ -323,62 +336,44 @@ def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads
     global_stats['tempo_inicio'] = time.time()
     total_alunos = len(alunos)
     
-    # Dividir em batches
-    for batch_num in range(0, len(alunos), BATCH_SIZE):
-        batch = alunos[batch_num:batch_num + BATCH_SIZE]
-        batch_size = len(batch)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = {executor.submit(worker_coletar_aluno, aluno): aluno for aluno in alunos}
         
-        print(f"\n--- BATCH {batch_num//BATCH_SIZE + 1}: Processando {batch_size} alunos ---")
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = {
-                executor.submit(worker_coletar_aluno, aluno, cookies_dict): aluno 
-                for aluno in batch
-            }
-            
-            for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
-                try:
-                    resultado = future.result(timeout=TIMEOUT_REQUEST + 5)
-                    
-                    if resultado:
-                        for key in todos_dados.keys():
-                            todos_dados[key].extend(resultado[key])
-                    
-                    if i % 50 == 0 or i == batch_size:
-                        with stats_lock:
-                            proc = global_stats['processados']
-                            com_d = global_stats['com_dados']
-                            sem_d = global_stats['sem_dados']
-                            erros = global_stats['erros']
-                            tempo_dec = time.time() - global_stats['tempo_inicio']
-                        
-                        velocidade = proc / tempo_dec if tempo_dec > 0 else 0
-                        restantes = total_alunos - proc
-                        tempo_est = restantes / velocidade if velocidade > 0 else 0
-                        pct = (proc / total_alunos) * 100
-                        
-                        safe_print(
-                            f"[{proc}/{total_alunos}] {pct:.1f}% | "
-                            f"OK:{com_d} Vazio:{sem_d} Erro:{erros} | "
-                            f"{velocidade:.1f}/s | Resta:{tempo_est:.0f}s"
-                        )
+        for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
+            try:
+                resultado = future.result(timeout=TIMEOUT_REQUEST + 10)
                 
-                except Exception:
-                    pass
-        
-        # Checkpoint a cada batch
-        if batch_num > 0 and batch_num % BATCH_SIZE == 0:
-            salvar_checkpoint(alunos[:batch_num + BATCH_SIZE], todos_dados)
+                if resultado:
+                    for key in todos_dados.keys():
+                        todos_dados[key].extend(resultado[key])
+                
+                if i % 50 == 0 or i == total_alunos:
+                    with stats_lock:
+                        proc = global_stats['processados']
+                        com_d = global_stats['com_dados']
+                        sem_d = global_stats['sem_dados']
+                        erros = global_stats['erros']
+                        tempo = time.time() - global_stats['tempo_inicio']
+                    
+                    vel = proc / tempo if tempo > 0 else 0
+                    rest = total_alunos - proc
+                    tempo_est = rest / vel if vel > 0 else 0
+                    pct = (proc / total_alunos) * 100
+                    taxa_erro = (erros / proc * 100) if proc > 0 else 0
+                    
+                    safe_print(
+                        f"[{proc}/{total_alunos}] {pct:.1f}% | "
+                        f"OK:{com_d} Vazio:{sem_d} Erro:{erros}({taxa_erro:.1f}%) | "
+                        f"{vel:.1f}/s | Resta:{tempo_est/60:.1f}min"
+                    )
+            except Exception:
+                pass
     
+    session_pool.close_all()
     return todos_dados
-
-# ========================================
-# RESUMO E ENVIO
-# ========================================
 
 def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
     resumo = []
-    
     for aluno in alunos:
         id_aluno = aluno['id_aluno']
         nome = aluno['nome']
@@ -400,7 +395,7 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
             if p[0] == id_aluno:
                 try:
                     nota_str = str(p[3]).replace(',', '.').strip()
-                    if nota_str and nota_str.replace('.', '').isdigit():
+                    if nota_str and nota_str.replace('.', '').replace('-', '').isdigit():
                         nota = float(nota_str)
                         if 0 <= nota <= 10:
                             provas.append(nota)
@@ -447,34 +442,15 @@ def enviar_dados_para_sheets(alunos: List[Dict], todos_dados: Dict, tempo: float
     
     try:
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=300)
-        
         if response.status_code == 200:
-            print("OK: Dados enviados com sucesso!")
+            print("Dados enviados com sucesso!")
             return True
         else:
             print(f"Erro: Status {response.status_code}")
             return False
-            
     except Exception as e:
         print(f"Erro ao enviar: {e}")
         return False
-
-def salvar_checkpoint(alunos: List[Dict], todos_dados: Dict):
-    try:
-        nome = f"checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(nome, 'w', encoding='utf-8') as f:
-            json.dump({"alunos": alunos, "dados": todos_dados}, f, indent=2, ensure_ascii=False)
-        safe_print(f"Checkpoint salvo: {nome}")
-    except:
-        pass
-
-def extrair_cookies_playwright(pagina):
-    cookies = pagina.context.cookies()
-    return {cookie['name']: cookie['value'] for cookie in cookies}
-
-# ========================================
-# MAIN
-# ========================================
 
 def main():
     tempo_inicio = time.time()
@@ -484,47 +460,21 @@ def main():
         print("Erro: Nenhum aluno encontrado")
         return
     
-    print(f"Total: {len(alunos)} alunos\n")
-    print("Realizando login...")
+    print(f"Total: {len(alunos)} alunos")
     
-    with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
-        pagina = navegador.new_page()
-        
-        try:
-            pagina.goto(URL_INICIAL, timeout=30000)
-            pagina.fill('input[name="login"]', EMAIL)
-            pagina.fill('input[name="password"]', SENHA)
-            pagina.click('button[type="submit"]')
-            pagina.wait_for_selector("nav", timeout=15000)
-            time.sleep(2)
-            
-            if "login" in pagina.url.lower():
-                print("Erro: Login falhou")
-                navegador.close()
-                return
-            
-            print("Login OK!\n")
-            
-        except Exception as e:
-            print(f"Erro no login: {e}")
-            navegador.close()
-            return
-        
-        cookies_dict = extrair_cookies_playwright(pagina)
-        navegador.close()
+    cookies_dict = fazer_login()
     
-    print(f"{'═'*60}")
-    print(f"  INICIANDO COLETA DE {len(alunos)} ALUNOS")
-    print(f"{'═'*60}\n")
+    print("="*60)
+    print(f"INICIANDO COLETA DE {len(alunos)} ALUNOS")
+    print("="*60)
     
-    todos_dados = executar_coleta_paralela(cookies_dict, alunos, NUM_THREADS)
+    todos_dados = executar_coleta_paralela(alunos, NUM_THREADS, cookies_dict)
     
     tempo_total = time.time() - tempo_inicio
     
-    print(f"\n{'═'*60}")
-    print(f"  CONCLUÍDO EM {tempo_total/60:.1f} MINUTOS")
-    print(f"{'═'*60}")
+    print(f"\n{'='*60}")
+    print(f"CONCLUÍDO EM {tempo_total/60:.1f} MINUTOS")
+    print(f"{'='*60}")
     
     total_reg = sum(len(v) for v in todos_dados.values())
     print(f"\nTotal: {total_reg} registros coletados")
@@ -537,7 +487,7 @@ def main():
         enviar_dados_para_sheets(alunos, todos_dados, tempo_total)
         print(f"\nSUCESSO!\n")
     else:
-        print(f"\nAviso: Nenhum dado coletado\n")
+        print(f"\nNenhum dado coletado\n")
 
 if __name__ == "__main__":
     main()
