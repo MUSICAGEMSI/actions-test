@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
 # ========================================
-# CONFIGURAÇÕES OTIMIZADAS E ESTÁVEIS
+# CONFIGURAÇÕES
 # ========================================
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
@@ -24,13 +24,14 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-NUM_THREADS = 15  # Reduzido para evitar bloqueios
-TIMEOUT_REQUEST = 20  # Aumentado para maior confiabilidade
-DELAY_ENTRE_REQ = 0.1  # Pequeno delay para não sobrecarregar
+NUM_THREADS = 15
+TIMEOUT_REQUEST = 20
+DELAY_ENTRE_REQ = 0.1
+LIMITE_ALUNOS_TESTE = 100  # 🧪 MODO TESTE: Processar apenas os primeiros 100 alunos
 
-print(f"🎓 COLETOR DE LIÇÕES - VERSÃO ESTÁVEL")
+print(f"🎓 COLETOR DE LIÇÕES - VERSÃO CORRIGIDA")
 print(f"🧵 Threads: {NUM_THREADS}")
-print(f"⏱️  Timeout: {TIMEOUT_REQUEST}s")
+print(f"🧪 MODO TESTE: Apenas {LIMITE_ALUNOS_TESTE} alunos")
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -85,11 +86,11 @@ def buscar_alunos_hortolandia() -> List[Dict]:
         return []
 
 # ========================================
-# FUNÇÕES DE EXTRAÇÃO
+# EXTRAÇÃO COM DEBUGGING
 # ========================================
 
 def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
-    """Extrai todos os dados de um aluno de uma vez"""
+    """Extrai todos os dados de um aluno - VERSÃO CORRIGIDA"""
     
     dados = {
         'mts_individual': [],
@@ -105,129 +106,239 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
     }
     
     try:
-        # MTS Individual
+        # ============================================
+        # MTS INDIVIDUAL E GRUPO
+        # ============================================
         aba_mts = soup.find('div', {'id': 'mts'})
         if aba_mts:
-            tab = aba_mts.find('table', {'id': 'datatable1'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 7:
-                        dados['mts_individual'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:7]])
+            # MTS Individual
+            tab_mts_ind = aba_mts.find('table', {'id': 'datatable1'})
+            if tab_mts_ind:
+                tbody = tab_mts_ind.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            dados['mts_individual'].append([
+                                id_aluno, 
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Módulo
+                                cols[1].get_text(strip=True),  # Lições
+                                cols[2].get_text(strip=True),  # Data Lição
+                                cols[3].get_text(strip=True),  # Autorizante
+                                cols[4].get_text(strip=True),  # Data Cadastro
+                                cols[5].get_text(strip=True),  # Data Alteração
+                                cols[6].get_text(strip=True) if len(cols) > 6 else ""  # Obs
+                            ])
             
-            # MTS Grupo
-            tab_g = aba_mts.find('table', {'id': 'datatable_mts_grupo'})
-            if tab_g and tab_g.find('tbody'):
-                for linha in tab_g.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 3:
-                        dados['mts_grupo'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:3]])
+            # MTS Grupo - CORRIGIDO
+            tab_mts_grp = aba_mts.find('table', {'id': 'datatable_mts_grupo'})
+            if tab_mts_grp:
+                tbody = tab_mts_grp.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            dados['mts_grupo'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Páginas
+                                cols[1].get_text(strip=True),  # Observações
+                                cols[2].get_text(strip=True)   # Data Lição
+                            ])
         
-        # MSA Individual
+        # ============================================
+        # MSA INDIVIDUAL E GRUPO
+        # ============================================
         aba_msa = soup.find('div', {'id': 'msa'})
         if aba_msa:
-            tab = aba_msa.find('table', {'id': 'datatable1'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 7:
-                        dados['msa_individual'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:7]])
+            # MSA Individual
+            tab_msa_ind = aba_msa.find('table', {'id': 'datatable1'})
+            if tab_msa_ind:
+                tbody = tab_msa_ind.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            dados['msa_individual'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Data Lição
+                                cols[1].get_text(strip=True),  # Fases
+                                cols[2].get_text(strip=True),  # Páginas
+                                cols[3].get_text(strip=True),  # Lições
+                                cols[4].get_text(strip=True),  # Claves
+                                cols[5].get_text(strip=True),  # Observações
+                                cols[6].get_text(strip=True)   # Autorizante
+                            ])
             
             # MSA Grupo
-            tab_g = aba_msa.find('table', {'id': 'datatable_mts_grupo'})
-            if tab_g and tab_g.find('tbody'):
-                for linha in tab_g.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 3:
-                        texto = cols[0].get_text(strip=True)
-                        fases_m = re.search(r'de\s+([\d.]+)\s+até\s+([\d.]+)', texto)
-                        pag_m = re.search(r'de\s+(\d+)\s+até\s+(\d+)', texto)
-                        dados['msa_grupo'].append([
-                            id_aluno, nome_aluno,
-                            fases_m.group(1) if fases_m else "",
-                            fases_m.group(2) if fases_m else "",
-                            pag_m.group(1) if pag_m else "",
-                            pag_m.group(2) if pag_m else "",
-                            cols[1].get_text(strip=True),
-                            cols[2].get_text(strip=True)
-                        ])
+            tab_msa_grp = aba_msa.find('table', {'id': 'datatable_mts_grupo'})
+            if tab_msa_grp:
+                tbody = tab_msa_grp.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            texto = cols[0].get_text(strip=True)
+                            fases_m = re.search(r'de\s+([\d.]+)\s+até\s+([\d.]+)', texto)
+                            pag_m = re.search(r'de\s+(\d+)\s+até\s+(\d+)', texto)
+                            dados['msa_grupo'].append([
+                                id_aluno,
+                                nome_aluno,
+                                fases_m.group(1) if fases_m else "",
+                                fases_m.group(2) if fases_m else "",
+                                pag_m.group(1) if pag_m else "",
+                                pag_m.group(2) if pag_m else "",
+                                cols[1].get_text(strip=True),
+                                cols[2].get_text(strip=True)
+                            ])
         
-        # Provas
+        # ============================================
+        # PROVAS
+        # ============================================
         aba_provas = soup.find('div', {'id': 'provas'})
         if aba_provas:
-            tab = aba_provas.find('table', {'id': 'datatable2'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 5:
-                        dados['provas'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:5]])
+            tab_provas = aba_provas.find('table', {'id': 'datatable2'})
+            if tab_provas:
+                tbody = tab_provas.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 5:
+                            dados['provas'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Módulo/Fases
+                                cols[1].get_text(strip=True),  # Nota
+                                cols[2].get_text(strip=True),  # Data Prova
+                                cols[3].get_text(strip=True),  # Autorizante
+                                cols[4].get_text(strip=True)   # Data Cadastro
+                            ])
         
-        # Hinário Individual
-        aba_hin = soup.find('div', {'id': 'hinario'})
-        if aba_hin:
-            tab = aba_hin.find('table', {'id': 'datatable4'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 7:
-                        dados['hinario_individual'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:7]])
+        # ============================================
+        # HINÁRIO INDIVIDUAL E GRUPO - CORRIGIDO
+        # ============================================
+        aba_hinario = soup.find('div', {'id': 'hinario'})
+        if aba_hinario:
+            # Hinário Individual
+            tab_hin_ind = aba_hinario.find('table', {'id': 'datatable4'})
+            if tab_hin_ind:
+                tbody = tab_hin_ind.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            dados['hinario_individual'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Hino
+                                cols[1].get_text(strip=True),  # Voz
+                                cols[2].get_text(strip=True),  # Data Aula
+                                cols[3].get_text(strip=True),  # Autorizante
+                                cols[4].get_text(strip=True),  # Data Cadastro
+                                cols[5].get_text(strip=True),  # Data Alteração
+                                cols[6].get_text(strip=True) if len(cols) > 6 else ""
+                            ])
             
-            # Hinário Grupo
-            tab_g = aba_hin.find('table', {'id': 'datatable_hinos_grupo'})
-            if tab_g and tab_g.find('tbody'):
-                for linha in tab_g.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 3:
-                        dados['hinario_grupo'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:3]])
+            # Hinário Grupo - CORRIGIDO: buscar todas as tabelas
+            todas_tabelas_hin = aba_hinario.find_all('table')
+            for tab in todas_tabelas_hin:
+                # Pular se for a tabela individual
+                if tab.get('id') == 'datatable4':
+                    continue
+                    
+                tbody = tab.find('tbody')
+                if tbody:
+                    linhas = tbody.find_all('tr')
+                    for linha in linhas:
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            dados['hinario_grupo'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Hinos
+                                cols[1].get_text(strip=True),  # Observações
+                                cols[2].get_text(strip=True)   # Data Lição
+                            ])
+                    break  # Encontrou a tabela de grupo
         
-        # Métodos
-        aba_met = soup.find('div', {'id': 'metodos'})
-        if aba_met:
-            tab = aba_met.find('table', {'id': 'datatable3'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 7:
-                        dados['metodos'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:7]])
+        # ============================================
+        # MÉTODOS - CORRIGIDO
+        # ============================================
+        aba_metodos = soup.find('div', {'id': 'metodos'})
+        if aba_metodos:
+            tab_metodos = aba_metodos.find('table', {'id': 'datatable3'})
+            if tab_metodos:
+                tbody = tab_metodos.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            dados['metodos'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Páginas
+                                cols[1].get_text(strip=True),  # Lição
+                                cols[2].get_text(strip=True),  # Método
+                                cols[3].get_text(strip=True),  # Data Lição
+                                cols[4].get_text(strip=True),  # Autorizante
+                                cols[5].get_text(strip=True),  # Data Cadastro
+                                cols[6].get_text(strip=True) if len(cols) > 6 else ""
+                            ])
         
-        # Escalas Individual
-        aba_esc = soup.find('div', {'id': 'escalas'})
-        if aba_esc:
-            tab = aba_esc.find('table', {'id': 'datatable4'})
-            if tab and tab.find('tbody'):
-                for linha in tab.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 6:
-                        dados['escalas_individual'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:6]])
+        # ============================================
+        # ESCALAS INDIVIDUAL E GRUPO - CORRIGIDO
+        # ============================================
+        aba_escalas = soup.find('div', {'id': 'escalas'})
+        if aba_escalas:
+            todas_tabelas_esc = aba_escalas.find_all('table')
             
-            # Escalas Grupo
-            tab_g = aba_esc.find('table', {'id': 'datatable_escalas_grupo'})
-            if tab_g and tab_g.find('tbody'):
-                for linha in tab_g.find('tbody').find_all('tr'):
-                    cols = linha.find_all('td')
-                    if len(cols) >= 3:
-                        dados['escalas_grupo'].append([id_aluno, nome_aluno] + 
-                            [c.get_text(strip=True) for c in cols[:3]])
+            # Primeira tabela = Individual
+            if len(todas_tabelas_esc) > 0:
+                tab_esc_ind = todas_tabelas_esc[0]
+                tbody = tab_esc_ind.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 6:
+                            dados['escalas_individual'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Escala
+                                cols[1].get_text(strip=True),  # Data
+                                cols[2].get_text(strip=True),  # Autorizante
+                                cols[3].get_text(strip=True),  # Data Cadastro
+                                cols[4].get_text(strip=True),  # Data Alteração
+                                cols[5].get_text(strip=True) if len(cols) > 5 else ""
+                            ])
+            
+            # Segunda tabela = Grupo
+            if len(todas_tabelas_esc) > 1:
+                tab_esc_grp = todas_tabelas_esc[1]
+                tbody = tab_esc_grp.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            dados['escalas_grupo'].append([
+                                id_aluno,
+                                nome_aluno,
+                                cols[0].get_text(strip=True),  # Escala
+                                cols[1].get_text(strip=True),  # Observações
+                                cols[2].get_text(strip=True)   # Data Lição
+                            ])
     
     except Exception as e:
-        pass
+        safe_print(f"⚠️ Erro ao extrair dados do aluno {id_aluno}: {e}")
     
     return dados
 
 # ========================================
-# CRIAR SESSÃO COM RETRY
+# CRIAR SESSÃO
 # ========================================
 
 def criar_sessao(cookies_dict: Dict) -> requests.Session:
-    """Cria sessão com retry automático"""
     session = requests.Session()
     session.cookies.update(cookies_dict)
     
@@ -253,8 +364,6 @@ def criar_sessao(cookies_dict: Dict) -> requests.Session:
 # ========================================
 
 def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
-    """Coleta dados de um único aluno"""
-    
     id_aluno = aluno['id_aluno']
     nome_aluno = aluno['nome']
     
@@ -270,7 +379,6 @@ def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
         url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
         resp = session.get(url, headers=headers, timeout=TIMEOUT_REQUEST)
         
-        # Validar resposta
         if resp.status_code != 200:
             update_stats('erros')
             return None
@@ -283,13 +391,9 @@ def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
             update_stats('erros')
             return None
         
-        # Parsear HTML
         soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # Extrair todos os dados
         dados = extrair_dados_completos(soup, id_aluno, nome_aluno)
         
-        # Calcular total
         total = sum(len(v) for v in dados.values())
         
         if total > 0:
@@ -298,8 +402,6 @@ def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
             update_stats('sem_dados')
         
         update_stats('processados')
-        
-        # Delay entre requisições
         time.sleep(DELAY_ENTRE_REQ)
         
         return dados
@@ -320,8 +422,6 @@ def worker_coletar_aluno(aluno: Dict, cookies_dict: Dict) -> Dict:
 # ========================================
 
 def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads: int):
-    """Executa coleta paralela"""
-    
     print(f"\n🚀 Iniciando coleta com {num_threads} threads...")
     
     todos_dados = {
@@ -341,23 +441,19 @@ def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads
     total_alunos = len(alunos)
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        # Submeter todas as tarefas
         futures = {
             executor.submit(worker_coletar_aluno, aluno, cookies_dict.copy()): aluno 
             for aluno in alunos
         }
         
-        # Processar resultados conforme completam
         for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
             try:
                 resultado = future.result(timeout=TIMEOUT_REQUEST + 5)
                 
                 if resultado:
-                    # Consolidar dados
                     for key in todos_dados.keys():
                         todos_dados[key].extend(resultado[key])
                 
-                # Log de progresso a cada 50 alunos
                 if i % 50 == 0:
                     with stats_lock:
                         proc = global_stats['processados']
@@ -381,41 +477,67 @@ def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads
     return todos_dados
 
 # ========================================
-# FUNÇÕES AUXILIARES
+# GERAR RESUMO - CORRIGIDO
 # ========================================
 
 def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
     resumo = []
     
     for aluno in alunos:
-        id_aluno = aluno['id_aluno']
+        id_aluno = int(aluno['id_aluno'])  # GARANTIR QUE É INT
         nome = aluno['nome']
         id_igreja = aluno['id_igreja']
         
-        t_mts_i = sum(1 for x in todos_dados['mts_individual'] if x[0] == id_aluno)
-        t_mts_g = sum(1 for x in todos_dados['mts_grupo'] if x[0] == id_aluno)
-        t_msa_i = sum(1 for x in todos_dados['msa_individual'] if x[0] == id_aluno)
-        t_msa_g = sum(1 for x in todos_dados['msa_grupo'] if x[0] == id_aluno)
-        t_prov = sum(1 for x in todos_dados['provas'] if x[0] == id_aluno)
-        t_hin_i = sum(1 for x in todos_dados['hinario_individual'] if x[0] == id_aluno)
-        t_hin_g = sum(1 for x in todos_dados['hinario_grupo'] if x[0] == id_aluno)
-        t_met = sum(1 for x in todos_dados['metodos'] if x[0] == id_aluno)
-        t_esc_i = sum(1 for x in todos_dados['escalas_individual'] if x[0] == id_aluno)
-        t_esc_g = sum(1 for x in todos_dados['escalas_grupo'] if x[0] == id_aluno)
+        # Contar lições comparando INT com INT
+        t_mts_i = sum(1 for x in todos_dados['mts_individual'] if int(x[0]) == id_aluno)
+        t_mts_g = sum(1 for x in todos_dados['mts_grupo'] if int(x[0]) == id_aluno)
+        t_msa_i = sum(1 for x in todos_dados['msa_individual'] if int(x[0]) == id_aluno)
+        t_msa_g = sum(1 for x in todos_dados['msa_grupo'] if int(x[0]) == id_aluno)
+        t_prov = sum(1 for x in todos_dados['provas'] if int(x[0]) == id_aluno)
+        t_hin_i = sum(1 for x in todos_dados['hinario_individual'] if int(x[0]) == id_aluno)
+        t_hin_g = sum(1 for x in todos_dados['hinario_grupo'] if int(x[0]) == id_aluno)
+        t_met = sum(1 for x in todos_dados['metodos'] if int(x[0]) == id_aluno)
+        t_esc_i = sum(1 for x in todos_dados['escalas_individual'] if int(x[0]) == id_aluno)
+        t_esc_g = sum(1 for x in todos_dados['escalas_grupo'] if int(x[0]) == id_aluno)
         
-        provas = [float(x[3]) for x in todos_dados['provas'] 
-                 if x[0] == id_aluno and x[3].replace('.','').isdigit()]
+        # Calcular média das provas
+        provas = []
+        for x in todos_dados['provas']:
+            if int(x[0]) == id_aluno:
+                try:
+                    nota_str = str(x[3]).replace(',', '.')
+                    nota = float(nota_str)
+                    provas.append(nota)
+                except:
+                    pass
+        
         media = round(sum(provas) / len(provas), 2) if provas else 0
+        
+        # Última atividade
+        datas = []
+        for categoria in todos_dados.values():
+            for reg in categoria:
+                if int(reg[0]) == id_aluno and len(reg) > 2:
+                    # Tentar extrair data de qualquer campo
+                    for campo in reg[2:]:
+                        if isinstance(campo, str) and '/' in campo:
+                            datas.append(campo)
+        
+        ultima_ativ = max(datas) if datas else "N/A"
         
         resumo.append([
             id_aluno, nome, id_igreja,
             t_mts_i, t_mts_g, t_msa_i, t_msa_g,
             t_prov, media, t_hin_i, t_hin_g,
-            t_met, t_esc_i, t_esc_g, "N/A",
+            t_met, t_esc_i, t_esc_g, ultima_ativ,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ])
     
     return resumo
+
+# ========================================
+# ENVIAR PARA SHEETS
+# ========================================
 
 def enviar_dados_para_sheets(alunos: List[Dict], todos_dados: Dict, tempo: float):
     print(f"\n📤 Enviando para Google Sheets...")
@@ -489,7 +611,12 @@ def main():
         print("❌ Nenhum aluno encontrado")
         return
     
-    print(f"\n🎓 {len(alunos)} alunos para processar")
+    # 🧪 LIMITAR PARA TESTE
+    total_original = len(alunos)
+    alunos = alunos[:LIMITE_ALUNOS_TESTE]
+    
+    print(f"\n🎓 Total de alunos disponíveis: {total_original}")
+    print(f"🧪 Processando apenas: {len(alunos)} alunos (modo teste)")
     print("\n🔐 Realizando login...")
     
     with sync_playwright() as p:
