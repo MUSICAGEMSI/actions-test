@@ -10,6 +10,7 @@ on:
         options:
           - script_individualht.py
           - script_localidadesht.py
+          - script_alunosht.py
 jobs:
   coleta:
     runs-on: ubuntu-latest
