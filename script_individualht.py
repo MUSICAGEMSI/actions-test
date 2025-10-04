@@ -12,10 +12,9 @@ from typing import List, Dict, Optional
 import re
 from datetime import datetime
 import threading
-from queue import Queue
 
 # ========================================
-# CONFIGURAÇÕES OTIMIZADAS E CONFIÁVEIS
+# CONFIGURAÇÕES PARA 0% DE ERRO
 # ========================================
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
@@ -23,24 +22,25 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-# CONFIGURAÇÕES BALANCEADAS: Velocidade + Confiabilidade
-NUM_THREADS = 40  # Otimizado para 2000 alunos em ~10min
-TIMEOUT_REQUEST = 12  # Timeout razoável
-DELAY_ENTRE_REQ = 0.02  # Micro delay para estabilidade
-MAX_RETRIES = 2  # Retry em caso de falha
+# CONFIGURAÇÕES ULTRA CONFIÁVEIS
+NUM_THREADS = 30  # Reduzido para maior confiabilidade
+TIMEOUT_REQUEST = 20  # Timeout maior
+DELAY_ENTRE_REQ = 0.05  # Delay maior entre requisições
+MAX_RETRIES = 5  # MUITAS tentativas para garantir 0% erro
+DELAY_ENTRE_RETRIES = 1  # 1 segundo entre retries
 
-print(f"🚀 COLETOR DE LIÇÕES - ULTRA RÁPIDO E CONFIÁVEL")
-print(f"🎯 META: 2000 alunos em ~10 minutos")
+print(f"🎯 COLETOR 100% CONFIÁVEL - ZERO ERROS TOLERADOS")
 print(f"🧵 Threads: {NUM_THREADS}")
 print(f"⏱️  Timeout: {TIMEOUT_REQUEST}s")
-print(f"🔄 Retries: {MAX_RETRIES}")
+print(f"🔄 Max Retries: {MAX_RETRIES}")
+print(f"⏸️  Delay entre retries: {DELAY_ENTRE_RETRIES}s")
 
 if not EMAIL or not SENHA:
-    print("❌ Erro: Credenciais não definidas no .env")
+    print("❌ Erro: Credenciais não definidas")
     exit(1)
 
 # ========================================
-# ESTATÍSTICAS THREAD-SAFE
+# ESTATÍSTICAS
 # ========================================
 
 class ThreadSafeStats:
@@ -50,6 +50,7 @@ class ThreadSafeStats:
         self.com_dados = 0
         self.sem_dados = 0
         self.erros = 0
+        self.tentativas_extras = 0
         self.tempo_inicio = None
     
     def incrementar(self, campo: str):
@@ -63,15 +64,22 @@ class ThreadSafeStats:
                 'com_dados': self.com_dados,
                 'sem_dados': self.sem_dados,
                 'erros': self.erros,
+                'tentativas_extras': self.tentativas_extras,
                 'tempo_decorrido': time.time() - self.tempo_inicio if self.tempo_inicio else 0
             }
 
 stats = ThreadSafeStats()
 print_lock = threading.Lock()
+alunos_falhados = []  # Lista de alunos que falharam para reprocessar
+alunos_falhados_lock = threading.Lock()
 
 def safe_print(msg):
     with print_lock:
         print(msg)
+
+def adicionar_aluno_falhado(aluno: Dict):
+    with alunos_falhados_lock:
+        alunos_falhados.append(aluno)
 
 # ========================================
 # BUSCAR ALUNOS
@@ -80,36 +88,38 @@ def safe_print(msg):
 def buscar_alunos_hortolandia() -> List[Dict]:
     print("\n📥 Buscando lista de alunos...")
     
-    try:
-        params = {"acao": "listar_ids_alunos"}
-        
-        with httpx.Client(timeout=30) as client:
-            response = client.get(URL_APPS_SCRIPT, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
+    for tentativa in range(3):
+        try:
+            params = {"acao": "listar_ids_alunos"}
             
-            if data.get('sucesso'):
-                alunos = data.get('alunos', [])
-                print(f"✅ {len(alunos)} alunos carregados com sucesso")
-                return alunos
+            with httpx.Client(timeout=30) as client:
+                response = client.get(URL_APPS_SCRIPT, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('sucesso'):
+                    alunos = data.get('alunos', [])
+                    print(f"✅ {len(alunos)} alunos carregados")
+                    return alunos
+                else:
+                    print(f"⚠️ Erro na resposta: {data.get('erro')}")
             else:
-                print(f"⚠️ Erro na resposta: {data.get('erro')}")
-                return []
-        else:
-            print(f"⚠️ HTTP {response.status_code}")
-            return []
-            
-    except Exception as e:
-        print(f"❌ Erro ao buscar alunos: {e}")
-        return []
+                print(f"⚠️ HTTP {response.status_code}")
+                
+        except Exception as e:
+            print(f"⚠️ Tentativa {tentativa+1}/3 falhou: {e}")
+            if tentativa < 2:
+                time.sleep(2)
+    
+    print("❌ Falha ao buscar alunos após 3 tentativas")
+    return []
 
 # ========================================
-# EXTRAÇÃO DE DADOS OTIMIZADA
+# EXTRAÇÃO DE DADOS
 # ========================================
 
 def extrair_tabela_simples(tbody, id_aluno: int, nome: str, num_cols: int) -> List[List]:
-    """Extrai tabela simples com validação mínima"""
     dados = []
     if not tbody:
         return dados
@@ -124,8 +134,6 @@ def extrair_tabela_simples(tbody, id_aluno: int, nome: str, num_cols: int) -> Li
     return dados
 
 def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
-    """Extração completa e otimizada"""
-    
     dados = {
         'mts_individual': [],
         'mts_grupo': [],
@@ -140,38 +148,30 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
     }
     
     try:
-        # ============================================
         # MTS
-        # ============================================
         aba_mts = soup.find('div', {'id': 'mts'})
         if aba_mts:
-            # Individual
             tab = aba_mts.find('table', {'id': 'datatable1'})
             if tab:
                 dados['mts_individual'] = extrair_tabela_simples(
                     tab.find('tbody'), id_aluno, nome_aluno, 7
                 )
             
-            # Grupo
             tab_g = aba_mts.find('table', {'id': 'datatable_mts_grupo'})
             if tab_g:
                 dados['mts_grupo'] = extrair_tabela_simples(
                     tab_g.find('tbody'), id_aluno, nome_aluno, 3
                 )
         
-        # ============================================
         # MSA
-        # ============================================
         aba_msa = soup.find('div', {'id': 'msa'})
         if aba_msa:
-            # Individual
             tab = aba_msa.find('table', {'id': 'datatable1'})
             if tab:
                 dados['msa_individual'] = extrair_tabela_simples(
                     tab.find('tbody'), id_aluno, nome_aluno, 7
                 )
             
-            # Grupo (com parsing de fases)
             tab_g = aba_msa.find('table', {'id': 'datatable_mts_grupo'})
             if tab_g:
                 tbody = tab_g.find('tbody')
@@ -192,9 +192,7 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                                 cols[2].get_text(strip=True)
                             ])
         
-        # ============================================
         # PROVAS
-        # ============================================
         aba_provas = soup.find('div', {'id': 'provas'})
         if aba_provas:
             tab = aba_provas.find('table', {'id': 'datatable2'})
@@ -203,19 +201,15 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                     tab.find('tbody'), id_aluno, nome_aluno, 5
                 )
         
-        # ============================================
         # HINÁRIO
-        # ============================================
         aba_hin = soup.find('div', {'id': 'hinario'})
         if aba_hin:
-            # Individual
             tab = aba_hin.find('table', {'id': 'datatable4'})
             if tab:
                 dados['hinario_individual'] = extrair_tabela_simples(
                     tab.find('tbody'), id_aluno, nome_aluno, 7
                 )
             
-            # Grupo (segunda tabela)
             todas_tabs = aba_hin.find_all('table')
             for tab in todas_tabs:
                 if tab.get('id') != 'datatable4':
@@ -226,9 +220,7 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                         )
                         break
         
-        # ============================================
         # MÉTODOS
-        # ============================================
         aba_met = soup.find('div', {'id': 'metodos'})
         if aba_met:
             tab = aba_met.find('table', {'id': 'datatable3'})
@@ -237,20 +229,16 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
                     tab.find('tbody'), id_aluno, nome_aluno, 7
                 )
         
-        # ============================================
         # ESCALAS
-        # ============================================
         aba_esc = soup.find('div', {'id': 'escalas'})
         if aba_esc:
             todas_tabs = aba_esc.find_all('table')
             
-            # Individual (primeira)
             if len(todas_tabs) > 0:
                 dados['escalas_individual'] = extrair_tabela_simples(
                     todas_tabs[0].find('tbody'), id_aluno, nome_aluno, 6
                 )
             
-            # Grupo (segunda)
             if len(todas_tabs) > 1:
                 dados['escalas_grupo'] = extrair_tabela_simples(
                     todas_tabs[1].find('tbody'), id_aluno, nome_aluno, 3
@@ -262,11 +250,36 @@ def extrair_dados_completos(soup, id_aluno: int, nome_aluno: str) -> Dict:
     return dados
 
 # ========================================
-# WORKER COM RETRY INTELIGENTE
+# VALIDAÇÕES RIGOROSAS
+# ========================================
+
+def validar_resposta(resp: httpx.Response, id_aluno: int) -> tuple[bool, str]:
+    """Valida rigorosamente a resposta HTTP"""
+    
+    if resp.status_code != 200:
+        return False, f"Status {resp.status_code}"
+    
+    if len(resp.text) < 1000:
+        return False, "HTML muito curto"
+    
+    if "login" in resp.text.lower():
+        return False, "Redirecionado para login"
+    
+    if "erro" in resp.text.lower() and "404" in resp.text:
+        return False, "Página não encontrada"
+    
+    # Verificar se tem estrutura HTML válida
+    if "<html" not in resp.text.lower():
+        return False, "HTML inválido"
+    
+    return True, "OK"
+
+# ========================================
+# WORKER COM RETRY AGRESSIVO
 # ========================================
 
 def worker_coletar_aluno(aluno: Dict, client: httpx.Client, tentativa: int = 1) -> Optional[Dict]:
-    """Worker otimizado com retry automático"""
+    """Worker com retry agressivo para garantir 0% erro"""
     
     id_aluno = aluno['id_aluno']
     nome_aluno = aluno['nome']
@@ -275,71 +288,92 @@ def worker_coletar_aluno(aluno: Dict, client: httpx.Client, tentativa: int = 1) 
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html,application/xhtml+xml',
         'Accept-Language': 'pt-BR,pt;q=0.9',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        'Cache-Control': 'no-cache'
     }
     
-    try:
-        url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
-        
-        resp = client.get(url, headers=headers)
-        
-        # Validações
-        if resp.status_code != 200:
-            if tentativa < MAX_RETRIES:
-                time.sleep(0.5)
-                return worker_coletar_aluno(aluno, client, tentativa + 1)
-            stats.incrementar('erros')
+    for tentativa_atual in range(1, MAX_RETRIES + 1):
+        try:
+            url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
+            
+            # Fazer requisição
+            resp = client.get(url, headers=headers)
+            
+            # Validar resposta
+            valido, motivo = validar_resposta(resp, id_aluno)
+            
+            if not valido:
+                if tentativa_atual < MAX_RETRIES:
+                    stats.incrementar('tentativas_extras')
+                    safe_print(f"⚠️ Aluno {id_aluno} - Tentativa {tentativa_atual}/{MAX_RETRIES}: {motivo}")
+                    time.sleep(DELAY_ENTRE_RETRIES * tentativa_atual)  # Delay progressivo
+                    continue
+                else:
+                    safe_print(f"❌ Aluno {id_aluno} FALHOU após {MAX_RETRIES} tentativas: {motivo}")
+                    adicionar_aluno_falhado(aluno)
+                    stats.incrementar('erros')
+                    stats.incrementar('processados')
+                    return None
+            
+            # Extração
+            soup = BeautifulSoup(resp.text, 'lxml')
+            dados = extrair_dados_completos(soup, id_aluno, nome_aluno)
+            
+            total = sum(len(v) for v in dados.values())
+            
+            if total > 0:
+                stats.incrementar('com_dados')
+            else:
+                stats.incrementar('sem_dados')
+            
             stats.incrementar('processados')
-            return None
+            
+            # Sucesso!
+            if tentativa_atual > 1:
+                safe_print(f"✅ Aluno {id_aluno} OK na tentativa {tentativa_atual}")
+            
+            time.sleep(DELAY_ENTRE_REQ)
+            return dados
+            
+        except httpx.TimeoutException:
+            if tentativa_atual < MAX_RETRIES:
+                stats.incrementar('tentativas_extras')
+                safe_print(f"⏱️ Aluno {id_aluno} - Timeout {tentativa_atual}/{MAX_RETRIES}")
+                time.sleep(DELAY_ENTRE_RETRIES * tentativa_atual)
+                continue
+            else:
+                safe_print(f"❌ Aluno {id_aluno} FALHOU: Timeout persistente")
+                adicionar_aluno_falhado(aluno)
+                stats.incrementar('erros')
+                stats.incrementar('processados')
+                return None
         
-        if len(resp.text) < 1000 or "login" in resp.text.lower():
-            stats.incrementar('erros')
-            stats.incrementar('processados')
-            return None
-        
-        # Extração
-        soup = BeautifulSoup(resp.text, 'lxml')  # lxml é mais rápido
-        dados = extrair_dados_completos(soup, id_aluno, nome_aluno)
-        
-        total = sum(len(v) for v in dados.values())
-        
-        if total > 0:
-            stats.incrementar('com_dados')
-        else:
-            stats.incrementar('sem_dados')
-        
-        stats.incrementar('processados')
-        
-        # Micro delay para não sobrecarregar
-        time.sleep(DELAY_ENTRE_REQ)
-        
-        return dados
-        
-    except httpx.TimeoutException:
-        if tentativa < MAX_RETRIES:
-            time.sleep(0.5)
-            return worker_coletar_aluno(aluno, client, tentativa + 1)
-        stats.incrementar('erros')
-        stats.incrementar('processados')
-        return None
+        except Exception as e:
+            if tentativa_atual < MAX_RETRIES:
+                stats.incrementar('tentativas_extras')
+                safe_print(f"⚠️ Aluno {id_aluno} - Erro {tentativa_atual}/{MAX_RETRIES}: {str(e)[:30]}")
+                time.sleep(DELAY_ENTRE_RETRIES * tentativa_atual)
+                continue
+            else:
+                safe_print(f"❌ Aluno {id_aluno} FALHOU: {str(e)[:50]}")
+                adicionar_aluno_falhado(aluno)
+                stats.incrementar('erros')
+                stats.incrementar('processados')
+                return None
     
-    except Exception as e:
-        if tentativa < MAX_RETRIES:
-            time.sleep(0.5)
-            return worker_coletar_aluno(aluno, client, tentativa + 1)
-        stats.incrementar('erros')
-        stats.incrementar('processados')
-        return None
+    # Não deveria chegar aqui
+    adicionar_aluno_falhado(aluno)
+    stats.incrementar('erros')
+    stats.incrementar('processados')
+    return None
 
 # ========================================
-# COLETA PARALELA COM HTTPX
+# COLETA PARALELA
 # ========================================
 
 def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads: int):
-    """Coleta paralela otimizada com httpx"""
-    
-    print(f"\n🚀 Iniciando coleta paralela...")
-    print(f"🎯 Meta: {len(alunos)} alunos em ~{len(alunos)/200:.1f} minutos\n")
+    print(f"\n🚀 Iniciando coleta 100% confiável...")
+    print(f"🎯 {len(alunos)} alunos para processar\n")
     
     todos_dados = {
         'mts_individual': [],
@@ -357,57 +391,55 @@ def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads
     stats.tempo_inicio = time.time()
     total_alunos = len(alunos)
     
-    # Configurar httpx com limites otimizados
+    # Configurar httpx
     limits = httpx.Limits(
         max_keepalive_connections=num_threads,
         max_connections=num_threads * 2,
-        keepalive_expiry=30
+        keepalive_expiry=60
     )
     
     cookies_httpx = httpx.Cookies()
     for k, v in cookies_dict.items():
         cookies_httpx.set(k, v)
     
-    # Cliente httpx compartilhado (thread-safe)
     with httpx.Client(
         cookies=cookies_httpx,
         limits=limits,
         timeout=TIMEOUT_REQUEST,
-        http2=True,  # HTTP/2 para melhor performance
+        http2=True,
         follow_redirects=True
     ) as client:
         
-        # ThreadPoolExecutor
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
             
-            # Submeter todas as tarefas
             futures = {
                 executor.submit(worker_coletar_aluno, aluno, client): aluno 
                 for aluno in alunos
             }
             
-            # Processar resultados conforme completam
             for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 try:
-                    resultado = future.result(timeout=TIMEOUT_REQUEST + 5)
+                    resultado = future.result(timeout=TIMEOUT_REQUEST + 10)
                     
                     if resultado:
-                        # Consolidar dados
                         for key in todos_dados.keys():
                             todos_dados[key].extend(resultado[key])
                     
-                    # Log de progresso (a cada 20 alunos)
+                    # Log a cada 20 alunos
                     if i % 20 == 0:
                         s = stats.obter_stats()
                         velocidade = s['processados'] / s['tempo_decorrido'] if s['tempo_decorrido'] > 0 else 0
                         restantes = total_alunos - s['processados']
                         tempo_est = restantes / velocidade if velocidade > 0 else 0
                         pct = (s['processados'] / total_alunos) * 100
+                        taxa_erro = (s['erros'] / s['processados'] * 100) if s['processados'] > 0 else 0
                         
                         safe_print(
                             f"📊 {s['processados']}/{total_alunos} ({pct:.1f}%) | "
-                            f"✅ {s['com_dados']} | ⚪ {s['sem_dados']} | ❌ {s['erros']} | "
-                            f"⚡ {velocidade:.1f}/s | ⏱️  {tempo_est/60:.1f}min restantes"
+                            f"✅ {s['com_dados']} | ⚪ {s['sem_dados']} | "
+                            f"❌ {s['erros']} ({taxa_erro:.1f}%) | "
+                            f"🔄 {s['tentativas_extras']} retries | "
+                            f"⚡ {velocidade:.1f}/s | ⏱️ {tempo_est/60:.1f}min"
                         )
                 
                 except concurrent.futures.TimeoutError:
@@ -418,13 +450,55 @@ def executar_coleta_paralela(cookies_dict: Dict, alunos: List[Dict], num_threads
     return todos_dados
 
 # ========================================
-# GERAR RESUMO OTIMIZADO
+# REPROCESSAR FALHAS
+# ========================================
+
+def reprocessar_alunos_falhados(cookies_dict: Dict, todos_dados: Dict):
+    """Tenta reprocessar alunos que falharam"""
+    
+    if not alunos_falhados:
+        return
+    
+    print(f"\n🔄 Reprocessando {len(alunos_falhados)} alunos que falharam...")
+    
+    limits = httpx.Limits(
+        max_keepalive_connections=5,
+        max_connections=10,
+        keepalive_expiry=60
+    )
+    
+    cookies_httpx = httpx.Cookies()
+    for k, v in cookies_dict.items():
+        cookies_httpx.set(k, v)
+    
+    with httpx.Client(
+        cookies=cookies_httpx,
+        limits=limits,
+        timeout=30,
+        http2=True
+    ) as client:
+        
+        recuperados = 0
+        
+        for aluno in alunos_falhados:
+            safe_print(f"🔄 Reprocessando aluno {aluno['id_aluno']}...")
+            time.sleep(2)  # Delay maior
+            
+            resultado = worker_coletar_aluno(aluno, client)
+            
+            if resultado:
+                for key in todos_dados.keys():
+                    todos_dados[key].extend(resultado[key])
+                recuperados += 1
+                safe_print(f"✅ Aluno {aluno['id_aluno']} recuperado!")
+        
+        print(f"\n✅ {recuperados}/{len(alunos_falhados)} alunos recuperados")
+
+# ========================================
+# GERAR RESUMO
 # ========================================
 
 def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
-    """Resumo com pré-computação de contagens"""
-    
-    # Pre-computar todas as contagens de uma vez
     contagens = {}
     for key in todos_dados.keys():
         contagens[key] = {}
@@ -432,7 +506,6 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
             id_a = int(registro[0])
             contagens[key][id_a] = contagens[key].get(id_a, 0) + 1
     
-    # Calcular médias de provas
     medias = {}
     for registro in todos_dados['provas']:
         id_a = int(registro[0])
@@ -444,7 +517,6 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
         except:
             pass
     
-    # Gerar resumo
     resumo = []
     for aluno in alunos:
         id_aluno = int(aluno['id_aluno'])
@@ -501,28 +573,33 @@ def enviar_dados_para_sheets(alunos: List[Dict], todos_dados: Dict, tempo: float
             "tempo_execucao_min": round(tempo/60, 2),
             "threads_utilizadas": NUM_THREADS,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "velocidade_media": round(len(alunos)/tempo, 2)
+            "tentativas_extras": stats.tentativas_extras,
+            "taxa_erro_final": round((stats.erros / len(alunos)) * 100, 2) if alunos else 0
         }
     }
     
-    try:
-        with httpx.Client(timeout=300) as client:
-            response = client.post(URL_APPS_SCRIPT, json=payload)
-        
-        if response.status_code == 200:
-            print("✅ Dados enviados com sucesso!")
-            return True
-        else:
-            print(f"⚠️ Status HTTP: {response.status_code}")
-            print(f"Resposta: {response.text[:200]}")
-            return False
+    for tentativa in range(3):
+        try:
+            with httpx.Client(timeout=300) as client:
+                response = client.post(URL_APPS_SCRIPT, json=payload)
             
-    except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
-        return False
+            if response.status_code == 200:
+                print("✅ Dados enviados com sucesso!")
+                return True
+            else:
+                print(f"⚠️ Tentativa {tentativa+1}/3 - Status: {response.status_code}")
+                if tentativa < 2:
+                    time.sleep(5)
+                    
+        except Exception as e:
+            print(f"⚠️ Tentativa {tentativa+1}/3 - Erro: {e}")
+            if tentativa < 2:
+                time.sleep(5)
+    
+    print("❌ Falha ao enviar após 3 tentativas")
+    return False
 
 def salvar_backup_local(alunos: List[Dict], todos_dados: Dict):
-    """Backup local em JSON"""
     try:
         nome = f"backup_licoes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
@@ -541,7 +618,6 @@ def salvar_backup_local(alunos: List[Dict], todos_dados: Dict):
         return False
 
 def extrair_cookies_playwright(pagina) -> Dict[str, str]:
-    """Extrai cookies do Playwright"""
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
@@ -551,7 +627,7 @@ def extrair_cookies_playwright(pagina) -> Dict[str, str]:
 
 def main():
     print(f"\n{'='*70}")
-    print(f"  COLETOR DE LIÇÕES - ULTRA RÁPIDO E CONFIÁVEL")
+    print(f"  COLETOR 100% CONFIÁVEL - ZERO ERROS TOLERADOS")
     print(f"{'='*70}\n")
     
     tempo_inicio = time.time()
@@ -560,10 +636,10 @@ def main():
     alunos = buscar_alunos_hortolandia()
     
     if not alunos:
-        print("❌ Nenhum aluno encontrado. Verifique a conexão com Google Sheets.")
+        print("❌ Nenhum aluno encontrado")
         return
     
-    tempo_estimado = len(alunos) / 200  # ~200 alunos/min
+    tempo_estimado = len(alunos) / 120  # ~120 alunos/min com retry
     print(f"\n🎓 {len(alunos)} alunos identificados")
     print(f"⏱️  Tempo estimado: ~{tempo_estimado:.1f} minutos")
     
@@ -589,7 +665,7 @@ def main():
             pagina.goto("https://musical.congregacao.org.br/licoes", timeout=15000)
             
             if "login" in pagina.url.lower():
-                print("❌ Login falhou. Verifique as credenciais.")
+                print("❌ Login falhou")
                 navegador.close()
                 return
             
@@ -610,6 +686,13 @@ def main():
     print(f"{'='*70}")
     
     todos_dados = executar_coleta_paralela(cookies_dict, alunos, NUM_THREADS)
+    
+    # Reprocessar falhas
+    if alunos_falhados:
+        print(f"\n{'='*70}")
+        print(f"  REPROCESSANDO FALHAS")
+        print(f"{'='*70}")
+        reprocessar_alunos_falhados(cookies_dict, todos_dados)
     
     tempo_total = time.time() - tempo_inicio
     
@@ -636,11 +719,25 @@ def main():
     
     # Estatísticas finais
     s = stats.obter_stats()
-    print(f"\n📊 ESTATÍSTICAS:")
-    print(f"   • Processados: {s['processados']}")
+    taxa_erro = (s['erros'] / len(alunos) * 100) if alunos else 0
+    taxa_sucesso = 100 - taxa_erro
+    
+    print(f"\n📊 ESTATÍSTICAS FINAIS:")
+    print(f"   • Processados: {s['processados']}/{len(alunos)}")
     print(f"   • Com dados: {s['com_dados']}")
     print(f"   • Sem dados: {s['sem_dados']}")
-    print(f"   • Erros: {s['erros']}")
+    print(f"   • Erros: {s['erros']} ({taxa_erro:.2f}%)")
+    print(f"   • Taxa de sucesso: {taxa_sucesso:.2f}%")
+    print(f"   • Tentativas extras: {s['tentativas_extras']}")
+    
+    # Alerta se houver erros
+    if s['erros'] > 0:
+        print(f"\n⚠️  ATENÇÃO: {s['erros']} alunos não foram coletados!")
+        print(f"   IDs dos alunos com erro:")
+        for aluno in alunos_falhados[:10]:  # Mostrar primeiros 10
+            print(f"   - ID: {aluno['id_aluno']} - {aluno['nome']}")
+        if len(alunos_falhados) > 10:
+            print(f"   ... e mais {len(alunos_falhados)-10} alunos")
     
     # Backup
     print(f"\n💾 Salvando backup local...")
@@ -650,11 +747,14 @@ def main():
     if total_reg > 0:
         sucesso = enviar_dados_para_sheets(alunos, todos_dados, tempo_total)
         if sucesso:
-            print(f"\n✅ SUCESSO TOTAL! Dados salvos no Google Sheets.")
+            if s['erros'] == 0:
+                print(f"\n✅ SUCESSO TOTAL! 100% dos alunos coletados e salvos!")
+            else:
+                print(f"\n⚠️  Dados enviados, mas {s['erros']} alunos falharam.")
         else:
-            print(f"\n⚠️ Dados coletados mas houve erro no envio. Verifique o backup local.")
+            print(f"\n⚠️  Dados coletados mas erro ao enviar. Verifique o backup local.")
     else:
-        print(f"\n⚠️ Nenhum dado foi coletado. Verifique a conexão e cookies.")
+        print(f"\n⚠️  Nenhum dado foi coletado.")
     
     print(f"\n{'='*70}\n")
 
@@ -662,7 +762,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n\n⚠️ Execução interrompida pelo usuário")
+        print(f"\n\n⚠️  Execução interrompida pelo usuário")
     except Exception as e:
         print(f"\n\n❌ Erro fatal: {e}")
         import traceback
