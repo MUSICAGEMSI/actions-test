@@ -100,9 +100,9 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
     print("\nFalha ao carregar instrutores após todas as tentativas\n")
     return {}, set()
 
-def extrair_data_aula_rapido(session, aula_id):
+def extrair_data_hora_abertura_rapido(session, aula_id):
     """
-    Extrai APENAS a data da aula (requisição mínima)
+    Extrai APENAS a "Data e Horário de abertura" da aula
     Retorna datetime object ou None
     """
     try:
@@ -118,44 +118,59 @@ def extrair_data_aula_rapido(session, aula_id):
             return None
         
         soup = BeautifulSoup(resp.text, 'html.parser')
-        modal_header = soup.find('div', class_='modal-header')
+        tbody = soup.find('tbody')
         
-        if modal_header:
-            date_span = modal_header.find('span', class_='pull-right')
-            if date_span:
-                texto = date_span.get_text(strip=True)
-                # Formato: DD/MM/YYYY
-                try:
-                    return datetime.strptime(texto.strip(), '%d/%m/%Y')
-                except:
-                    pass
+        if not tbody:
+            return None
+        
+        # Procurar especificamente por "Data e Horário de abertura"
+        rows = tbody.find_all('tr')
+        for row in rows:
+            td_strong = row.find('strong')
+            if not td_strong:
+                continue
+            
+            label = td_strong.get_text(strip=True)
+            
+            if 'Data e Horário de abertura' in label:
+                tds = row.find_all('td')
+                if len(tds) >= 2:
+                    valor = tds[1].get_text(strip=True)
+                    # Formato esperado: "01/07/2024 08:30:15" ou "01/07/2024 08:30"
+                    try:
+                        # Tentar com segundos
+                        return datetime.strptime(valor, '%d/%m/%Y %H:%M:%S')
+                    except:
+                        try:
+                            # Tentar sem segundos
+                            return datetime.strptime(valor, '%d/%m/%Y %H:%M')
+                        except:
+                            pass
         
         return None
         
     except:
         return None
 
-def buscar_primeiro_id_do_mes(session, mes_alvo, ano_alvo, id_min=1, id_max=400000):
+def buscar_primeiro_id_a_partir_de(session, data_hora_alvo, id_min=1, id_max=500000):
     """
-    Busca binária INTELIGENTE para encontrar o primeiro ID de um mês específico
+    Busca binária para encontrar o primeiro ID cuja "Data e Horário de abertura"
+    seja >= data_hora_alvo
     
     Args:
-        mes_alvo: Mês desejado (1-12)
-        ano_alvo: Ano desejado (ex: 2025)
+        data_hora_alvo: datetime object (ex: 01/07/2024 00:00:00)
         id_min: ID mínimo para busca
         id_max: ID máximo para busca
     
     Returns:
-        ID da primeira aula do mês ou None
+        ID da primeira aula aberta a partir da data/hora ou None
     """
-    print(f"\nBuscando primeira aula de {mes_alvo:02d}/{ano_alvo}...")
+    print(f"\nBuscando primeira aula aberta a partir de {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}...")
     print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
-    
-    data_alvo = datetime(ano_alvo, mes_alvo, 1)
     
     melhor_id = None
     tentativas = 0
-    max_tentativas = 100  # Limita busca binária
+    max_tentativas = 100
     
     esquerda = id_min
     direita = id_max
@@ -166,60 +181,52 @@ def buscar_primeiro_id_do_mes(session, mes_alvo, ano_alvo, id_min=1, id_max=4000
         
         print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
         
-        data_aula = extrair_data_aula_rapido(session, meio)
+        data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
-        if data_aula is None:
+        if data_hora_abertura is None:
             print("(nao existe/erro)")
-            # Se não existe, pode estar além do último ID ou ter gap
-            # Tenta reduzir o range
             direita = meio - 1
             continue
         
-        print(f"Data: {data_aula.strftime('%d/%m/%Y')}")
+        print(f"Abertura: {data_hora_abertura.strftime('%d/%m/%Y %H:%M')}")
         
-        # Comparar apenas ano e mês
-        if data_aula.year == ano_alvo and data_aula.month == mes_alvo:
-            # Encontrou uma aula do mês alvo!
+        # Se a abertura é >= data alvo
+        if data_hora_abertura >= data_hora_alvo:
             melhor_id = meio
-            # Continua procurando uma ainda mais antiga (à esquerda)
+            # Procura à esquerda por um ID ainda mais antigo que atenda
             direita = meio - 1
-        
-        elif data_aula < data_alvo:
-            # Aula é anterior ao mês alvo, procura à direita
-            esquerda = meio + 1
-        
         else:
-            # Aula é posterior ao mês alvo, procura à esquerda
-            direita = meio - 1
+            # Abertura é antes do alvo, procura à direita
+            esquerda = meio + 1
     
     if melhor_id:
-        # Ajuste fino: voltar alguns IDs para garantir que pegamos o primeiro
         print(f"\nID encontrado: {melhor_id}")
-        print("Fazendo ajuste fino (voltando 50 IDs)...")
+        print("Fazendo ajuste fino (voltando 100 IDs)...")
         
-        id_ajustado = max(id_min, melhor_id - 50)
+        id_ajustado = max(id_min, melhor_id - 100)
         
-        # Verificar se existe uma aula ainda anterior
+        # Verificar se existe um ID anterior que também atende
         for id_teste in range(id_ajustado, melhor_id):
-            data_teste = extrair_data_aula_rapido(session, id_teste)
-            if data_teste and data_teste.year == ano_alvo and data_teste.month == mes_alvo:
+            data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+            if data_teste and data_teste >= data_hora_alvo:
                 melhor_id = id_teste
                 break
         
         print(f"Primeiro ID confirmado: {melhor_id}\n")
         return melhor_id
     
-    print(f"\nNenhuma aula encontrada para {mes_alvo:02d}/{ano_alvo}\n")
+    print(f"\nNenhuma aula encontrada a partir de {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}\n")
     return None
 
-def buscar_ultimo_id_valido(session, id_min=1, id_max=999999):
+def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=999999):
     """
-    Busca binária para encontrar o ÚLTIMO ID válido no sistema
+    Busca binária para encontrar o último ID cuja "Data e Horário de abertura"
+    seja <= data_hora_limite (momento da execução do script)
     
     Returns:
-        Último ID que existe ou None
+        Último ID válido até a data/hora limite ou None
     """
-    print(f"\nBuscando ultimo ID valido no sistema...")
+    print(f"\nBuscando ultimo ID aberto ate {data_hora_limite.strftime('%d/%m/%Y %H:%M')}...")
     print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
     
     ultimo_valido = None
@@ -235,26 +242,31 @@ def buscar_ultimo_id_valido(session, id_min=1, id_max=999999):
         
         print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
         
-        data_aula = extrair_data_aula_rapido(session, meio)
+        data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
-        if data_aula is not None:
-            print(f"Existe ({data_aula.strftime('%d/%m/%Y')})")
+        if data_hora_abertura is None:
+            print("Nao existe")
+            direita = meio - 1
+            continue
+        
+        print(f"Abertura: {data_hora_abertura.strftime('%d/%m/%Y %H:%M')}")
+        
+        # Se abertura <= limite
+        if data_hora_abertura <= data_hora_limite:
             ultimo_valido = meio
-            # Existe, procura à direita (IDs maiores)
+            # Procura à direita por IDs maiores que ainda atendam
             esquerda = meio + 1
         else:
-            print("Nao existe")
-            # Não existe, procura à esquerda (IDs menores)
+            # Abertura é depois do limite, procura à esquerda
             direita = meio - 1
     
     if ultimo_valido:
-        # Ajuste fino: avançar alguns IDs para garantir que pegamos o último
         print(f"\nID encontrado: {ultimo_valido}")
         print("Fazendo ajuste fino (avancando ate 100 IDs)...")
         
         for id_teste in range(ultimo_valido + 1, ultimo_valido + 101):
-            data_teste = extrair_data_aula_rapido(session, id_teste)
-            if data_teste is not None:
+            data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+            if data_teste and data_teste <= data_hora_limite:
                 ultimo_valido = id_teste
         
         print(f"Ultimo ID confirmado: {ultimo_valido}\n")
@@ -516,29 +528,42 @@ def main():
         return
     
     # ========================================================================
-    # BUSCA INTELIGENTE: Encontrar primeiro ID de julho e último ID válido
+    # BUSCA INTELIGENTE: Baseada em "Data e Horário de abertura"
     # ========================================================================
     
+    # Definir período de coleta
     ano_atual = datetime.now().year
     mes_alvo = 7  # Julho
     
-    # Busca 1: Primeiro ID de julho
-    primeiro_id = buscar_primeiro_id_do_mes(
+    # Data/hora de início: 01/07/2024 00:00:00
+    data_hora_inicio = datetime(ano_atual, mes_alvo, 1, 0, 0, 0)
+    
+    # Data/hora de fim: momento atual da execução
+    data_hora_fim = datetime.now()
+    
+    print(f"\n{'=' * 70}")
+    print(f"PERIODO DE COLETA:")
+    print(f"  Inicio: {data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"  Fim:    {data_hora_fim.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"{'=' * 70}")
+    
+    # Busca 1: Primeiro ID com abertura >= 01/07/2024 00:00
+    primeiro_id = buscar_primeiro_id_a_partir_de(
         session, 
-        mes_alvo=mes_alvo, 
-        ano_alvo=ano_atual,
+        data_hora_alvo=data_hora_inicio,
         id_min=327000,    # Estimativa conservadora
         id_max=500000     # Limite superior para busca
     )
     
     if primeiro_id is None:
-        print("Nao foi possivel encontrar aulas de julho. Abortando.")
+        print(f"Nao foi possivel encontrar aulas abertas a partir de {data_hora_inicio.strftime('%d/%m/%Y')}. Abortando.")
         return
     
-    # Busca 2: Último ID válido no sistema
-    ultimo_id = buscar_ultimo_id_valido(
+    # Busca 2: Último ID com abertura <= data/hora atual
+    ultimo_id = buscar_ultimo_id_ate(
         session,
-        id_min=primeiro_id,  # Começa do ID de julho
+        data_hora_limite=data_hora_fim,
+        id_min=primeiro_id,  # Começa do primeiro ID encontrado
         id_max=999999        # Limite teórico
     )
     
@@ -547,7 +572,7 @@ def main():
         ultimo_id = primeiro_id + 50000  # Fallback: +50k IDs
     
     # ========================================================================
-    # COLETA: Do primeiro ID de julho até o último ID válido
+    # COLETA: Do primeiro ID até o último ID (baseado em data/hora abertura)
     # ========================================================================
     
     resultado = []
