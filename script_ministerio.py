@@ -1,345 +1,507 @@
+from dotenv import load_dotenv
+load_dotenv(dotenv_path="credencial.env")
+
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
-import sys
-import re
 import requests
 import time
-import concurrent.futures
-from playwright.sync_api import sync_playwright
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from bs4 import BeautifulSoup
+import json
 
-# ============= CONFIGURAÇÕES =============
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwHlf2VUjfwX7KcHGKgvf0v2FlXZ7Y53ubkfcIPxihSb3VVUzbyzlBr5Fyx0OHrxwBx/exec'
 
-# RANGE DE IDS A COLETAR
-RANGE_INICIO = 1
-RANGE_FIM = 50000  # Ajuste conforme necessário
-INSTANCIA_ID = "usuarios_batch_1"
-NUM_THREADS = 12
-TIMEOUT_REQUEST = 10
-PAUSA_MINIMA = 0.05
+# URL do Apps Script (atualize após deploy)
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxb9NPBjodXgDiax8-yV_c0YqVnUEHGv2cyeanJBnm7OsVxVjBj7M2Q_Wtc_cJZh21udw/exec'
 
-# ============= EXTRAÇÃO DE DADOS =============
-def extrair_dados(html_content, usuario_id):
+def carregar_ids_do_apps_script():
     """
-    Extrai todos os dados do usuário do HTML
+    Busca IDs únicos direto do Apps Script (membros com "{" em D, E, F ou G)
+    """
+    print("\n📂 Buscando IDs de ministros via Apps Script...")
+    
+    try:
+        url = f"{URL_APPS_SCRIPT}?acao=obter_ids"
+        response = requests.get(url, timeout=30)
+        
+        if response.status_code != 200:
+            print(f"❌ Erro HTTP {response.status_code}")
+            return []
+        
+        dados = response.json()
+        
+        if dados['status'] != 'sucesso':
+            print(f"❌ Erro: {dados.get('mensagem', 'Erro desconhecido')}")
+            return []
+        
+        ids = dados['ids']
+        print(f"✅ {dados['total_ids']} IDs únicos carregados!")
+        
+        if dados.get('faixa'):
+            print(f"📊 Faixa: {dados['faixa']['menor']} até {dados['faixa']['maior']}")
+        
+        if dados.get('amostra'):
+            print(f"\n📋 Amostra dos primeiros IDs:")
+            for item in dados['amostra']:
+                print(f"   - ID {item['id']}: {item['nome']}")
+        
+        return ids
+        
+    except requests.exceptions.Timeout:
+        print("❌ Timeout ao conectar com Apps Script")
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Erro de conexão: {e}")
+        return []
+    except json.JSONDecodeError:
+        print("❌ Erro ao decodificar resposta JSON")
+        return []
+    except Exception as e:
+        print(f"❌ Erro inesperado: {e}")
+        return []
+
+def extrair_cookies_playwright(pagina):
+    """Extrai cookies do Playwright e retorna como dicionário"""
+    cookies = pagina.context.cookies()
+    return {cookie['name']: cookie['value'] for cookie in cookies}
+
+def coletar_dados_ministro(session, pessoa_id, pagina_playwright=None):
+    """
+    Coleta todos os dados de um ministro específico
     """
     try:
-        if not html_content or len(html_content) < 500:
-            return None
+        url = f"https://musical.congregacao.org.br/ministros/editar/{pessoa_id}"
         
-        # Verifica se a página tem conteúdo válido
-        if 'Sistema de Administração Musical' not in html_content:
-            return None
-        
-        dados = {'id': usuario_id}
-        
-        # === NOME ===
-        nome_match = re.search(r'<td>Nome</td>\s*<td>([^<]+)</td>', html_content, re.IGNORECASE)
-        if not nome_match:
-            return None
-        dados['nome'] = nome_match.group(1).strip()
-        if not dados['nome'] or dados['nome'] == '':
-            return None
-        
-        # === LOGIN ===
-        login_match = re.search(r'<td>Login</td>\s*<td>([^<]+)</td>', html_content, re.IGNORECASE)
-        dados['login'] = login_match.group(1).strip() if login_match else ''
-        
-        # === EMAIL ===
-        email_match = re.search(r'<a href="mailto:([^"]+)">', html_content, re.IGNORECASE)
-        dados['email'] = email_match.group(1).strip() if email_match else ''
-        
-        # === GRUPO/PERMISSÃO ===
-        grupo_match = re.search(r'<td>Grupo</td>\s*<td>([^<]+)</td>', html_content, re.IGNORECASE)
-        dados['grupo'] = grupo_match.group(1).strip() if grupo_match else ''
-        
-        # === STATUS (ativo/inativo) ===
-        status_match = re.search(r'<td>Status</td>\s*<td><i class="[^"]*text-(success|danger)', html_content, re.IGNORECASE)
-        if status_match:
-            dados['status'] = 'Ativo' if status_match.group(1) == 'success' else 'Inativo'
+        # Usar Playwright para páginas com Select2
+        if pagina_playwright:
+            pagina_playwright.goto(url, wait_until='networkidle')
+            
+            try:
+                pagina_playwright.wait_for_selector('input[name="nome"]', timeout=5000)
+            except:
+                pass
+            
+            html_content = pagina_playwright.content()
         else:
-            dados['status'] = 'Desconhecido'
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            resp = session.get(url, headers=headers, timeout=10)
+            
+            if resp.status_code != 200:
+                return None
+            
+            html_content = resp.text
         
-        # === ÚLTIMO LOGIN ===
-        ultimo_login_match = re.search(r'<td>Último login</td>\s*<td>\s*([^<\n]+)', html_content, re.IGNORECASE)
-        dados['ultimo_login'] = ultimo_login_match.group(1).strip() if ultimo_login_match else ''
+        soup = BeautifulSoup(html_content, 'html.parser')
         
-        # === NÚMERO DE ACESSOS ===
-        acessos_match = re.search(r'<td>Acessos</td>\s*<td>.*?<label[^>]*>\s*(\d+)\s*</label>', html_content, re.DOTALL | re.IGNORECASE)
-        dados['acessos'] = acessos_match.group(1).strip() if acessos_match else '0'
+        # Verificar se o ministro existe
+        form = soup.find('form', id='pessoa')
+        if not form:
+            return None
         
-        # === URL DA FOTO ===
-        foto_match = re.search(r'<img src="(https://musical\.congregacao\.org\.br/[^"]+)"', html_content, re.IGNORECASE)
-        dados['foto_url'] = foto_match.group(1).strip() if foto_match else ''
+        dados = {
+            'id_pessoa': pessoa_id,
+            'nome': '',
+            'data_nascimento': '',
+            'sexo': '',
+            'comum': '',
+            'endereco': '',
+            'numero': '',
+            'complemento': '',
+            'bairro': '',
+            'cidade': '',
+            'uf': '',
+            'cep': '',
+            'telefone_1': '',
+            'telefone_2': '',
+            'email': '',
+            'cpf': '',
+            'rg': '',
+            'sangue': '',
+            'cargo': '',
+            'instrumento_1': '',
+            'tonalidade_1': '',
+            'instrumento_2': '',
+            'tonalidade_2': '',
+            'instrumento_3': '',
+            'tonalidade_3': '',
+            'ativo': 'Não',
+            'cadastrado_em': '',
+            'cadastrado_por': '',
+            'atualizado_em': '',
+            'atualizado_por': ''
+        }
+        
+        # 1. Nome
+        nome_input = soup.find('input', {'name': 'nome'})
+        if nome_input:
+            dados['nome'] = nome_input.get('value', '').strip()
+        
+        # 2. Data de Nascimento
+        dt_nasc_input = soup.find('input', {'name': 'dt_nascimento'})
+        if dt_nasc_input:
+            dados['data_nascimento'] = dt_nasc_input.get('value', '').strip()
+        
+        # 3. Sexo (select)
+        sexo_select = soup.find('select', {'name': 'id_genero'})
+        if sexo_select:
+            sexo_option = sexo_select.find('option', selected=True)
+            if sexo_option:
+                dados['sexo'] = sexo_option.get_text(strip=True)
+        
+        # 4. Comum (select)
+        comum_select = soup.find('select', {'name': 'id_igreja'})
+        if comum_select:
+            comum_option = comum_select.find('option', selected=True)
+            if comum_option:
+                texto_completo = comum_option.get_text(strip=True)
+                dados['comum'] = texto_completo.split('|')[0].strip()
+        
+        # 5-11. Endereço
+        endereco_input = soup.find('input', {'name': 'endereco'})
+        if endereco_input:
+            dados['endereco'] = endereco_input.get('value', '').strip()
+        
+        numero_input = soup.find('input', {'name': 'numero'})
+        if numero_input:
+            dados['numero'] = numero_input.get('value', '').strip()
+        
+        complemento_input = soup.find('input', {'name': 'complemento'})
+        if complemento_input:
+            dados['complemento'] = complemento_input.get('value', '').strip()
+        
+        bairro_input = soup.find('input', {'name': 'bairro'})
+        if bairro_input:
+            dados['bairro'] = bairro_input.get('value', '').strip()
+        
+        cidade_input = soup.find('input', {'name': 'cidade'})
+        if cidade_input:
+            dados['cidade'] = cidade_input.get('value', '').strip()
+        
+        uf_input = soup.find('input', {'name': 'uf'})
+        if uf_input:
+            dados['uf'] = uf_input.get('value', '').strip()
+        
+        cep_input = soup.find('input', {'name': 'cep'})
+        if cep_input:
+            dados['cep'] = cep_input.get('value', '').strip()
+        
+        # 12-13. Telefones
+        telefone1_input = soup.find('input', {'name': 'telefone'})
+        if telefone1_input:
+            dados['telefone_1'] = telefone1_input.get('value', '').strip()
+        
+        telefone2_input = soup.find('input', {'name': 'telefone2'})
+        if telefone2_input:
+            dados['telefone_2'] = telefone2_input.get('value', '').strip()
+        
+        # 14. Email
+        email_input = soup.find('input', {'name': 'email'})
+        if email_input:
+            dados['email'] = email_input.get('value', '').strip()
+        
+        # 15-16. CPF e RG
+        cpf_input = soup.find('input', {'name': 'cpf'})
+        if cpf_input:
+            dados['cpf'] = cpf_input.get('value', '').strip()
+        
+        rg_input = soup.find('input', {'name': 'rg'})
+        if rg_input:
+            dados['rg'] = rg_input.get('value', '').strip()
+        
+        # 17. Tipo Sanguíneo
+        sangue_select = soup.find('select', {'name': 'id_sanguineo'})
+        if sangue_select:
+            sangue_option = sangue_select.find('option', selected=True)
+            if sangue_option:
+                dados['sangue'] = sangue_option.get_text(strip=True)
+        
+        # 18. Cargo
+        cargo_select = soup.find('select', {'name': 'id_cargo'})
+        if cargo_select:
+            cargo_option = cargo_select.find('option', selected=True)
+            if cargo_option:
+                dados['cargo'] = cargo_option.get_text(strip=True)
+        
+        # 19-24. Instrumentos e Tonalidades
+        # Instrumento 1
+        inst1_select = soup.find('select', {'id': 'id_instrumento'})
+        if inst1_select:
+            inst1_option = inst1_select.find('option', selected=True)
+            if inst1_option:
+                dados['instrumento_1'] = inst1_option.get_text(strip=True)
+        
+        tom1_select = soup.find('select', {'id': 'id_tom'})
+        if tom1_select:
+            tom1_option = tom1_select.find('option', selected=True)
+            if tom1_option:
+                dados['tonalidade_1'] = tom1_option.get_text(strip=True)
+        
+        # Instrumento 2
+        inst2_select = soup.find('select', {'id': 'id_instrumento2'})
+        if inst2_select:
+            inst2_option = inst2_select.find('option', selected=True)
+            if inst2_option:
+                dados['instrumento_2'] = inst2_option.get_text(strip=True)
+        
+        tom2_select = soup.find('select', {'id': 'id_tom2'})
+        if tom2_select:
+            tom2_option = tom2_select.find('option', selected=True)
+            if tom2_option:
+                dados['tonalidade_2'] = tom2_option.get_text(strip=True)
+        
+        # Instrumento 3
+        inst3_select = soup.find('select', {'id': 'id_instrumento3'})
+        if inst3_select:
+            inst3_option = inst3_select.find('option', selected=True)
+            if inst3_option:
+                dados['instrumento_3'] = inst3_option.get_text(strip=True)
+        
+        tom3_select = soup.find('select', {'id': 'id_tom3'})
+        if tom3_select:
+            tom3_option = tom3_select.find('option', selected=True)
+            if tom3_option:
+                dados['tonalidade_3'] = tom3_option.get_text(strip=True)
+        
+        # 25. Ativo (checkbox)
+        status_checkbox = soup.find('input', {'name': 'status'})
+        if status_checkbox and status_checkbox.has_attr('checked'):
+            dados['ativo'] = 'Sim'
+        
+        # 26-29. Histórico (dentro do painel collapse)
+        historico_div = soup.find('div', id='collapseOne')
+        if historico_div:
+            paragrafos = historico_div.find_all('p')
+            
+            for p in paragrafos:
+                texto = p.get_text(strip=True)
+                
+                if 'Cadastrado em:' in texto:
+                    partes = texto.split('por:')
+                    if len(partes) >= 2:
+                        dados['cadastrado_em'] = partes[0].replace('Cadastrado em:', '').strip()
+                        dados['cadastrado_por'] = partes[1].strip()
+                
+                elif 'Atualizado em:' in texto:
+                    partes = texto.split('por:')
+                    if len(partes) >= 2:
+                        dados['atualizado_em'] = partes[0].replace('Atualizado em:', '').strip()
+                        dados['atualizado_por'] = partes[1].strip()
         
         return dados
         
     except Exception as e:
         return None
 
-
-# ============= CLASSE COLETOR =============
-class Coletor:
-    def __init__(self, cookies, thread_id):
-        self.thread_id = thread_id
-        self.sucessos = 0
-        self.falhas = 0
-        self.vazios = 0
-        
-        self.session = requests.Session()
-        self.session.cookies.update(cookies)
-        
-        # Configuração de retry
-        retry_strategy = Retry(
-            total=2,
-            backoff_factor=0.3,
-            status_forcelist=[429, 500, 502, 503, 504]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
-        self.session.mount("https://", adapter)
-        
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-            'Connection': 'keep-alive',
-            'Accept-Language': 'pt-BR,pt;q=0.9'
-        }
+def main():
+    tempo_inicio = time.time()
     
-    def coletar_batch(self, ids_batch):
-        """
-        Coleta um lote de IDs de usuários
-        """
-        usuarios = []
-        
-        for usuario_id in ids_batch:
-            try:
-                url = f"https://musical.congregacao.org.br/usuarios/visualizar/{usuario_id}"
-                resp = self.session.get(url, headers=self.headers, timeout=TIMEOUT_REQUEST)
-                
-                if resp.status_code == 200:
-                    dados = extrair_dados(resp.text, usuario_id)
-                    
-                    if dados:
-                        usuarios.append(dados)
-                        self.sucessos += 1
-                        
-                        # Log a cada 25 usuários coletados
-                        if self.sucessos % 25 == 0:
-                            print(f"[Thread {self.thread_id}] ✓ {self.sucessos} usuários coletados")
-                    else:
-                        self.vazios += 1
-                else:
-                    self.falhas += 1
-                
-                time.sleep(PAUSA_MINIMA)
-                
-            except requests.exceptions.Timeout:
-                self.falhas += 1
-            except Exception as e:
-                self.falhas += 1
-        
-        return usuarios
+    print("=" * 80)
+    print("COLETOR DE DADOS DE MINISTROS - SISTEMA MUSICAL")
+    print("=" * 80)
     
-    def get_stats(self):
-        return {
-            'thread_id': self.thread_id,
-            'sucessos': self.sucessos,
-            'falhas': self.falhas,
-            'vazios': self.vazios
-        }
-
-
-# ============= FUNÇÃO DE LOGIN =============
-def login():
-    """
-    Faz login no sistema usando Playwright e retorna os cookies
-    """
-    print("🔐 Iniciando login...")
+    # Carregar IDs únicos via Apps Script
+    ids_ministros = carregar_ids_do_apps_script()
     
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-            )
-            page = browser.new_page()
-            
-            page.goto(URL_INICIAL, timeout=30000)
-            page.fill('input[name="login"]', EMAIL)
-            page.fill('input[name="password"]', SENHA)
-            page.click('button[type="submit"]')
-            
-            # Aguarda redirecionamento após login
-            page.wait_for_selector("nav", timeout=20000)
-            
-            cookies = {cookie['name']: cookie['value'] for cookie in page.context.cookies()}
-            browser.close()
-            
-            print("✓ Login realizado com sucesso!")
-            return cookies
-            
-    except Exception as e:
-        print(f"✗ Erro no login: {e}")
-        return None
-
-
-# ============= EXECUÇÃO DA COLETA =============
-def executar_coleta(cookies):
-    """
-    Distribui a coleta entre múltiplas threads
-    """
-    total_ids = RANGE_FIM - RANGE_INICIO + 1
-    ids_per_thread = total_ids // NUM_THREADS
-    
-    # Divide os IDs entre as threads
-    thread_ranges = []
-    for i in range(NUM_THREADS):
-        inicio = RANGE_INICIO + (i * ids_per_thread)
-        fim = inicio + ids_per_thread - 1
-        if i == NUM_THREADS - 1:
-            fim = RANGE_FIM
-        thread_ranges.append(list(range(inicio, fim + 1)))
-    
-    print(f"📊 Distribuindo {total_ids:,} IDs entre {NUM_THREADS} threads")
-    print(f"📦 ~{ids_per_thread:,} IDs por thread\n")
-    
-    todos_usuarios = []
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        coletores = [Coletor(cookies, i) for i in range(NUM_THREADS)]
-        futures = [executor.submit(coletores[i].coletar_batch, thread_ranges[i]) 
-                  for i in range(NUM_THREADS)]
-        
-        # Aguarda conclusão de todas as threads
-        for i, future in enumerate(futures):
-            try:
-                usuarios = future.result(timeout=7200)  # 2h de timeout
-                todos_usuarios.extend(usuarios)
-                stats = coletores[i].get_stats()
-                print(f"\n[Thread {i}] Finalizada:")
-                print(f"  ✓ Sucessos: {stats['sucessos']}")
-                print(f"  ○ Vazios: {stats['vazios']}")
-                print(f"  ✗ Falhas: {stats['falhas']}")
-            except Exception as e:
-                print(f"\n[Thread {i}] ✗ Erro/Timeout: {e}")
-    
-    return todos_usuarios
-
-
-# ============= ENVIO DOS DADOS =============
-def enviar_dados(usuarios, tempo_total):
-    """
-    Envia os dados coletados para o Google Apps Script
-    """
-    if not usuarios:
-        print("⚠️  Nenhum usuário para enviar")
+    if not ids_ministros:
+        print("\n❌ Nenhum ID para processar. Verifique:")
+        print("1. URL do Apps Script está correta")
+        print("2. Deploy foi feito como Web App")
+        print("3. Permissões: 'Executar como: Eu' e 'Acesso: Qualquer pessoa'")
+        print("4. Existe '{' nas colunas D, E, F ou G da aba 'Membros'")
         return
     
-    print(f"\n📤 Preparando envio de {len(usuarios):,} usuários...")
+    print(f"\n📊 Total de ministros a processar: {len(ids_ministros)}")
     
-    # Formata dados para planilha
-    relatorio = [[
-        "ID", "NOME", "LOGIN", "EMAIL", "GRUPO", 
-        "STATUS", "ÚLTIMO LOGIN", "ACESSOS", "FOTO_URL"
-    ]]
+    # Login via Playwright
+    print("\n🔐 Realizando login...")
     
-    for usuario in usuarios:
-        relatorio.append([
-            str(usuario.get('id', '')),
-            usuario.get('nome', ''),
-            usuario.get('login', ''),
-            usuario.get('email', ''),
-            usuario.get('grupo', ''),
-            usuario.get('status', ''),
-            usuario.get('ultimo_login', ''),
-            usuario.get('acessos', ''),
-            usuario.get('foto_url', '')
-        ])
+    with sync_playwright() as p:
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        
+        pagina.set_extra_http_headers({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        pagina.goto(URL_INICIAL)
+        
+        # Login
+        pagina.fill('input[name="login"]', EMAIL)
+        pagina.fill('input[name="password"]', SENHA)
+        pagina.click('button[type="submit"]')
+        
+        try:
+            pagina.wait_for_selector("nav", timeout=15000)
+            print("✅ Login realizado com sucesso!")
+        except PlaywrightTimeoutError:
+            print("❌ Falha no login. Verifique as credenciais.")
+            navegador.close()
+            return
+        
+        # Extrair cookies para usar com Requests
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session = requests.Session()
+        session.cookies.update(cookies_dict)
+        
+        # Processar ministros
+        resultado = []
+        processadas = 0
+        sucesso = 0
+        erros = 0
+        
+        print(f"\n{'=' * 80}")
+        print("🔄 Iniciando coleta de dados...")
+        print(f"{'=' * 80}\n")
+        
+        # Estratégia híbrida:
+        # - Primeiras 10: usar Playwright (para garantir Select2)
+        # - Restantes: usar Requests (mais rápido)
+        
+        for i, pessoa_id in enumerate(ids_ministros, 1):
+            processadas += 1
+            
+            # Primeiras 10 com Playwright
+            if i <= 10:
+                dados = coletar_dados_ministro(session, pessoa_id, pagina_playwright=pagina)
+            else:
+                # Restantes com Requests (muito mais rápido)
+                dados = coletar_dados_ministro(session, pessoa_id)
+            
+            if dados:
+                sucesso += 1
+                resultado.append([
+                    dados['id_pessoa'],
+                    dados['nome'],
+                    dados['data_nascimento'],
+                    dados['sexo'],
+                    dados['comum'],
+                    dados['endereco'],
+                    dados['numero'],
+                    dados['complemento'],
+                    dados['bairro'],
+                    dados['cidade'],
+                    dados['uf'],
+                    dados['cep'],
+                    dados['telefone_1'],
+                    dados['telefone_2'],
+                    dados['email'],
+                    dados['cpf'],
+                    dados['rg'],
+                    dados['sangue'],
+                    dados['cargo'],
+                    dados['instrumento_1'],
+                    dados['tonalidade_1'],
+                    dados['instrumento_2'],
+                    dados['tonalidade_2'],
+                    dados['instrumento_3'],
+                    dados['tonalidade_3'],
+                    dados['ativo'],
+                    dados['cadastrado_em'],
+                    dados['cadastrado_por'],
+                    dados['atualizado_em'],
+                    dados['atualizado_por'],
+                    'Coletado',
+                    time.strftime('%d/%m/%Y %H:%M:%S')
+                ])
+                
+                # Exibir resumo da linha
+                resumo = f"[{i}/{len(ids_ministros)}] ID {pessoa_id}: {dados['nome']}"
+                if dados['cargo']:
+                    resumo += f" | {dados['cargo']}"
+                if dados['instrumento_1']:
+                    resumo += f" | {dados['instrumento_1']}"
+                if dados['comum']:
+                    resumo += f" | {dados['comum']}"
+                
+                print(resumo)
+            else:
+                erros += 1
+                resultado.append([
+                    pessoa_id, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+                    'Erro/Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
+                ])
+                print(f"[{i}/{len(ids_ministros)}] ID {pessoa_id}: ❌ Não encontrado ou erro")
+            
+            # Progresso a cada 25
+            if processadas % 25 == 0:
+                tempo_decorrido = time.time() - tempo_inicio
+                print(f"\n{'-' * 80}")
+                print(f"📊 PROGRESSO: {processadas}/{len(ids_ministros)} | ✅ Sucesso: {sucesso} | ❌ Erros: {erros} | ⏱️ Tempo: {tempo_decorrido:.1f}s")
+                print(f"{'-' * 80}\n")
+            
+            # Pausa mínima entre requisições (após as primeiras 10)
+            if i > 10:
+                time.sleep(0.1)
+        
+        navegador.close()
     
-    payload = {
-        "tipo": f"usuarios_{INSTANCIA_ID}",
-        "relatorio_formatado": relatorio,
-        "metadata": {
-            "instancia": INSTANCIA_ID,
-            "range_inicio": RANGE_INICIO,
-            "range_fim": RANGE_FIM,
-            "total_coletados": len(usuarios),
-            "tempo_execucao_min": round(tempo_total/60, 2),
-            "threads_utilizadas": NUM_THREADS,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
+    # Resumo final
+    tempo_total = time.time() - tempo_inicio
+    
+    print(f"\n{'=' * 80}")
+    print("✅ COLETA FINALIZADA!")
+    print(f"{'=' * 80}")
+    print(f"📊 Total processado: {processadas}")
+    print(f"✅ Sucesso: {sucesso}")
+    print(f"❌ Erros: {erros}")
+    print(f"⏱️  Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"⚡ Velocidade média: {processadas/(tempo_total/60):.1f} ministros/min")
+    print(f"{'=' * 80}\n")
+    
+    # Preparar envio
+    body = {
+        "tipo": "dados_ministros",
+        "dados": resultado,
+        "headers": [
+            "ID_Pessoa", "Nome", "Data_Nascimento", "Sexo", "Comum",
+            "Endereco", "Numero", "Complemento", "Bairro", "Cidade",
+            "UF", "CEP", "Telefone_1", "Telefone_2", "Email",
+            "CPF", "RG", "Sangue", "Cargo",
+            "Instrumento_1", "Tonalidade_1",
+            "Instrumento_2", "Tonalidade_2",
+            "Instrumento_3", "Tonalidade_3",
+            "Ativo", "Cadastrado_em", "Cadastrado_por",
+            "Atualizado_em", "Atualizado_por",
+            "Status_Coleta", "Data_Coleta"
+        ],
+        "resumo": {
+            "total_processadas": processadas,
+            "sucesso": sucesso,
+            "erros": erros,
+            "tempo_minutos": round(tempo_total/60, 2),
+            "velocidade_por_minuto": round(processadas/(tempo_total/60), 1)
         }
     }
     
+    # Salvar backup local
+    backup_file = f"backup_ministros_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump(body, f, ensure_ascii=False, indent=2)
+    print(f"💾 Backup salvo em: {backup_file}")
+    
+    # Enviar para Apps Script
+    print("\n📤 Enviando dados para Google Sheets...")
     try:
-        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
+        resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
         
-        if response.status_code == 200:
-            print("✓ Dados enviados com sucesso para o Google Sheets!")
+        if resposta_post.status_code == 200:
+            resposta_json = resposta_post.json()
+            print(f"✅ Dados enviados com sucesso!")
+            print(f"📊 Status: {resposta_json.get('status', 'desconhecido')}")
+            print(f"💬 Mensagem: {resposta_json.get('mensagem', 'N/A')}")
         else:
-            print(f"✗ Erro no envio: Status {response.status_code}")
-            print(f"Resposta: {response.text[:200]}")
-            
+            print(f"⚠️  Status HTTP: {resposta_post.status_code}")
+            print(f"Resposta: {resposta_post.text[:200]}")
     except Exception as e:
-        print(f"✗ Erro ao enviar dados: {e}")
-
-
-# ============= FUNÇÃO PRINCIPAL =============
-def main():
-    print("=" * 60)
-    print("  COLETOR DE USUÁRIOS - SISTEMA MUSICAL")
-    print("=" * 60)
-    print(f"Range: IDs {RANGE_INICIO:,} até {RANGE_FIM:,}")
-    print(f"Threads: {NUM_THREADS}")
-    print(f"Timeout: {TIMEOUT_REQUEST}s")
-    print("=" * 60 + "\n")
+        print(f"❌ Erro ao enviar para Sheets: {e}")
+        print(f"💾 Dados salvos localmente em: {backup_file}")
     
-    # Valida credenciais
-    if not EMAIL or not SENHA:
-        print("✗ Erro: Credenciais não encontradas nas variáveis de ambiente")
-        print("  Configure: LOGIN_MUSICAL e SENHA_MUSICAL")
-        sys.exit(1)
-    
-    tempo_inicio = time.time()
-    
-    # Login
-    cookies = login()
-    if not cookies:
-        print("✗ Falha no login")
-        sys.exit(1)
-    
-    print("\n🚀 Iniciando coleta...\n")
-    
-    # Executa coleta
-    usuarios = executar_coleta(cookies)
-    
-    tempo_total = time.time() - tempo_inicio
-    
-    # Estatísticas finais
-    print("\n" + "=" * 60)
-    print("  COLETA FINALIZADA")
-    print("=" * 60)
-    print(f"✓ Usuários coletados: {len(usuarios):,}")
-    print(f"⏱️  Tempo total: {tempo_total/60:.1f} minutos")
-    print(f"⚡ Velocidade: {len(usuarios)/(tempo_total/60):.1f} usuários/min")
-    print("=" * 60 + "\n")
-    
-    # Envia dados
-    if usuarios:
-        enviar_dados(usuarios, tempo_total)
-        
-        # Mostra amostras
-        print("\n📋 Amostras dos primeiros usuários coletados:")
-        for i, u in enumerate(usuarios[:5], 1):
-            print(f"  {i}. {u.get('nome', '')[:40]:40} | {u.get('grupo', '')[:25]:25} | {u.get('status', '')}")
-    else:
-        print("⚠️  Nenhum usuário coletado")
-    
-    print(f"\n✓ Batch {INSTANCIA_ID} finalizado!")
-
+    print(f"\n{'=' * 80}")
+    print("🎉 PROCESSO CONCLUÍDO!")
+    print(f"{'=' * 80}\n")
 
 if __name__ == "__main__":
     main()
