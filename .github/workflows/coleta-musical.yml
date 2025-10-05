@@ -12,6 +12,8 @@ on:
           - script_individualht.py
           - script_localidadesht.py
           - script_alunosht.py
+          - script_turmasht.py
+          - script_historicoht.py
 
 jobs:
   coleta:
