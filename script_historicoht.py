@@ -8,6 +8,9 @@ import requests
 import time
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from datetime import datetime
 import json
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
@@ -15,79 +18,259 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyvEGIUPIvgbSuT_yikqg03nEjqXryd6RfI121A3pRt75v9oJoFNLTdvo3-onNdEsJd/exec'
 
-# Cache de instrutores (será preenchido no início)
-INSTRUTORES_HORTOLANDIA = {}  # {id: nome_completo}
-NOMES_INSTRUTORES = set()     # Set com nomes para busca rápida
+# Cache de instrutores
+INSTRUTORES_HORTOLANDIA = {}
+NOMES_INSTRUTORES = set()
+
+def criar_sessao_robusta():
+    """Cria sessão HTTP com retry automático"""
+    session = requests.Session()
+    
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST", "HEAD"]
+    )
+    
+    adapter = HTTPAdapter(
+        pool_connections=20,
+        pool_maxsize=20,
+        max_retries=retry_strategy
+    )
+    
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    
+    return session
 
 def extrair_cookies_playwright(pagina):
     """Extrai cookies do Playwright"""
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
-def carregar_instrutores_hortolandia(session):
-    """
-    Carrega a lista completa de instrutores de Hortolândia
-    Retorna dicionário {id: nome_completo}
-    """
-    print("\n🔍 Carregando lista de instrutores de Hortolândia...")
+def carregar_instrutores_hortolandia(session, max_tentativas=5):
+    """Carrega a lista completa de instrutores de Hortolândia COM RETRY ROBUSTO"""
+    print("\nCarregando lista de instrutores de Hortolândia...")
     
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            url = "https://musical.congregacao.org.br/licoes/instrutores?q=a"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive'
+            }
+            
+            timeout = 15 + (tentativa * 5)
+            print(f"   Tentativa {tentativa}/{max_tentativas} (timeout: {timeout}s)...")
+            
+            resp = session.get(url, headers=headers, timeout=timeout)
+            
+            if resp.status_code != 200:
+                print(f"   HTTP {resp.status_code}")
+                continue
+            
+            instrutores = json.loads(resp.text)
+            
+            ids_dict = {}
+            nomes_set = set()
+            
+            for instrutor in instrutores:
+                id_instrutor = instrutor['id']
+                texto_completo = instrutor['text']
+                nome = texto_completo.split(' - ')[0].strip()
+                
+                ids_dict[id_instrutor] = nome
+                nomes_set.add(nome)
+            
+            print(f"   {len(ids_dict)} instrutores carregados!\n")
+            return ids_dict, nomes_set
+            
+        except requests.Timeout:
+            print(f"   Timeout na tentativa {tentativa}")
+            if tentativa < max_tentativas:
+                time.sleep(tentativa * 2)
+        except Exception as e:
+            print(f"   Erro: {e}")
+            if tentativa < max_tentativas:
+                time.sleep(tentativa * 2)
+    
+    print("\nFalha ao carregar instrutores após todas as tentativas\n")
+    return {}, set()
+
+def extrair_data_aula_rapido(session, aula_id):
+    """
+    Extrai APENAS a data da aula (requisição mínima)
+    Retorna datetime object ou None
+    """
     try:
-        url = "https://musical.congregacao.org.br/licoes/instrutores?q=a"
-        resp = session.get(url, timeout=10)
+        url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'User-Agent': 'Mozilla/5.0'
+        }
+        
+        resp = session.get(url, headers=headers, timeout=5)
         
         if resp.status_code != 200:
-            print("❌ Erro ao carregar instrutores")
-            return {}, set()
+            return None
         
-        # Parse do JSON
-        instrutores = json.loads(resp.text)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        modal_header = soup.find('div', class_='modal-header')
         
-        ids_dict = {}
-        nomes_set = set()
+        if modal_header:
+            date_span = modal_header.find('span', class_='pull-right')
+            if date_span:
+                texto = date_span.get_text(strip=True)
+                # Formato: DD/MM/YYYY
+                try:
+                    return datetime.strptime(texto.strip(), '%d/%m/%Y')
+                except:
+                    pass
         
-        for instrutor in instrutores:
-            id_instrutor = instrutor['id']
-            texto_completo = instrutor['text']
-            
-            # Extrair apenas o nome (antes do " - ")
-            nome = texto_completo.split(' - ')[0].strip()
-            
-            ids_dict[id_instrutor] = nome
-            nomes_set.add(nome)
+        return None
         
-        print(f"✅ {len(ids_dict)} instrutores de Hortolândia carregados!")
-        return ids_dict, nomes_set
+    except:
+        return None
+
+def buscar_primeiro_id_do_mes(session, mes_alvo, ano_alvo, id_min=1, id_max=400000):
+    """
+    Busca binária INTELIGENTE para encontrar o primeiro ID de um mês específico
+    
+    Args:
+        mes_alvo: Mês desejado (1-12)
+        ano_alvo: Ano desejado (ex: 2025)
+        id_min: ID mínimo para busca
+        id_max: ID máximo para busca
+    
+    Returns:
+        ID da primeira aula do mês ou None
+    """
+    print(f"\nBuscando primeira aula de {mes_alvo:02d}/{ano_alvo}...")
+    print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
+    
+    data_alvo = datetime(ano_alvo, mes_alvo, 1)
+    
+    melhor_id = None
+    tentativas = 0
+    max_tentativas = 100  # Limita busca binária
+    
+    esquerda = id_min
+    direita = id_max
+    
+    while esquerda <= direita and tentativas < max_tentativas:
+        tentativas += 1
+        meio = (esquerda + direita) // 2
         
-    except Exception as e:
-        print(f"❌ Erro ao carregar instrutores: {e}")
-        return {}, set()
+        print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
+        
+        data_aula = extrair_data_aula_rapido(session, meio)
+        
+        if data_aula is None:
+            print("(nao existe/erro)")
+            # Se não existe, pode estar além do último ID ou ter gap
+            # Tenta reduzir o range
+            direita = meio - 1
+            continue
+        
+        print(f"Data: {data_aula.strftime('%d/%m/%Y')}")
+        
+        # Comparar apenas ano e mês
+        if data_aula.year == ano_alvo and data_aula.month == mes_alvo:
+            # Encontrou uma aula do mês alvo!
+            melhor_id = meio
+            # Continua procurando uma ainda mais antiga (à esquerda)
+            direita = meio - 1
+        
+        elif data_aula < data_alvo:
+            # Aula é anterior ao mês alvo, procura à direita
+            esquerda = meio + 1
+        
+        else:
+            # Aula é posterior ao mês alvo, procura à esquerda
+            direita = meio - 1
+    
+    if melhor_id:
+        # Ajuste fino: voltar alguns IDs para garantir que pegamos o primeiro
+        print(f"\nID encontrado: {melhor_id}")
+        print("Fazendo ajuste fino (voltando 50 IDs)...")
+        
+        id_ajustado = max(id_min, melhor_id - 50)
+        
+        # Verificar se existe uma aula ainda anterior
+        for id_teste in range(id_ajustado, melhor_id):
+            data_teste = extrair_data_aula_rapido(session, id_teste)
+            if data_teste and data_teste.year == ano_alvo and data_teste.month == mes_alvo:
+                melhor_id = id_teste
+                break
+        
+        print(f"Primeiro ID confirmado: {melhor_id}\n")
+        return melhor_id
+    
+    print(f"\nNenhuma aula encontrada para {mes_alvo:02d}/{ano_alvo}\n")
+    return None
+
+def buscar_ultimo_id_valido(session, id_min=1, id_max=999999):
+    """
+    Busca binária para encontrar o ÚLTIMO ID válido no sistema
+    
+    Returns:
+        Último ID que existe ou None
+    """
+    print(f"\nBuscando ultimo ID valido no sistema...")
+    print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
+    
+    ultimo_valido = None
+    tentativas = 0
+    max_tentativas = 100
+    
+    esquerda = id_min
+    direita = id_max
+    
+    while esquerda <= direita and tentativas < max_tentativas:
+        tentativas += 1
+        meio = (esquerda + direita) // 2
+        
+        print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
+        
+        data_aula = extrair_data_aula_rapido(session, meio)
+        
+        if data_aula is not None:
+            print(f"Existe ({data_aula.strftime('%d/%m/%Y')})")
+            ultimo_valido = meio
+            # Existe, procura à direita (IDs maiores)
+            esquerda = meio + 1
+        else:
+            print("Nao existe")
+            # Não existe, procura à esquerda (IDs menores)
+            direita = meio - 1
+    
+    if ultimo_valido:
+        # Ajuste fino: avançar alguns IDs para garantir que pegamos o último
+        print(f"\nID encontrado: {ultimo_valido}")
+        print("Fazendo ajuste fino (avancando ate 100 IDs)...")
+        
+        for id_teste in range(ultimo_valido + 1, ultimo_valido + 101):
+            data_teste = extrair_data_aula_rapido(session, id_teste)
+            if data_teste is not None:
+                ultimo_valido = id_teste
+        
+        print(f"Ultimo ID confirmado: {ultimo_valido}\n")
+        return ultimo_valido
+    
+    print(f"\nNenhum ID valido encontrado\n")
+    return None
 
 def normalizar_nome(nome):
-    """
-    Normaliza nome para comparação
-    Remove espaços extras, converte para maiúsculas
-    """
+    """Normaliza nome para comparação"""
     return ' '.join(nome.upper().split())
 
-def verificar_aula_existe(session, aula_id):
-    """
-    Verificação RÁPIDA se a aula existe (apenas HEAD request)
-    Retorna True se existe, False caso contrário
-    """
-    try:
-        url = f"https://musical.congregacao.org.br/aulas_abertas/editar/{aula_id}"
-        resp = session.head(url, timeout=3)
-        return resp.status_code == 200
-    except:
-        return False
-
 def coletar_tudo_de_uma_vez(session, aula_id):
-    """
-    OTIMIZAÇÃO PRINCIPAL: Coleta TODOS os dados em uma única chamada
-    Faz apenas 2 requests por aula (visualizar_aula + frequencias)
-    """
+    """Coleta TODOS os dados em uma única chamada (3 requests por aula)"""
     try:
-        # REQUEST 1: visualizar_aula (pega quase tudo)
+        # REQUEST 1: visualizar_aula
         url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
@@ -95,7 +278,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        resp = session.get(url, headers=headers, timeout=8)
+        resp = session.get(url, headers=headers, timeout=10)
         
         if resp.status_code != 200:
             return None
@@ -111,7 +294,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
                 texto = date_span.get_text(strip=True)
                 data_aula = texto.strip()
         
-        # Extrair TODOS os dados da tabela principal
+        # Extrair dados da tabela principal
         tbody = soup.find('tbody')
         if not tbody:
             return None
@@ -148,19 +331,16 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             elif 'Instrutor(a) que ministrou a aula' in label:
                 nome_instrutor = valor.split(' - ')[0].strip()
         
-        # Extrair descrição do header da tabela
+        # Extrair descrição
         table = soup.find('table', class_='table')
         if table:
             thead = table.find('thead')
             if thead:
                 td_desc = thead.find('td', class_='bg-blue-gradient')
                 if td_desc:
-                    # Pega todo o texto e remove o ícone
                     texto_completo = td_desc.get_text(strip=True)
-                    # Remove possíveis ícones do Font Awesome
                     descricao = re.sub(r'\s+', ' ', texto_completo).strip()
         
-        # Se não achou descrição, tenta pegar do colspan
         if not descricao:
             td_colspan = soup.find('td', {'colspan': '2'})
             if td_colspan:
@@ -175,21 +355,16 @@ def coletar_tudo_de_uma_vez(session, aula_id):
                     eh_hortolandia = True
                     break
         
-        # Se não é de Hortolândia, retorna None imediatamente
         if not eh_hortolandia:
             return None
         
-        # ====================================================================
-        # CORREÇÃO PRINCIPAL: VERIFICAÇÃO CORRETA DA ATA
-        # ====================================================================
+        # Verificação de ATA
         tem_ata = "Não"
         texto_ata = ""
         
-        # Buscar TODAS as tabelas
         todas_tabelas = soup.find_all('table', class_='table')
         
         for tabela in todas_tabelas:
-            # Procurar especificamente por thead com bg-green-gradient
             thead = tabela.find('thead')
             if thead:
                 tr_green = thead.find('tr', class_='bg-green-gradient')
@@ -198,28 +373,25 @@ def coletar_tudo_de_uma_vez(session, aula_id):
                     if td_ata and 'ATA DA AULA' in td_ata.get_text():
                         tem_ata = "Sim"
                         
-                        # Extrair o texto da ata do tbody
                         tbody_ata = tabela.find('tbody')
                         if tbody_ata:
                             td_texto = tbody_ata.find('td')
                             if td_texto:
                                 texto_ata = td_texto.get_text(strip=True)
                         
-                        break  # Encontrou a ata, pode parar
+                        break
         
-        # Pegar dia da semana do data_aula
+        # Dia da semana
         dia_semana = ""
         if data_aula:
-            # Converter para dia da semana
             try:
-                from datetime import datetime
                 data_obj = datetime.strptime(data_aula, '%d/%m/%Y')
                 dias = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
                 dia_semana = dias[data_obj.weekday()]
             except:
                 dia_semana = ""
         
-        # REQUEST 2: Pegar ID da turma
+        # REQUEST 2: ID da turma
         url_editar = f"https://musical.congregacao.org.br/aulas_abertas/editar/{aula_id}"
         resp_editar = session.get(url_editar, headers=headers, timeout=5)
         
@@ -229,7 +401,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             if turma_input:
                 id_turma = turma_input.get('value', '').strip()
         
-        # REQUEST 3: Buscar frequências
+        # REQUEST 3: Frequências
         total_alunos = 0
         presentes = 0
         lista_presentes = ""
@@ -237,7 +409,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         
         if id_turma:
             url_freq = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_frequencias/{aula_id}/{id_turma}"
-            resp_freq = session.get(url_freq, headers=headers, timeout=8)
+            resp_freq = session.get(url_freq, headers=headers, timeout=10)
             
             if resp_freq.status_code == 200:
                 soup_freq = BeautifulSoup(resp_freq.text, 'html.parser')
@@ -293,7 +465,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             'lista_ausentes': lista_ausentes
         }
         
-    except Exception as e:
+    except:
         return None
 
 def main():
@@ -302,9 +474,10 @@ def main():
     tempo_inicio = time.time()
     
     print("=" * 70)
-    print("🚀 COLETOR ULTRA-RÁPIDO - HORTOLÂNDIA (COM DETECÇÃO DE ATA CORRIGIDA)")
+    print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (COM BUSCA INTELIGENTE)")
     print("=" * 70)
     
+    # Login via Playwright
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
@@ -313,60 +486,90 @@ def main():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
-        pagina.goto(URL_INICIAL)
+        print("\nRealizando login...")
+        pagina.goto(URL_INICIAL, timeout=20000)
         
-        # Login
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
         pagina.click('button[type="submit"]')
         
         try:
-            pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado!")
+            pagina.wait_for_selector("nav", timeout=20000)
+            print("Login realizado!")
         except PlaywrightTimeoutError:
-            print("❌ Falha no login.")
+            print("Falha no login.")
             navegador.close()
             return
         
-        # Extrair cookies
         cookies_dict = extrair_cookies_playwright(pagina)
-        session = requests.Session()
-        session.cookies.update(cookies_dict)
-        
         navegador.close()
     
-    # Carregar lista de instrutores de Hortolândia
+    # Criar sessão robusta
+    session = criar_sessao_robusta()
+    session.cookies.update(cookies_dict)
+    
+    # Carregar instrutores
     INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES = carregar_instrutores_hortolandia(session)
     
     if not INSTRUTORES_HORTOLANDIA:
-        print("❌ Não foi possível carregar a lista de instrutores. Abortando.")
+        print("Nao foi possivel carregar a lista de instrutores. Abortando.")
         return
     
-    # Coletar aulas
+    # ========================================================================
+    # BUSCA INTELIGENTE: Encontrar primeiro ID de julho e último ID válido
+    # ========================================================================
+    
+    ano_atual = datetime.now().year
+    mes_alvo = 7  # Julho
+    
+    # Busca 1: Primeiro ID de julho
+    primeiro_id = buscar_primeiro_id_do_mes(
+        session, 
+        mes_alvo=mes_alvo, 
+        ano_alvo=ano_atual,
+        id_min=327000,    # Estimativa conservadora
+        id_max=500000     # Limite superior para busca
+    )
+    
+    if primeiro_id is None:
+        print("Nao foi possivel encontrar aulas de julho. Abortando.")
+        return
+    
+    # Busca 2: Último ID válido no sistema
+    ultimo_id = buscar_ultimo_id_valido(
+        session,
+        id_min=primeiro_id,  # Começa do ID de julho
+        id_max=999999        # Limite teórico
+    )
+    
+    if ultimo_id is None:
+        print("Nao foi possivel encontrar o ultimo ID. Usando estimativa.")
+        ultimo_id = primeiro_id + 50000  # Fallback: +50k IDs
+    
+    # ========================================================================
+    # COLETA: Do primeiro ID de julho até o último ID válido
+    # ========================================================================
+    
     resultado = []
     aulas_processadas = 0
     aulas_hortolandia = 0
     aulas_com_ata = 0
     
-    # Range de IDs
-    ID_INICIAL = 327184
-    ID_FINAL = 360000
+    ID_INICIAL = primeiro_id
+    ID_FINAL = ultimo_id
     
-    # OTIMIZAÇÃO: Aumentar paralelismo e reduzir timeout
     LOTE_SIZE = 200
-    MAX_WORKERS = 20
+    MAX_WORKERS = 15
     
     print(f"\n{'=' * 70}")
-    print(f"⚡ MODO TURBO ATIVADO!")
-    print(f"📊 Range: {ID_INICIAL} a {ID_FINAL} ({ID_FINAL - ID_INICIAL + 1} IDs)")
-    print(f"🔥 {MAX_WORKERS} threads paralelas | Lotes de {LOTE_SIZE}")
-    print(f"🎯 Detecção de ATA corrigida!")
+    print(f"MODO TURBO ATIVADO!")
+    print(f"Range: {ID_INICIAL:,} a {ID_FINAL:,} ({ID_FINAL - ID_INICIAL + 1:,} IDs)")
+    print(f"{MAX_WORKERS} threads paralelas | Lotes de {LOTE_SIZE}")
     print(f"{'=' * 70}\n")
     
     for lote_inicio in range(ID_INICIAL, ID_FINAL + 1, LOTE_SIZE):
         lote_fim = min(lote_inicio + LOTE_SIZE - 1, ID_FINAL)
         
-        # Processar lote em paralelo com MUITAS threads
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(coletar_tudo_de_uma_vez, session, aula_id): aula_id 
@@ -399,34 +602,33 @@ def main():
                     
                     aulas_hortolandia += 1
                     
-                    # Contar atas
                     if dados_completos['tem_ata'] == "Sim":
                         aulas_com_ata += 1
-                        ata_status = "📝"
+                        ata_status = "ATA"
                     else:
-                        ata_status = "  "
+                        ata_status = "   "
                     
-                    print(f"{ata_status} [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:25]:25s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
+                    print(f"[{ata_status}] [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:25]:25s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
                 
-                # Mostrar progresso a cada 200
                 if aulas_processadas % 200 == 0:
                     tempo_decorrido = time.time() - tempo_inicio
                     velocidade = aulas_processadas / tempo_decorrido
                     tempo_estimado = (ID_FINAL - ID_INICIAL + 1 - aulas_processadas) / velocidade / 60
                     print(f"\n{'─' * 70}")
-                    print(f"⚡ {aulas_processadas} processadas | {aulas_hortolandia} HTL | {aulas_com_ata} com ATA | {velocidade:.1f} aulas/s | ETA: {tempo_estimado:.1f}min")
+                    print(f"{aulas_processadas} processadas | {aulas_hortolandia} HTL | {aulas_com_ata} com ATA | {velocidade:.1f} aulas/s | ETA: {tempo_estimado:.1f}min")
                     print(f"{'─' * 70}\n")
         
-        time.sleep(0.5)  # Pausa mínima entre lotes
+        time.sleep(0.5)
     
     print(f"\n{'=' * 70}")
-    print(f"🎉 COLETA FINALIZADA!")
+    print(f"COLETA FINALIZADA!")
     print(f"{'=' * 70}")
-    print(f"📊 Total processado: {aulas_processadas}")
-    print(f"✅ Aulas de Hortolândia: {aulas_hortolandia}")
-    print(f"📝 Aulas com ATA: {aulas_com_ata} ({aulas_com_ata/aulas_hortolandia*100:.1f}%)")
-    print(f"⏱️  Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
-    print(f"⚡ Velocidade média: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
+    print(f"Total processado: {aulas_processadas:,}")
+    print(f"Aulas de Hortolandia: {aulas_hortolandia:,}")
+    if aulas_hortolandia > 0:
+        print(f"Aulas com ATA: {aulas_com_ata} ({aulas_com_ata/aulas_hortolandia*100:.1f}%)")
+    print(f"Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
+    print(f"Velocidade media: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
     print(f"{'=' * 70}\n")
     
     # Preparar envio
@@ -444,23 +646,27 @@ def main():
             "aulas_processadas": aulas_processadas,
             "aulas_com_ata": aulas_com_ata,
             "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
+            "primeiro_id_julho": ID_INICIAL,
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
             "velocidade_aulas_por_segundo": round(aulas_processadas/(time.time() - tempo_inicio), 2)
         }
     }
     
+    # Salvar backup local
+    backup_file = f'backup_aulas_{time.strftime("%Y%m%d_%H%M%S")}.json'
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump(body, f, ensure_ascii=False, indent=2)
+    print(f"Backup salvo em: {backup_file}")
+    
     # Enviar para Apps Script
-    print("📤 Enviando dados para Google Sheets...")
+    print("\nEnviando dados para Google Sheets...")
     try:
-        resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
-        print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
-        print(f"📝 Resposta: {resposta_post.text}")
+        resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
+        print(f"Dados enviados! Status: {resposta_post.status_code}")
+        print(f"Resposta: {resposta_post.text[:200]}")
     except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
-        # Salvar localmente como backup
-        with open('backup_aulas.json', 'w', encoding='utf-8') as f:
-            json.dump(body, f, ensure_ascii=False, indent=2)
-        print("💾 Dados salvos em backup_aulas.json")
+        print(f"Erro ao enviar: {e}")
+        print(f"Dados disponiveis no backup: {backup_file}")
 
 if __name__ == "__main__":
     main()
