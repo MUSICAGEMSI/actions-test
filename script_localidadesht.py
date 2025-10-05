@@ -13,8 +13,8 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
 
-RANGE_INICIO = 1
-RANGE_FIM = 30000
+RANGE_INICIO = 20000
+RANGE_FIM = 26200
 NUM_THREADS = 50  # Aumentado para 50
 BATCH_SIZE_ENVIO = 3000
 MAX_RETRIES = 3
