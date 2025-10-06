@@ -7,7 +7,6 @@ import requests
 import time
 from bs4 import BeautifulSoup
 import json
-import re
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
@@ -18,7 +17,7 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwHlf2VUjfwX7KcHGKgvf
 
 def carregar_ids_do_apps_script():
     """
-    Busca IDs únicos direto do Apps Script
+    Busca IDs de ministros que têm instrumentos (colunas D/E/F/G com "{")
     """
     print("\n📂 Buscando IDs de ministros via Apps Script...")
     
@@ -27,36 +26,34 @@ def carregar_ids_do_apps_script():
         response = requests.get(url, timeout=30)
         
         if response.status_code != 200:
-            print(f"Erro HTTP {response.status_code}")
+            print(f"❌ Erro HTTP {response.status_code}")
             return []
         
         dados = response.json()
         
         if dados['status'] != 'sucesso':
-            print(f"Erro: {dados.get('mensagem', 'Erro desconhecido')}")
+            print(f"❌ Erro: {dados.get('mensagem', 'Erro desconhecido')}")
             return []
         
         ids = dados['ids']
-        print(f"✓ {dados['total_ids']} IDs únicos carregados!")
-        
-        if dados.get('faixa'):
-            print(f"  Faixa: {dados['faixa']['menor']} até {dados['faixa']['maior']}")
+        print(f"✅ {dados['total_ids']} IDs de ministros encontrados!")
+        print(f"   Fonte: {dados.get('fonte', 'N/A')}")
         
         if dados.get('amostra'):
-            print(f"\n  Amostra dos primeiros IDs:")
-            for item in dados['amostra'][:3]:
-                print(f"    - ID {item['id']}: {item['nome']}")
+            print(f"\n   📋 Amostra dos IDs encontrados:")
+            for item in dados['amostra'][:5]:
+                print(f"      • ID {item['id']} (linha {item['linha']}) - Instrumentos em: {item['tem_em']}")
         
         return ids
         
     except Exception as e:
-        print(f"Erro ao carregar IDs: {e}")
+        print(f"❌ Erro ao carregar IDs: {e}")
         return []
 
 def extrair_dados_ministro(html_content, pessoa_id):
     """
-    Extrai os dados do formulário de ministério
-    CORRIGIDO para o HTML compartilhado
+    Extrai dados do formulário de ministério
+    BASEADO NO HTML REAL DO SISTEMA
     """
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -67,91 +64,125 @@ def extrair_dados_ministro(html_content, pessoa_id):
             return None
         
         dados = {
-            'id_ministro': pessoa_id,
-            'nome': '',
-            'email': '',
-            'comum': '',
-            'ministerio': '',
-            'telefone_celular': '',
-            'telefone_fixo': '',
-            'cadastrado_em': '',
-            'cadastrado_por': ''
+            'ID_Ministro': pessoa_id,
+            'Nome': '',
+            'Email': '',
+            'ID_Localidade': '',
+            'Comum': '',
+            'Ministerio': '',
+            'Telefone_Celular': '',
+            'Telefone_Fixo': '',
+            'Cadastrado_em': '',
+            'Cadastrado_por': '',
         }
         
-        # NOME (input com name="nome")
+        # ========== NOME ==========
         nome_input = form.find('input', {'name': 'nome'})
         if nome_input and nome_input.get('value'):
-            dados['nome'] = nome_input.get('value', '').strip()
+            dados['Nome'] = nome_input.get('value', '').strip()
         
-        # Se não tem nome, não é um registro válido
-        if not dados['nome']:
+        # Se não tem nome, não é válido
+        if not dados['Nome']:
             return None
         
-        # EMAIL (input com name="email")
+        # ========== EMAIL ==========
         email_input = form.find('input', {'name': 'email'})
         if email_input:
-            dados['email'] = email_input.get('value', '').strip()
+            dados['Email'] = email_input.get('value', '').strip()
         
-        # COMUM CONGREGAÇÃO (select com name="id_igreja")
-        # IMPORTANTE: No HTML do ministério, o select NÃO tem option selected
-        # Precisa verificar se há value no hidden input ou script
+        # ========== COMUM/LOCALIDADE ==========
+        # IMPORTANTE: No HTML real, NÃO há option selected
+        # Precisamos buscar pelo hidden input "id" que indica qual igreja está cadastrada
+        # OU verificar via script/hidden fields
+        
+        # Primeiro tenta pegar do hidden input (se existir)
+        id_hidden = form.find('input', {'name': 'id', 'type': 'hidden'})
+        
+        # Tenta encontrar option selected (caso tenha)
         comum_select = form.find('select', {'name': 'id_igreja'})
         if comum_select:
-            # Tenta pegar option selected
+            # Verifica se tem alguma option com selected
             comum_option = comum_select.find('option', selected=True)
-            if comum_option and comum_option.get('value'):
-                dados['comum'] = comum_option.get_text(strip=True)
+            if comum_option and comum_option.get('value') and comum_option.get('value') != '':
+                dados['ID_Localidade'] = comum_option.get('value', '').strip()
+                dados['Comum'] = comum_option.get_text(strip=True)
         
-        # MINISTÉRIO/CARGO (select com id="id_cargo")
+        # ========== MINISTÉRIO/CARGO ==========
         cargo_select = form.find('select', {'id': 'id_cargo'})
         if cargo_select:
             cargo_option = cargo_select.find('option', selected=True)
-            if cargo_option and cargo_option.get('value'):
-                dados['ministerio'] = cargo_option.get_text(strip=True)
+            if cargo_option and cargo_option.get('value') and cargo_option.get('value') != '':
+                dados['Ministerio'] = cargo_option.get_text(strip=True)
         
-        # TELEFONE CELULAR (input com id="telefone")
-        telefone_input = form.find('input', {'id': 'telefone'})
+        # ========== TELEFONES ==========
+        
+        # Telefone Celular
+        telefone_input = form.find('input', {'id': 'telefone', 'name': 'telefone'})
         if telefone_input:
-            dados['telefone_celular'] = telefone_input.get('value', '').strip()
+            dados['Telefone_Celular'] = telefone_input.get('value', '').strip()
         
-        # TELEFONE FIXO (input com id="telefone2")
-        telefone2_input = form.find('input', {'id': 'telefone2'})
+        # Telefone Fixo
+        telefone2_input = form.find('input', {'id': 'telefone2', 'name': 'telefone2'})
         if telefone2_input:
-            dados['telefone_fixo'] = telefone2_input.get('value', '').strip()
+            dados['Telefone_Fixo'] = telefone2_input.get('value', '').strip()
         
-        # HISTÓRICO (div com id="collapseOne")
+        # ========== HISTÓRICO ==========
         historico_div = soup.find('div', id='collapseOne')
         if historico_div:
             paragrafos = historico_div.find_all('p')
             for p in paragrafos:
                 texto = p.get_text(strip=True)
                 
-                # Cadastrado em: 27/01/2024 23:36:03 por: CLEBER DOS SANTOS
+                # Cadastrado em: 29/08/2021 22:47:50 por: RONIE RODRIGUES DE OLIVEIRA
                 if 'Cadastrado em:' in texto:
-                    # Remove "Cadastrado em:" e divide por "por:"
                     texto_limpo = texto.replace('Cadastrado em:', '').strip()
                     partes = texto_limpo.split('por:')
                     if len(partes) >= 2:
-                        dados['cadastrado_em'] = partes[0].strip()
-                        dados['cadastrado_por'] = partes[1].strip()
+                        dados['Cadastrado_em'] = partes[0].strip()
+                        dados['Cadastrado_por'] = partes[1].strip()
         
         return dados
         
     except Exception as e:
+        print(f"      ⚠️  Erro na extração: {e}")
         return None
+
+def buscar_dados_completos_na_planilha_membros(ids_ministros):
+    """
+    OPCIONAL: Busca dados completos da planilha Membros
+    para complementar as informações
+    """
+    print("\n📊 Buscando dados complementares na planilha Membros...")
+    try:
+        url = f"{URL_APPS_SCRIPT}?acao=obter_dados_membros"
+        payload = {"ids": ids_ministros}
+        response = requests.post(url, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            dados = response.json()
+            if dados.get('status') == 'sucesso':
+                print(f"✅ Dados complementares carregados!")
+                return dados.get('membros', {})
+        
+        print("⚠️  Não foi possível carregar dados complementares")
+        return {}
+        
+    except Exception as e:
+        print(f"⚠️  Erro ao buscar dados complementares: {e}")
+        return {}
 
 def main():
     tempo_inicio = time.time()
     
     print("=" * 80)
-    print("COLETOR DE MINISTÉRIO - SISTEMA MUSICAL")
+    print("🎵 COLETOR DE MINISTROS - SISTEMA MUSICAL")
     print("=" * 80)
     
     # Carregar IDs
     ids_ministros = carregar_ids_do_apps_script()
     
     if not ids_ministros:
-        print("\nNenhum ID para processar.")
+        print("\n❌ Nenhum ID para processar.")
         return
     
     print(f"\n📊 Total de ministros a processar: {len(ids_ministros)}")
@@ -163,20 +194,20 @@ def main():
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
         
-        pagina.goto(URL_INICIAL)
-        pagina.fill('input[name="login"]', EMAIL)
-        pagina.fill('input[name="password"]', SENHA)
-        pagina.click('button[type="submit"]')
-        
         try:
+            pagina.goto(URL_INICIAL, timeout=30000)
+            pagina.fill('input[name="login"]', EMAIL)
+            pagina.fill('input[name="password"]', SENHA)
+            pagina.click('button[type="submit"]')
+            
             pagina.wait_for_selector("nav", timeout=15000)
-            print("✓ Login realizado com sucesso!")
+            print("✅ Login realizado com sucesso!")
         except PlaywrightTimeoutError:
-            print("Falha no login. Verifique as credenciais.")
+            print("❌ Falha no login. Verifique as credenciais.")
             navegador.close()
             return
         
-        # Extrair cookies
+        # Extrair cookies para requests
         cookies = pagina.context.cookies()
         cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies}
         session = requests.Session()
@@ -192,58 +223,16 @@ def main():
         sucesso = 0
         erros = 0
         
-        # Teste com os primeiros 5 usando Playwright para debug
-        print("DEBUG: Testando primeiros 5 com Playwright...\n")
-        
-        for i, pessoa_id in enumerate(ids_ministros[:5], 1):
-            try:
-                url = f"https://musical.congregacao.org.br/ministros/editar/{pessoa_id}"
-                print(f"[{i}/5] Acessando: {url}")
-                
-                pagina.goto(url, wait_until='domcontentloaded', timeout=15000)
-                time.sleep(1)
-                
-                html_content = pagina.content()
-                
-                # Debug: verifica se tem o formulário
-                if 'id="ministerio"' in html_content:
-                    print(f"  ✓ Formulário encontrado")
-                else:
-                    print(f"  ✗ Formulário NÃO encontrado")
-                    print(f"  HTML Preview: {html_content[:500]}")
-                
-                # Tenta extrair
-                dados = extrair_dados_ministro(html_content, pessoa_id)
-                
-                if dados:
-                    print(f"  ✓ Nome: {dados['nome']}")
-                    print(f"  ✓ Ministério: {dados['ministerio']}")
-                    print(f"  ✓ Comum: {dados['comum']}")
-                else:
-                    print(f"  ✗ Falha na extração")
-                
-                print()
-                
-            except Exception as e:
-                print(f"  ✗ Erro: {e}\n")
-        
-        print("\n" + "=" * 80)
-        print("FIM DO DEBUG - Pressione Ctrl+C para parar")
-        print("Ou aguarde para processar todos os IDs...")
-        print("=" * 80 + "\n")
-        
-        time.sleep(3)
-        
-        # Processa todos os IDs
         for i, pessoa_id in enumerate(ids_ministros, 1):
             processados += 1
             
             try:
                 url = f"https://musical.congregacao.org.br/ministros/editar/{pessoa_id}"
                 
-                # Primeiros 10 com Playwright
-                if i <= 10:
+                # Primeiros 20 com Playwright para garantir
+                if i <= 20:
                     pagina.goto(url, wait_until='domcontentloaded', timeout=15000)
+                    time.sleep(0.5)
                     html_content = pagina.content()
                 else:
                     # Resto com requests (mais rápido)
@@ -257,47 +246,55 @@ def main():
                 
                 if dados:
                     sucesso += 1
-                    resultado.append([
-                        dados['id_ministro'],
-                        dados['nome'],
-                        dados['email'],
-                        dados['comum'],
-                        dados['ministerio'],
-                        dados['telefone_celular'],
-                        dados['telefone_fixo'],
-                        dados['cadastrado_em'],
-                        dados['cadastrado_por'],
+                    
+                    # Monta linha com os dados
+                    linha = [
+                        dados['ID_Ministro'],
+                        dados['Nome'],
+                        dados['Email'],
+                        dados['ID_Localidade'],
+                        dados['Comum'],
+                        dados['Ministerio'],
+                        dados['Telefone_Celular'],
+                        dados['Telefone_Fixo'],
+                        dados['Cadastrado_em'],
+                        dados['Cadastrado_por'],
                         'Coletado',
                         time.strftime('%d/%m/%Y %H:%M:%S')
-                    ])
+                    ]
                     
-                    resumo = f"[{i}/{len(ids_ministros)}] ID {pessoa_id}: {dados['nome'][:40]}"
-                    if dados['ministerio']:
-                        resumo += f" | {dados['ministerio']}"
-                    print(resumo)
+                    resultado.append(linha)
+                    
+                    # Log resumido
+                    info_ministro = f"[{i}/{len(ids_ministros)}] ✓ ID {pessoa_id}: {dados['Nome'][:40]}"
+                    if dados['Ministerio']:
+                        info_ministro += f" | {dados['Ministerio']}"
+                    if dados['Comum']:
+                        info_ministro += f" | {dados['Comum']}"
+                    print(info_ministro)
+                    
                 else:
                     erros += 1
-                    resultado.append([
-                        pessoa_id, '', '', '', '', '', '', '', '',
-                        'Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
-                    ])
-                    print(f"[{i}/{len(ids_ministros)}] ID {pessoa_id}: Não encontrado")
+                    linha_vazia = [pessoa_id, '', '', '', '', '', '', '', '', '', 'Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')]
+                    resultado.append(linha_vazia)
+                    print(f"[{i}/{len(ids_ministros)}] ✗ ID {pessoa_id}: Não encontrado")
                 
+                # Progress report a cada 25
                 if processados % 25 == 0:
                     tempo_decorrido = time.time() - tempo_inicio
                     print(f"\n{'-' * 80}")
-                    print(f"PROGRESSO: {processados}/{len(ids_ministros)} | Sucesso: {sucesso} | Erros: {erros} | Tempo: {tempo_decorrido:.1f}s")
+                    print(f"📈 PROGRESSO: {processados}/{len(ids_ministros)} | ✓ {sucesso} | ✗ {erros} | ⏱️  {tempo_decorrido:.1f}s")
                     print(f"{'-' * 80}\n")
                 
-                if i > 10:
-                    time.sleep(0.1)
+                # Delay entre requisições
+                if i > 20:
+                    time.sleep(0.15)
                 
             except Exception as e:
                 erros += 1
-                resultado.append([
-                    pessoa_id, '', '', '', '', '', '', '', '',
-                    f'Erro: {str(e)[:30]}', time.strftime('%d/%m/%Y %H:%M:%S')
-                ])
+                linha_vazia = [pessoa_id, '', '', '', '', '', '', '', '', '', f'Erro: {str(e)[:50]}', time.strftime('%d/%m/%Y %H:%M:%S')]
+                resultado.append(linha_vazia)
+                print(f"[{i}/{len(ids_ministros)}] ⚠️  ID {pessoa_id}: Erro - {str(e)[:50]}")
         
         navegador.close()
     
@@ -305,32 +302,40 @@ def main():
     tempo_total = time.time() - tempo_inicio
     
     print(f"\n{'=' * 80}")
-    print("COLETA FINALIZADA")
+    print("✅ COLETA FINALIZADA")
     print(f"{'=' * 80}")
-    print(f"Total processado: {processados}")
-    print(f"Sucesso: {sucesso}")
-    print(f"Erros: {erros}")
-    print(f"Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"📊 Total processado: {processados}")
+    print(f"✓  Sucesso: {sucesso}")
+    print(f"✗  Erros: {erros}")
+    print(f"⏱️  Tempo total: {tempo_total/60:.2f} minutos")
     print(f"{'=' * 80}\n")
     
     # Preparar payload
+    cabecalho = [
+        "ID_Ministro",
+        "Nome",
+        "Email",
+        "ID_Localidade",
+        "Comum",
+        "Ministerio",
+        "Telefone_Celular",
+        "Telefone_Fixo",
+        "Cadastrado_em",
+        "Cadastrado_por",
+        "Status_Coleta",
+        "Data_Coleta"
+    ]
+    
     payload = {
         "tipo": "ministerio",
-        "relatorio_formatado": [
-            [
-                "ID_MINISTRO", "NOME", "EMAIL", "COMUM", "MINISTERIO",
-                "TELEFONE_CELULAR", "TELEFONE_FIXO", 
-                "CADASTRADO_EM", "CADASTRADO_POR",
-                "STATUS_COLETA", "DATA_COLETA"
-            ],
-            *resultado
-        ],
+        "relatorio_formatado": [cabecalho] + resultado,
         "metadata": {
             "total_processados": processados,
             "sucesso": sucesso,
             "erros": erros,
             "tempo_minutos": round(tempo_total/60, 2),
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "fonte": "IDs de Membros com instrumentos (colunas D/E/F/G com '{')"
         }
     }
     
@@ -338,23 +343,29 @@ def main():
     backup_file = f"backup_ministerio_{time.strftime('%Y%m%d_%H%M%S')}.json"
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    print(f"Backup salvo: {backup_file}")
+    print(f"💾 Backup salvo: {backup_file}")
     
-    # Enviar para Apps Script
-    print("\nEnviando para Google Sheets...")
+    # Enviar para Google Sheets
+    print("\n📤 Enviando dados para Google Sheets...")
     try:
         resposta = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
         
         if resposta.status_code == 200:
             resp_json = resposta.json()
-            print(f"Dados enviados com sucesso!")
-            print(f"Status: {resp_json.get('status', 'N/A')}")
+            print(f"✅ Dados enviados com sucesso!")
+            print(f"   Status: {resp_json.get('status', 'N/A')}")
+            print(f"   Linhas escritas: {resp_json.get('linhas_escritas', 'N/A')}")
+            print(f"   Planilha: https://docs.google.com/spreadsheets/d/{resp_json.get('planilha', '')}")
         else:
-            print(f"Status HTTP: {resposta.status_code}")
+            print(f"⚠️  Status HTTP: {resposta.status_code}")
+            print(f"   Resposta: {resposta.text[:200]}")
     except Exception as e:
-        print(f"Erro ao enviar: {e}")
+        print(f"❌ Erro ao enviar: {e}")
+        print(f"   Os dados estão salvos no backup local: {backup_file}")
     
-    print(f"\nPROCESSO CONCLUÍDO\n")
+    print(f"\n{'=' * 80}")
+    print("🎉 PROCESSO CONCLUÍDO!")
+    print(f"{'=' * 80}\n")
 
 if __name__ == "__main__":
     main()
