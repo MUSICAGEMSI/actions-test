@@ -667,7 +667,6 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
         ])
     
     return resumo
-
 def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
     """Envia todos os dados para o Google Sheets"""
     print("\n📤 Enviando dados para Google Sheets...")
@@ -676,8 +675,93 @@ def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
         # Gerar resumo dos alunos
         resumo_alunos = gerar_resumo_alunos(alunos, todos_dados)
         
+        # Calcular médias de provas por aluno
+        medias_provas = {}
+        for prova in todos_dados['provas']:
+            id_aluno = prova[0]
+            try:
+                nota = float(prova[3].replace(',', '.'))
+                if id_aluno not in medias_provas:
+                    medias_provas[id_aluno] = []
+                medias_provas[id_aluno].append(nota)
+            except:
+                pass
+        
+        # Gerar resumo formatado com todas as informações
+        resumo_formatado = []
+        for linha in resumo_alunos:
+            id_aluno = linha[0]
+            nome = linha[1]
+            id_igreja = linha[2]
+            
+            # Calcular média de provas
+            media = 0
+            if id_aluno in medias_provas and medias_provas[id_aluno]:
+                media = sum(medias_provas[id_aluno]) / len(medias_provas[id_aluno])
+            
+            # Última atividade (data mais recente entre todos os registros)
+            ultima_atividade = ""
+            datas = []
+            
+            # Coletar todas as datas possíveis
+            for mts in todos_dados['mts_individual']:
+                if mts[0] == id_aluno and mts[4]:
+                    datas.append(mts[4])
+            for msa in todos_dados['msa_individual']:
+                if msa[0] == id_aluno and msa[2]:
+                    datas.append(msa[2])
+            for prova in todos_dados['provas']:
+                if prova[0] == id_aluno and prova[4]:
+                    datas.append(prova[4])
+            
+            if datas:
+                ultima_atividade = max(datas)
+            
+            resumo_formatado.append([
+                id_aluno,
+                nome,
+                id_igreja,
+                linha[3],   # TOTAL_MTS_IND
+                linha[4],   # TOTAL_MTS_GRUPO
+                linha[5],   # TOTAL_MSA_IND
+                linha[6],   # TOTAL_MSA_GRUPO
+                linha[7],   # TOTAL_PROVAS
+                round(media, 2),  # MEDIA_PROVAS
+                linha[8],   # TOTAL_HINOS_IND
+                linha[9],   # TOTAL_HINOS_GRUPO
+                linha[10],  # TOTAL_METODOS
+                linha[11],  # TOTAL_ESCALAS_IND
+                linha[12],  # TOTAL_ESCALAS_GRUPO
+                ultima_atividade,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            ])
+        
+        # Metadata da coleta
+        metadata = {
+            'total_alunos_processados': len(stats['alunos_processados']),
+            'alunos_com_dados': stats['com_dados'],
+            'alunos_sem_dados': stats['sem_dados'],
+            'tempo_coleta_segundos': round(time.time() - stats['tempo_inicio'], 2),
+            'fase1_sucesso': stats['fase1_sucesso'],
+            'fase2_sucesso': stats['fase2_sucesso'],
+            'fase3_sucesso': stats['fase3_sucesso'],
+            'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'total_registros_mts_ind': len(todos_dados['mts_individual']),
+            'total_registros_mts_grupo': len(todos_dados['mts_grupo']),
+            'total_registros_msa_ind': len(todos_dados['msa_individual']),
+            'total_registros_msa_grupo': len(todos_dados['msa_grupo']),
+            'total_registros_provas': len(todos_dados['provas']),
+            'total_registros_hinario_ind': len(todos_dados['hinario_individual']),
+            'total_registros_hinario_grupo': len(todos_dados['hinario_grupo']),
+            'total_registros_metodos': len(todos_dados['metodos']),
+            'total_registros_escalas_ind': len(todos_dados['escalas_individual']),
+            'total_registros_escalas_grupo': len(todos_dados['escalas_grupo'])
+        }
+        
+        # Payload com tipo correto
         payload = {
-            'acao': 'atualizar_licoes',
+            'tipo': 'licoes_alunos',  # CORRIGIDO: era 'acao'
+            'resumo': resumo_formatado,
             'mts_individual': todos_dados['mts_individual'],
             'mts_grupo': todos_dados['mts_grupo'],
             'msa_individual': todos_dados['msa_individual'],
@@ -688,8 +772,11 @@ def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
             'metodos': todos_dados['metodos'],
             'escalas_individual': todos_dados['escalas_individual'],
             'escalas_grupo': todos_dados['escalas_grupo'],
-            'resumo_alunos': resumo_alunos
+            'metadata': metadata
         }
+        
+        print(f"   📊 Enviando {len(resumo_formatado)} alunos com resumo completo...")
+        print(f"   📋 Total de registros: {sum(len(v) for v in todos_dados.values())}")
         
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=300)
         
@@ -697,18 +784,23 @@ def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
             result = response.json()
             if result.get('sucesso'):
                 print("✅ Dados enviados com sucesso!")
+                print(f"   🕐 Timestamp: {result.get('timestamp')}")
+                print(f"   👥 Alunos processados: {result.get('total_alunos')}")
                 return True
             else:
                 print(f"❌ Erro do servidor: {result.get('erro', 'Desconhecido')}")
                 return False
         else:
             print(f"❌ Erro HTTP {response.status_code}")
+            print(f"   Resposta: {response.text[:500]}")
             return False
     
     except Exception as e:
         print(f"❌ Erro ao enviar dados: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-
+        
 def exibir_estatisticas_finais():
     """Exibe estatísticas completas da coleta"""
     tempo_total = time.time() - stats['tempo_inicio']
