@@ -20,12 +20,13 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
-# ========== ESTRATÉGIA: MÚLTIPLOS WORKERS ESPECIALIZADOS ==========
+# ========== ESTRATÉGIA: WORKERS COM TIMEOUT PROGRESSIVO ==========
 # Cada worker é uma "pessoa" com sua própria sessão persistente
-NUM_WORKERS = 40               # 40 "pessoas" trabalhando simultaneamente
-TIMEOUT_PER_REQUEST = 12       # Timeout por aluno
-MAX_RETRIES_PER_WORKER = 3     # Cada worker tenta 3x antes de desistir
-DELAY_RETRY = 0.5              # Delay mínimo entre retries
+NUM_WORKERS = 30               # 30 workers simultâneos (balanceado)
+TIMEOUT_INICIAL = 8            # Timeout inicial (aumenta se necessário)
+TIMEOUT_MAXIMO = 20            # Timeout máximo permitido
+MAX_RETRIES_PER_WORKER = 2     # Cada worker tenta 2x (rápido)
+DELAY_RETRY = 0.3              # Delay mínimo entre retries
 
 # Fila de reprocessamento inteligente
 FILA_REPROCESSAMENTO = Queue()
@@ -36,17 +37,22 @@ CHECKPOINT_FILE = "checkpoint_coleta.json"
 AUTO_SAVE_INTERVAL = 120       # Checkpoint a cada 2 minutos
 BATCH_SIZE = 50                # Salvar a cada 50 alunos processados
 
+# Timeout dinâmico (ajusta automaticamente)
+timeout_atual = TIMEOUT_INICIAL
+timeout_lock = threading.Lock()
+
 # Pool de conexões otimizado
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 print("="*80)
-print("🚀 COLETOR MULTI-WORKER - ESTRATÉGIA DE DIVISÃO DE TRABALHO")
+print("🚀 COLETOR MULTI-WORKER - ESTRATÉGIA ADAPTATIVA")
 print("="*80)
-print(f"👷 {NUM_WORKERS} workers simultâneos (como {NUM_WORKERS} pessoas trabalhando)")
-print(f"📋 Cada worker processa sua lista independente")
-print(f"🔄 Sistema inteligente de reprocessamento para falhas")
+print(f"👷 {NUM_WORKERS} workers simultâneos")
+print(f"⏱️  Timeout adaptativo: {TIMEOUT_INICIAL}s (até {TIMEOUT_MAXIMO}s)")
+print(f"🔄 Sistema inteligente de reprocessamento")
 print(f"💾 Checkpoint automático a cada {AUTO_SAVE_INTERVAL}s")
+print(f"⚡ Workers abandonam alunos lentos e pegam próximo")
 print(f"✅ GARANTIA: 0% de erro - todos serão processados!")
 print("="*80)
 
@@ -71,7 +77,9 @@ stats = {
         'escalas_individual': [], 'escalas_grupo': []
     },
     'ultimo_save': time.time(),
-    'ultimo_checkpoint': 0
+    'ultimo_checkpoint': 0,
+    'timeouts_consecutivos': 0,
+    'sucessos_consecutivos': 0
 }
 stats_lock = threading.Lock()
 print_lock = threading.Lock()
