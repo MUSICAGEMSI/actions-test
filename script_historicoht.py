@@ -152,128 +152,208 @@ def extrair_data_hora_abertura_rapido(session, aula_id):
     except:
         return None
 
-def buscar_primeiro_id_a_partir_de(session, data_hora_alvo, id_min=1, id_max=500000):
+def buscar_primeiro_id_a_partir_de(session, data_hora_alvo, id_min=1, id_max=1000000):
     """
-    Busca binária para encontrar o primeiro ID cuja "Data e Horário de abertura"
+    Busca binária OTIMIZADA para encontrar o primeiro ID cuja "Data e Horário de abertura"
     seja >= data_hora_alvo
     
+    ALGORITMO:
+    1. Busca binária clássica O(log n) - ~20 iterações para 1 milhão de IDs
+    2. Ajuste fino regressivo para garantir o primeiro ID exato
+    3. Tratamento inteligente de IDs inexistentes (buracos na sequência)
+    
     Args:
-        data_hora_alvo: datetime object (ex: 01/07/2024 00:00:00)
+        data_hora_alvo: datetime object (ex: 01/01/2024 00:00:00)
         id_min: ID mínimo para busca
         id_max: ID máximo para busca
     
     Returns:
         ID da primeira aula aberta a partir da data/hora ou None
     """
-    print(f"\nBuscando primeira aula aberta a partir de {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}...")
-    print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
+    print(f"\n{'─' * 70}")
+    print(f"BUSCA BINARIA: Primeiro ID >= {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}")
+    print(f"Range: ID {id_min:,} ate {id_max:,} (espaco de {id_max - id_min + 1:,} IDs)")
+    print(f"{'─' * 70}")
     
     melhor_id = None
+    melhor_data = None
     tentativas = 0
-    max_tentativas = 100
+    max_tentativas = 50  # log2(1000000) ≈ 20, margem de segurança
     
     esquerda = id_min
     direita = id_max
     
+    # FASE 1: Busca binária principal
     while esquerda <= direita and tentativas < max_tentativas:
         tentativas += 1
         meio = (esquerda + direita) // 2
         
-        print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
+        print(f"   [{tentativas:2d}] ID {meio:,} (range: {esquerda:,}-{direita:,})...", end=" ")
         
         data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
         if data_hora_abertura is None:
-            print("(nao existe/erro)")
+            print("INEXISTENTE")
+            # ID não existe, pode haver buracos na sequência
+            # Tenta procurar à esquerda primeiro
             direita = meio - 1
             continue
         
-        print(f"Abertura: {data_hora_abertura.strftime('%d/%m/%Y %H:%M')}")
+        print(f"{data_hora_abertura.strftime('%d/%m/%Y %H:%M')}", end="")
         
         # Se a abertura é >= data alvo
         if data_hora_abertura >= data_hora_alvo:
             melhor_id = meio
-            # Procura à esquerda por um ID ainda mais antigo que atenda
+            melhor_data = data_hora_abertura
+            print(f" ✓ (candidato)")
+            # Procura à esquerda por um ID ainda menor que também atenda
             direita = meio - 1
         else:
+            print(f" ✗ (muito antigo)")
             # Abertura é antes do alvo, procura à direita
             esquerda = meio + 1
     
-    if melhor_id:
-        print(f"\nID encontrado: {melhor_id}")
-        print("Fazendo ajuste fino (voltando 100 IDs)...")
-        
-        id_ajustado = max(id_min, melhor_id - 100)
-        
-        # Verificar se existe um ID anterior que também atende
-        for id_teste in range(id_ajustado, melhor_id):
-            data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
-            if data_teste and data_teste >= data_hora_alvo:
-                melhor_id = id_teste
-                break
-        
-        print(f"Primeiro ID confirmado: {melhor_id}\n")
-        return melhor_id
+    if melhor_id is None:
+        print(f"\n{'─' * 70}")
+        print(f"RESULTADO: Nenhuma aula encontrada no período")
+        print(f"{'─' * 70}\n")
+        return None
     
-    print(f"\nNenhuma aula encontrada a partir de {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}\n")
-    return None
+    print(f"\n   Melhor candidato da busca binaria: ID {melhor_id}")
+    print(f"   Data de abertura: {melhor_data.strftime('%d/%m/%Y %H:%M')}")
+    
+    # FASE 2: Ajuste fino regressivo
+    # Verifica IDs anteriores para garantir que é realmente o primeiro
+    print(f"\n   Ajuste fino: verificando IDs anteriores...")
+    
+    # Ajuste adaptativo: quanto mais longe do alvo, maior o passo
+    dias_diferenca = abs((melhor_data - data_hora_alvo).days)
+    passo_ajuste = min(500, max(50, dias_diferenca * 2))
+    
+    id_ajustado = max(id_min, melhor_id - passo_ajuste)
+    
+    print(f"   Verificando range {id_ajustado:,} a {melhor_id - 1:,} (passo: {passo_ajuste})...")
+    
+    ids_verificados = 0
+    for id_teste in range(id_ajustado, melhor_id):
+        data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+        ids_verificados += 1
+        
+        if data_teste and data_teste >= data_hora_alvo:
+            melhor_id = id_teste
+            melhor_data = data_teste
+            print(f"   ✓ Encontrado ID anterior: {id_teste:,} ({melhor_data.strftime('%d/%m/%Y %H:%M')})")
+            # Continue procurando IDs ainda menores
+    
+    print(f"   {ids_verificados} IDs verificados no ajuste fino")
+    
+    print(f"\n{'─' * 70}")
+    print(f"RESULTADO: Primeiro ID = {melhor_id:,}")
+    print(f"Data de abertura: {melhor_data.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Total de consultas: {tentativas + ids_verificados}")
+    print(f"{'─' * 70}\n")
+    
+    return melhor_id
 
-def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=999999):
+def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=1000000):
     """
-    Busca binária para encontrar o último ID cuja "Data e Horário de abertura"
+    Busca binária OTIMIZADA para encontrar o último ID cuja "Data e Horário de abertura"
     seja <= data_hora_limite (momento da execução do script)
+    
+    ALGORITMO:
+    1. Busca binária clássica O(log n)
+    2. Ajuste fino progressivo para garantir o último ID exato
+    3. Tratamento de IDs inexistentes na sequência
     
     Returns:
         Último ID válido até a data/hora limite ou None
     """
-    print(f"\nBuscando ultimo ID aberto ate {data_hora_limite.strftime('%d/%m/%Y %H:%M')}...")
-    print(f"Range de busca: ID {id_min:,} ate {id_max:,}")
+    print(f"\n{'─' * 70}")
+    print(f"BUSCA BINARIA: Ultimo ID <= {data_hora_limite.strftime('%d/%m/%Y %H:%M')}")
+    print(f"Range: ID {id_min:,} ate {id_max:,} (espaco de {id_max - id_min + 1:,} IDs)")
+    print(f"{'─' * 70}")
     
     ultimo_valido = None
+    ultima_data = None
     tentativas = 0
-    max_tentativas = 100
+    max_tentativas = 50
     
     esquerda = id_min
     direita = id_max
     
+    # FASE 1: Busca binária principal
     while esquerda <= direita and tentativas < max_tentativas:
         tentativas += 1
         meio = (esquerda + direita) // 2
         
-        print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
+        print(f"   [{tentativas:2d}] ID {meio:,} (range: {esquerda:,}-{direita:,})...", end=" ")
         
         data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
         if data_hora_abertura is None:
-            print("Nao existe")
+            print("INEXISTENTE")
+            # ID não existe, procura à esquerda
             direita = meio - 1
             continue
         
-        print(f"Abertura: {data_hora_abertura.strftime('%d/%m/%Y %H:%M')}")
+        print(f"{data_hora_abertura.strftime('%d/%m/%Y %H:%M')}", end="")
         
         # Se abertura <= limite
         if data_hora_abertura <= data_hora_limite:
             ultimo_valido = meio
+            ultima_data = data_hora_abertura
+            print(f" ✓ (candidato)")
             # Procura à direita por IDs maiores que ainda atendam
             esquerda = meio + 1
         else:
+            print(f" ✗ (muito recente)")
             # Abertura é depois do limite, procura à esquerda
             direita = meio - 1
     
-    if ultimo_valido:
-        print(f"\nID encontrado: {ultimo_valido}")
-        print("Fazendo ajuste fino (avancando ate 100 IDs)...")
-        
-        for id_teste in range(ultimo_valido + 1, ultimo_valido + 101):
-            data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
-            if data_teste and data_teste <= data_hora_limite:
-                ultimo_valido = id_teste
-        
-        print(f"Ultimo ID confirmado: {ultimo_valido}\n")
-        return ultimo_valido
+    if ultimo_valido is None:
+        print(f"\n{'─' * 70}")
+        print(f"RESULTADO: Nenhum ID valido encontrado")
+        print(f"{'─' * 70}\n")
+        return None
     
-    print(f"\nNenhum ID valido encontrado\n")
-    return None
+    print(f"\n   Melhor candidato da busca binaria: ID {ultimo_valido}")
+    print(f"   Data de abertura: {ultima_data.strftime('%d/%m/%Y %H:%M')}")
+    
+    # FASE 2: Ajuste fino progressivo
+    print(f"\n   Ajuste fino: verificando IDs posteriores...")
+    
+    # Ajuste adaptativo
+    dias_diferenca = abs((data_hora_limite - ultima_data).days)
+    passo_ajuste = min(500, max(50, dias_diferenca * 2))
+    
+    id_limite_ajuste = min(id_max, ultimo_valido + passo_ajuste)
+    
+    print(f"   Verificando range {ultimo_valido + 1:,} a {id_limite_ajuste:,} (passo: {passo_ajuste})...")
+    
+    ids_verificados = 0
+    for id_teste in range(ultimo_valido + 1, id_limite_ajuste + 1):
+        data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+        ids_verificados += 1
+        
+        if data_teste and data_teste <= data_hora_limite:
+            ultimo_valido = id_teste
+            ultima_data = data_teste
+            print(f"   ✓ Encontrado ID posterior: {id_teste:,} ({ultima_data.strftime('%d/%m/%Y %H:%M')})")
+            # Continue procurando IDs ainda maiores
+        elif data_teste and data_teste > data_hora_limite:
+            # Encontramos um ID além do limite, pode parar
+            print(f"   ✗ ID {id_teste:,} está além do limite, finalizando ajuste")
+            break
+    
+    print(f"   {ids_verificados} IDs verificados no ajuste fino")
+    
+    print(f"\n{'─' * 70}")
+    print(f"RESULTADO: Ultimo ID = {ultimo_valido:,}")
+    print(f"Data de abertura: {ultima_data.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Total de consultas: {tentativas + ids_verificados}")
+    print(f"{'─' * 70}\n")
+    
+    return ultimo_valido
 
 def normalizar_nome(nome):
     """Normaliza nome para comparação"""
@@ -486,7 +566,7 @@ def main():
     tempo_inicio = time.time()
     
     print("=" * 70)
-    print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (COM BUSCA INTELIGENTE)")
+    print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (BUSCA BINARIA OTIMIZADA)")
     print("=" * 70)
     
     # Login via Playwright
@@ -531,12 +611,8 @@ def main():
     # BUSCA INTELIGENTE: Baseada em "Data e Horário de abertura"
     # ========================================================================
     
-    # Definir período de coleta
-    ano_atual = datetime.now().year
-    mes_alvo = 7  # Julho
-    
-    # Data/hora de início: 01/07/2024 00:00:00
-    data_hora_inicio = datetime(ano_atual, mes_alvo, 1, 0, 0, 0)
+    # Data/hora de início: 01/01/2024 00:00:00
+    data_hora_inicio = datetime(2024, 1, 1, 0, 0, 0)
     
     # Data/hora de fim: momento atual da execução
     data_hora_fim = datetime.now()
@@ -547,12 +623,12 @@ def main():
     print(f"  Fim:    {data_hora_fim.strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"{'=' * 70}")
     
-    # Busca 1: Primeiro ID com abertura >= 01/07/2024 00:00
+    # Busca 1: Primeiro ID com abertura >= 01/01/2024 00:00
     primeiro_id = buscar_primeiro_id_a_partir_de(
         session, 
         data_hora_alvo=data_hora_inicio,
-        id_min=327000,    # Estimativa conservadora
-        id_max=500000     # Limite superior para busca
+        id_min=1,           # Começa do ID 1
+        id_max=1000000      # Até 1 milhão
     )
     
     if primeiro_id is None:
@@ -564,7 +640,7 @@ def main():
         session,
         data_hora_limite=data_hora_fim,
         id_min=primeiro_id,  # Começa do primeiro ID encontrado
-        id_max=999999        # Limite teórico
+        id_max=1000000       # Até 1 milhão
     )
     
     if ultimo_id is None:
@@ -671,7 +747,10 @@ def main():
             "aulas_processadas": aulas_processadas,
             "aulas_com_ata": aulas_com_ata,
             "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
-            "primeiro_id_julho": ID_INICIAL,
+            "primeiro_id_2024": ID_INICIAL,
+            "ultimo_id_2024": ID_FINAL,
+            "periodo_inicio": data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S'),
+            "periodo_fim": data_hora_fim.strftime('%d/%m/%Y %H:%M:%S'),
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
             "velocidade_aulas_por_segundo": round(aulas_processadas/(time.time() - tempo_inicio), 2)
         }
