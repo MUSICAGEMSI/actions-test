@@ -297,24 +297,23 @@ def coletar_range_completo(session, ids_igrejas: Set[int], id_inicio: int, id_fi
     
     return todos_alunos
 
-def criar_sessao_otimizada(cookies_dict: Dict) -> requests.Session:
-    """Cria sessão requests otimizada"""
+def criar_sessao_otimizada(cookies: list) -> requests.Session:
+    """Cria sessão requests otimizada com cookies válidos do Playwright"""
     session = requests.Session()
-    session.cookies.update(cookies_dict)
-    
+    for cookie in cookies:
+        domain = cookie.get("domain", "musical.congregacao.org.br").lstrip(".")
+        session.cookies.set(cookie["name"], cookie["value"], domain=domain)
+
     adapter = requests.adapters.HTTPAdapter(
         pool_connections=NUM_THREADS + 5,
         pool_maxsize=NUM_THREADS + 5,
         max_retries=3
     )
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    
+    session.mount("https://", adapter)
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     })
-    
     return session
 
 def salvar_alunos_arquivo(alunos: List[Dict], nome_arquivo: str = "alunos_hortolandia_completo.json"):
@@ -408,14 +407,11 @@ def main():
             print(f"❌ Erro no login: {e}")
             navegador.close()
             return
-        
+ 
         cookies = pagina.context.cookies()
-        cookies_dict = {c['name']: c['value'] for c in cookies}
         navegador.close()
-    
-    # Criar sessão
-    session = criar_sessao_otimizada(cookies_dict)
-    
+        session = criar_sessao_otimizada(cookies)
+
     # FASE 1: Encontrar limites exatos
     primeiro_id = buscar_primeiro_aluno(session, ids_igrejas)
     
