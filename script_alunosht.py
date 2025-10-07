@@ -3,28 +3,29 @@ load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright
 import os
-import sys
 import requests
 import time
 import json
 import concurrent.futures
-from typing import List, Set, Dict, Optional, Tuple
+from typing import List, Set, Dict, Tuple
 import re
+from collections import Counter
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 
-# Parâmetros de busca inteligente
+# Parâmetros da busca híbrida inteligente
 ID_MINIMO = 1
 ID_MAXIMO = 1000000
-NUM_THREADS = 25
-TAMANHO_AMOSTRA = 100  # Quantos IDs verificar em cada etapa da busca binária
+TAMANHO_CHUNK_EXPLORACAO = 10000  # Verificar a cada 10k IDs na exploração
+AMOSTRA_POR_CHUNK = 20  # Quantos IDs testar por chunk
+NUM_THREADS_COLETA = 25
 
-print(f"🎓 COLETOR INTELIGENTE - ALUNOS DE HORTOLÂNDIA")
+print(f"🧠 COLETOR HÍBRIDO INTELIGENTE - ALUNOS DE HORTOLÂNDIA")
 print(f"🔍 Range total: {ID_MINIMO:,} - {ID_MAXIMO:,}")
-print(f"🧵 Threads: {NUM_THREADS}")
+print(f"⚡ Estratégia: Exploração rápida + Coleta refinada")
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -32,7 +33,7 @@ if not EMAIL or not SENHA:
 
 def buscar_ids_igrejas_hortolandia() -> Set[int]:
     """Busca os IDs das igrejas de Hortolândia do Google Sheets"""
-    print("📥 Buscando IDs das igrejas de Hortolândia do Google Sheets...")
+    print("\n📥 Buscando IDs das igrejas de Hortolândia do Google Sheets...")
     
     try:
         params = {"acao": "listar_ids_hortolandia"}
@@ -51,7 +52,7 @@ def buscar_ids_igrejas_hortolandia() -> Set[int]:
         print(f"❌ Erro ao buscar IDs das igrejas: {e}")
         return set()
 
-def extrair_igreja_selecionada(html_content: str) -> Optional[int]:
+def extrair_igreja_selecionada(html_content: str) -> int:
     """Extrai o ID da igreja_selecionada do HTML"""
     if not html_content:
         return None
@@ -77,131 +78,82 @@ def extrair_nome_aluno(html_content: str) -> str:
     
     return ""
 
-def verificar_aluno_existe(session, aluno_id: int, ids_igrejas: Set[int]) -> Optional[Dict]:
+def verificar_aluno_existe(session, aluno_id: int, ids_igrejas: Set[int]) -> bool:
     """
-    Verifica se um aluno existe e se é de Hortolândia
-    Retorna dict com dados se for de Hortolândia, None caso contrário
+    Verifica rapidamente se um aluno existe e é de Hortolândia
+    Retorna True se for de Hortolândia, False caso contrário
     """
     try:
         url = f"https://musical.congregacao.org.br/grp_musical/editar/{aluno_id}"
-        resp = session.get(url, timeout=10)
+        resp = session.get(url, timeout=8)
         
         if resp.status_code == 200 and 'igreja_selecionada' in resp.text:
             igreja_id = extrair_igreja_selecionada(resp.text)
-            
-            if igreja_id and igreja_id in ids_igrejas:
-                nome_aluno = extrair_nome_aluno(resp.text)
-                return {
-                    'id_aluno': aluno_id,
-                    'id_igreja': igreja_id,
-                    'nome': nome_aluno
-                }
+            return igreja_id in ids_igrejas if igreja_id else False
         
-        return None
+        return False
     except:
-        return None
+        return False
 
-def buscar_primeiro_aluno_hortolandia(session, ids_igrejas: Set[int], inicio: int, fim: int) -> Optional[int]:
+def explorar_chunk(session, chunk_inicio: int, chunk_fim: int, ids_igrejas: Set[int]) -> Tuple[int, bool]:
     """
-    Usa busca binária para encontrar o PRIMEIRO aluno de Hortolândia no range
+    Explora um chunk verificando uma amostra aleatória de IDs
+    Retorna (numero_encontrados, tem_alunos_hortolandia)
     """
-    print(f"\n🔍 Buscando PRIMEIRO aluno de Hortolândia entre {inicio:,} e {fim:,}...")
+    import random
     
-    primeiro_encontrado = None
+    # Gerar IDs de amostra distribuídos pelo chunk
+    tamanho_chunk = chunk_fim - chunk_inicio + 1
+    if tamanho_chunk <= AMOSTRA_POR_CHUNK:
+        ids_amostra = list(range(chunk_inicio, chunk_fim + 1))
+    else:
+        step = tamanho_chunk // AMOSTRA_POR_CHUNK
+        ids_amostra = [chunk_inicio + (i * step) for i in range(AMOSTRA_POR_CHUNK)]
     
-    while inicio <= fim:
-        meio = (inicio + fim) // 2
-        
-        # Verificar uma amostra ao redor do meio
-        ids_amostra = list(range(max(1, meio - TAMANHO_AMOSTRA//2), 
-                                 min(ID_MAXIMO, meio + TAMANHO_AMOSTRA//2) + 1))
-        
-        encontrados_na_amostra = []
-        
-        print(f"   Verificando amostra no ID ~{meio:,}...", end=" ")
-        
-        for id_teste in ids_amostra:
-            resultado = verificar_aluno_existe(session, id_teste, ids_igrejas)
-            if resultado:
-                encontrados_na_amostra.append(id_teste)
-            time.sleep(0.05)
-        
-        if encontrados_na_amostra:
-            menor_id = min(encontrados_na_amostra)
-            print(f"✅ Encontrado! Menor ID: {menor_id:,}")
-            primeiro_encontrado = menor_id
-            # Buscar mais à esquerda
-            fim = menor_id - TAMANHO_AMOSTRA - 1
-        else:
-            print(f"❌ Nada encontrado")
-            # Buscar à direita
-            inicio = meio + TAMANHO_AMOSTRA + 1
-        
-        if inicio > fim:
-            break
+    encontrados = 0
+    for id_teste in ids_amostra:
+        if verificar_aluno_existe(session, id_teste, ids_igrejas):
+            encontrados += 1
+        time.sleep(0.05)
     
-    if primeiro_encontrado:
-        # Fazer uma verificação refinada ao redor do primeiro encontrado
-        print(f"\n🎯 Refinando busca ao redor de {primeiro_encontrado:,}...")
-        for id_teste in range(max(1, primeiro_encontrado - 500), primeiro_encontrado):
-            resultado = verificar_aluno_existe(session, id_teste, ids_igrejas)
-            if resultado:
-                primeiro_encontrado = id_teste
-                print(f"   ✅ Encontrado ID ainda menor: {primeiro_encontrado:,}")
-            time.sleep(0.05)
-    
-    return primeiro_encontrado
+    return encontrados, encontrados > 0
 
-def buscar_ultimo_aluno_hortolandia(session, ids_igrejas: Set[int], inicio: int, fim: int) -> Optional[int]:
+def fase1_exploracao_rapida(session, ids_igrejas: Set[int]) -> List[Tuple[int, int]]:
     """
-    Usa busca binária para encontrar o ÚLTIMO aluno de Hortolândia no range
+    FASE 1: Exploração rápida para encontrar chunks com alunos de Hortolândia
+    Retorna lista de ranges (inicio, fim) onde foram encontrados alunos
     """
-    print(f"\n🔍 Buscando ÚLTIMO aluno de Hortolândia entre {inicio:,} e {fim:,}...")
+    print(f"\n{'='*70}")
+    print(f"🔍 FASE 1: EXPLORAÇÃO RÁPIDA")
+    print(f"{'='*70}")
+    print(f"📊 Verificando chunks de {TAMANHO_CHUNK_EXPLORACAO:,} IDs")
+    print(f"🎯 Testando {AMOSTRA_POR_CHUNK} IDs por chunk")
     
-    ultimo_encontrado = None
+    chunks_com_alunos = []
+    total_chunks = (ID_MAXIMO - ID_MINIMO + 1) // TAMANHO_CHUNK_EXPLORACAO
     
-    while inicio <= fim:
-        meio = (inicio + fim) // 2
+    chunk_atual = 0
+    for chunk_inicio in range(ID_MINIMO, ID_MAXIMO, TAMANHO_CHUNK_EXPLORACAO):
+        chunk_fim = min(chunk_inicio + TAMANHO_CHUNK_EXPLORACAO - 1, ID_MAXIMO)
+        chunk_atual += 1
         
-        # Verificar uma amostra ao redor do meio
-        ids_amostra = list(range(max(1, meio - TAMANHO_AMOSTRA//2), 
-                                 min(ID_MAXIMO, meio + TAMANHO_AMOSTRA//2) + 1))
+        print(f"🔎 Chunk {chunk_atual}/{total_chunks}: {chunk_inicio:,} - {chunk_fim:,}...", end=" ")
         
-        encontrados_na_amostra = []
+        encontrados, tem_alunos = explorar_chunk(session, chunk_inicio, chunk_fim, ids_igrejas)
         
-        print(f"   Verificando amostra no ID ~{meio:,}...", end=" ")
-        
-        for id_teste in ids_amostra:
-            resultado = verificar_aluno_existe(session, id_teste, ids_igrejas)
-            if resultado:
-                encontrados_na_amostra.append(id_teste)
-            time.sleep(0.05)
-        
-        if encontrados_na_amostra:
-            maior_id = max(encontrados_na_amostra)
-            print(f"✅ Encontrado! Maior ID: {maior_id:,}")
-            ultimo_encontrado = maior_id
-            # Buscar mais à direita
-            inicio = maior_id + TAMANHO_AMOSTRA + 1
+        if tem_alunos:
+            print(f"✅ {encontrados} alunos encontrados!")
+            chunks_com_alunos.append((chunk_inicio, chunk_fim))
         else:
-            print(f"❌ Nada encontrado")
-            # Buscar à esquerda
-            fim = meio - TAMANHO_AMOSTRA - 1
+            print(f"⚫ Vazio")
         
-        if inicio > fim:
-            break
+        # Pequena pausa entre chunks
+        time.sleep(0.3)
     
-    if ultimo_encontrado:
-        # Fazer uma verificação refinada ao redor do último encontrado
-        print(f"\n🎯 Refinando busca ao redor de {ultimo_encontrado:,}...")
-        for id_teste in range(ultimo_encontrado + 1, min(ID_MAXIMO, ultimo_encontrado + 500)):
-            resultado = verificar_aluno_existe(session, id_teste, ids_igrejas)
-            if resultado:
-                ultimo_encontrado = id_teste
-                print(f"   ✅ Encontrado ID ainda maior: {ultimo_encontrado:,}")
-            time.sleep(0.05)
+    print(f"\n✨ Exploração concluída!")
+    print(f"📍 {len(chunks_com_alunos)} chunks com alunos de Hortolândia identificados")
     
-    return ultimo_encontrado
+    return chunks_com_alunos
 
 class ColetorAlunosHortolandia:
     def __init__(self, session, thread_id: int, ids_igrejas: Set[int]):
@@ -240,12 +192,12 @@ class ColetorAlunosHortolandia:
                             }
                             
                             self.alunos_encontrados.append(aluno_data)
-                            print(f"✅ T{self.thread_id}: Aluno {aluno_id} | Igreja {igreja_id} | {nome_aluno[:40]}")
+                            print(f"✅ T{self.thread_id}: ID {aluno_id} | Igreja {igreja_id} | {nome_aluno[:35]}")
                 
                 time.sleep(0.08)
                 
                 if self.requisicoes_feitas % 500 == 0:
-                    print(f"📊 T{self.thread_id}: {self.requisicoes_feitas:,} requisições | {len(self.alunos_encontrados)} alunos encontrados")
+                    print(f"📊 T{self.thread_id}: {self.requisicoes_feitas:,} requisições | {len(self.alunos_encontrados)} alunos")
                 
             except Exception as e:
                 if "timeout" in str(e).lower():
@@ -254,12 +206,66 @@ class ColetorAlunosHortolandia:
         
         return self.alunos_encontrados
 
-def executar_coleta_paralela_alunos(session, ids_igrejas: Set[int], range_inicio: int, range_fim: int, num_threads: int) -> List[Dict]:
-    """Executa coleta paralela de alunos de Hortolândia"""
+def fase2_coleta_completa(session, chunks_com_alunos: List[Tuple[int, int]], 
+                         ids_igrejas: Set[int]) -> List[Dict]:
+    """
+    FASE 2: Coleta completa e paralela nos chunks identificados
+    """
+    print(f"\n{'='*70}")
+    print(f"🎓 FASE 2: COLETA COMPLETA E PARALELA")
+    print(f"{'='*70}")
+    
+    if not chunks_com_alunos:
+        print("⚠️ Nenhum chunk para coletar")
+        return []
+    
+    # Mesclar chunks adjacentes para otimizar
+    chunks_mesclados = []
+    chunk_inicio_atual, chunk_fim_atual = chunks_com_alunos[0]
+    
+    for i in range(1, len(chunks_com_alunos)):
+        proximo_inicio, proximo_fim = chunks_com_alunos[i]
+        
+        # Se os chunks são adjacentes ou muito próximos, mesclar
+        if proximo_inicio <= chunk_fim_atual + TAMANHO_CHUNK_EXPLORACAO:
+            chunk_fim_atual = proximo_fim
+        else:
+            chunks_mesclados.append((chunk_inicio_atual, chunk_fim_atual))
+            chunk_inicio_atual, chunk_fim_atual = proximo_inicio, proximo_fim
+    
+    chunks_mesclados.append((chunk_inicio_atual, chunk_fim_atual))
+    
+    print(f"📦 {len(chunks_mesclados)} ranges otimizados para coleta:")
+    total_ids = 0
+    for inicio, fim in chunks_mesclados:
+        ids_no_range = fim - inicio + 1
+        total_ids += ids_no_range
+        print(f"   • {inicio:,} - {fim:,} ({ids_no_range:,} IDs)")
+    
+    print(f"\n📈 Total de IDs a verificar: {total_ids:,}")
+    print(f"🎉 Economia: {100 * (1 - total_ids/ID_MAXIMO):.1f}% do range total!")
+    print(f"🧵 Usando {NUM_THREADS_COLETA} threads paralelas\n")
+    
+    todos_alunos = []
+    
+    for idx, (range_inicio, range_fim) in enumerate(chunks_mesclados, 1):
+        print(f"\n{'─'*70}")
+        print(f"📦 Coletando range {idx}/{len(chunks_mesclados)}: {range_inicio:,} - {range_fim:,}")
+        print(f"{'─'*70}")
+        
+        alunos_range = executar_coleta_paralela(session, ids_igrejas, range_inicio, 
+                                                range_fim, NUM_THREADS_COLETA)
+        todos_alunos.extend(alunos_range)
+        
+        print(f"✅ Range {idx} concluído: {len(alunos_range)} alunos encontrados")
+    
+    return todos_alunos
+
+def executar_coleta_paralela(session, ids_igrejas: Set[int], range_inicio: int, 
+                            range_fim: int, num_threads: int) -> List[Dict]:
+    """Executa coleta paralela em um range específico"""
     total_ids = range_fim - range_inicio + 1
     ids_per_thread = total_ids // num_threads
-    
-    print(f"📈 Dividindo {total_ids:,} IDs em {num_threads} threads ({ids_per_thread:,} IDs/thread)")
     
     thread_ranges = []
     for i in range(num_threads):
@@ -285,8 +291,6 @@ def executar_coleta_paralela_alunos(session, ids_igrejas: Set[int], range_inicio
             try:
                 alunos_thread = future.result(timeout=3600)
                 todos_alunos.extend(alunos_thread)
-                coletor = coletores[thread_id]
-                print(f"✅ Thread {thread_id}: {len(alunos_thread)} alunos | {coletor.requisicoes_feitas:,} requisições")
             except Exception as e:
                 print(f"❌ Thread {thread_id}: Erro - {e}")
     
@@ -311,7 +315,7 @@ def salvar_alunos_em_arquivo(alunos: List[Dict], nome_arquivo: str = "alunos_hor
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igrejas: Set[int], range_inicio: int, range_fim: int):
+def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igrejas: Set[int]):
     """Envia os dados dos alunos para Google Sheets via Apps Script"""
     if not alunos:
         print("⚠️ Nenhum aluno para enviar")
@@ -334,10 +338,9 @@ def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igr
         "metadata": {
             "total_alunos": len(alunos),
             "total_igrejas_monitoradas": len(ids_igrejas),
-            "range_inicio": range_inicio,
-            "range_fim": range_fim,
+            "range_total": f"{ID_MINIMO}-{ID_MAXIMO}",
             "tempo_execucao_min": round(tempo_execucao/60, 2),
-            "threads_utilizadas": NUM_THREADS,
+            "threads_utilizadas": NUM_THREADS_COLETA,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "ids_igrejas": sorted(list(ids_igrejas))
         }
@@ -347,19 +350,14 @@ def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igr
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=180)
         
         if response.status_code == 200:
-            print("✅ Dados dos alunos enviados com sucesso para Google Sheets!")
-            print(f"📄 Resposta: {response.text[:150]}")
+            print("✅ Dados enviados com sucesso para Google Sheets!")
             return True
         else:
             print(f"⚠️ Status HTTP: {response.status_code}")
-            print(f"📄 Resposta: {response.text[:200]}")
             return False
             
-    except requests.exceptions.Timeout:
-        print("❌ Timeout ao enviar para Google Sheets (>180s)")
-        return False
     except Exception as e:
-        print(f"❌ Erro ao enviar para Google Sheets: {e}")
+        print(f"❌ Erro ao enviar: {e}")
         return False
 
 def main():
@@ -403,71 +401,40 @@ def main():
     session.cookies.update(cookies_dict)
     
     adapter = requests.adapters.HTTPAdapter(
-        pool_connections=NUM_THREADS + 5,
-        pool_maxsize=NUM_THREADS + 5,
+        pool_connections=NUM_THREADS_COLETA + 5,
+        pool_maxsize=NUM_THREADS_COLETA + 5,
         max_retries=2
     )
     session.mount('https://', adapter)
     
-    print("\n" + "="*70)
-    print("🧠 FASE 1: DESCOBERTA INTELIGENTE DE RANGE")
-    print("="*70)
+    # FASE 1: Exploração rápida
+    chunks_com_alunos = fase1_exploracao_rapida(session, ids_igrejas)
     
-    # Buscar primeiro aluno
-    primeiro_id = buscar_primeiro_aluno_hortolandia(session, ids_igrejas, ID_MINIMO, ID_MAXIMO)
-    
-    if not primeiro_id:
-        print("\n❌ Nenhum aluno de Hortolândia encontrado no range completo!")
+    if not chunks_com_alunos:
+        print("\n❌ Nenhum aluno de Hortolândia encontrado em todo o range!")
         return
     
-    print(f"\n🎯 PRIMEIRO aluno encontrado: ID {primeiro_id:,}")
-    
-    # Buscar último aluno (começando depois do primeiro)
-    ultimo_id = buscar_ultimo_aluno_hortolandia(session, ids_igrejas, primeiro_id, ID_MAXIMO)
-    
-    if not ultimo_id:
-        ultimo_id = primeiro_id
-    
-    print(f"🎯 ÚLTIMO aluno encontrado: ID {ultimo_id:,}")
-    
-    # Adicionar margem de segurança
-    margem = 1000
-    range_inicio = max(1, primeiro_id - margem)
-    range_fim = min(ID_MAXIMO, ultimo_id + margem)
-    
-    print(f"\n📊 Range otimizado com margem de {margem}: {range_inicio:,} - {range_fim:,}")
-    print(f"⚡ Economia: verificar apenas {range_fim - range_inicio + 1:,} IDs ao invés de {ID_MAXIMO:,}!")
-    print(f"🎉 Redução de {100 * (1 - (range_fim - range_inicio + 1) / ID_MAXIMO):.1f}% no trabalho!")
-    
-    print("\n" + "="*70)
-    print("🎓 FASE 2: COLETA COMPLETA NO RANGE OTIMIZADO")
-    print("="*70)
-    
-    # Executar coleta paralela no range otimizado
-    alunos_hortolandia = executar_coleta_paralela_alunos(session, ids_igrejas, range_inicio, range_fim, NUM_THREADS)
+    # FASE 2: Coleta completa
+    alunos_hortolandia = fase2_coleta_completa(session, chunks_com_alunos, ids_igrejas)
     
     tempo_total = time.time() - tempo_inicio
     
     print(f"\n{'='*70}")
-    print(f"🏁 COLETA DE ALUNOS FINALIZADA!")
+    print(f"🏁 PROCESSO FINALIZADO!")
     print(f"{'='*70}")
-    print(f"🎓 Alunos de Hortolândia encontrados: {len(alunos_hortolandia)}")
+    print(f"🎓 Total de alunos encontrados: {len(alunos_hortolandia)}")
     print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
-    print(f"📈 Range otimizado: {range_inicio:,} - {range_fim:,} ({range_fim - range_inicio + 1:,} IDs)")
     
     if alunos_hortolandia:
-        print(f"⚡ Velocidade: {(range_fim - range_inicio + 1)/tempo_total:.2f} IDs verificados/segundo")
-        print(f"\n📋 Primeiros 10 alunos encontrados:")
-        
+        print(f"\n📋 Primeiros 10 alunos:")
         for i, aluno in enumerate(sorted(alunos_hortolandia, key=lambda x: x['id_aluno'])[:10]):
-            print(f"   {i+1}. ID: {aluno['id_aluno']} | Igreja: {aluno['id_igreja']} | {aluno['nome'][:50]}")
+            print(f"   {i+1}. ID {aluno['id_aluno']} | Igreja {aluno['id_igreja']} | {aluno['nome'][:50]}")
         
         if len(alunos_hortolandia) > 10:
             print(f"   ... e mais {len(alunos_hortolandia) - 10} alunos")
         
         # Estatísticas por igreja
         print(f"\n📊 Distribuição por igreja:")
-        from collections import Counter
         distribuicao = Counter([a['id_igreja'] for a in alunos_hortolandia])
         for igreja_id, qtd in distribuicao.most_common():
             print(f"   Igreja {igreja_id}: {qtd} alunos")
@@ -476,12 +443,9 @@ def main():
         salvar_alunos_em_arquivo(alunos_hortolandia)
         
         # Enviar para Google Sheets
-        enviar_alunos_para_sheets(alunos_hortolandia, tempo_total, ids_igrejas, range_inicio, range_fim)
+        enviar_alunos_para_sheets(alunos_hortolandia, tempo_total, ids_igrejas)
     
-    else:
-        print("⚠️ Nenhum aluno de Hortolândia foi encontrado neste range")
-    
-    print(f"\n🎯 Processo finalizado!")
+    print(f"\n🎯 Processo finalizado com sucesso!")
 
 if __name__ == "__main__":
     main()
