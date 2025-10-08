@@ -675,9 +675,9 @@ def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
     try:
         # Gerar resumo dos alunos
         resumo_alunos = gerar_resumo_alunos(alunos, todos_dados)
-        
+       
         payload = {
-            'acao': 'atualizar_licoes',
+            'tipo': 'licoes_alunos',  # ✅ CORRETO
             'mts_individual': todos_dados['mts_individual'],
             'mts_grupo': todos_dados['mts_grupo'],
             'msa_individual': todos_dados['msa_individual'],
@@ -688,9 +688,16 @@ def enviar_para_sheets(todos_dados: Dict, alunos: List[Dict]):
             'metodos': todos_dados['metodos'],
             'escalas_individual': todos_dados['escalas_individual'],
             'escalas_grupo': todos_dados['escalas_grupo'],
-            'resumo_alunos': resumo_alunos
+            'resumo': resumo_alunos,  # ✅ Chamado 'resumo' no Apps Script
+            'metadata': {  # ✅ Adicionar metadata
+                'total_alunos_processados': len(alunos),
+                'alunos_com_dados': stats['com_dados'],
+                'alunos_sem_dados': stats['sem_dados'],
+                'tempo_coleta_segundos': time.time() - stats['tempo_inicio'],
+                'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
         }
-        
+
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=300)
         
         if response.status_code == 200:
