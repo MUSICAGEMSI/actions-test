@@ -37,13 +37,25 @@ if not EMAIL or not SENHA:
     exit(1)
 
 def verificar_hortolandia(texto: str) -> bool:
-    """Verifica se o texto contém referência a Hortolândia"""
+    """Verifica se o texto contém referência a Hortolândia DO SETOR CAMPINAS"""
     if not texto:
         return False
+    
     texto_upper = texto.upper()
-    variacoes = ["HORTOL", "HORTOLANDIA", "HORTOLÃNDIA", "HORTOLÂNDIA"]
-    return any(var in texto_upper for var in variacoes)
-
+    
+    # Verifica se contém variações de Hortolândia
+    variacoes_hortolandia = ["HORTOL", "HORTOLANDIA", "HORTOLÃNDIA", "HORTOLÂNDIA"]
+    tem_hortolandia = any(var in texto_upper for var in variacoes_hortolandia)
+    
+    if not tem_hortolandia:
+        return False
+    
+    # CRÍTICO: Verifica se pertence ao setor CAMPINAS
+    # Padrão esperado: BR-SP-CAMPINAS-HORTOLÂNDIA
+    tem_setor_campinas = "BR-SP-CAMPINAS" in texto_upper or "CAMPINAS-HORTOL" in texto_upper
+    
+    return tem_setor_campinas
+    
 def extrair_dados_localidade(texto_completo: str, igreja_id: int) -> Dict:
     """Extrai dados estruturados da localidade"""
     try:
