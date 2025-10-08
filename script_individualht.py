@@ -23,8 +23,8 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c
 
 # ========== CONFIGURAÇÃO HÍBRIDA - VELOCIDADE + 0% ERRO ==========
 # FASE 1: Assíncrona Ultra-Rápida (captura 98% dos alunos)
-ASYNC_CONNECTIONS = 250        # Conexões simultâneas otimizadas
-ASYNC_TIMEOUT = 4              # Timeout balanceado
+ASYNC_CONNECTIONS = 20        # Conexões simultâneas otimizadas
+ASYNC_TIMEOUT = 12              # Timeout balanceado
 ASYNC_MAX_RETRIES = 2          # Retries rápidos
 
 # FASE 2: Fallback Síncrono Robusto (2% restantes)
