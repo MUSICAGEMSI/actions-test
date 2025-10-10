@@ -630,8 +630,9 @@ def main():
     # BUSCA HÍBRIDA ROBUSTA: Baseada em "Data e Horário de abertura"
     # ========================================================================
     
-    # Data/hora de início: 01/07/2025 00:00:00
-    data_hora_inicio = datetime(2025, 7, 1, 0, 0, 0)
+    # Data/hora de início: 01/01/2024 00:00:00
+    data_hora_inicio = datetime(2024, 1, 1, 0, 0, 0)
+    
     # Data/hora de fim: momento atual da execução
     data_hora_fim = datetime.now()
     
