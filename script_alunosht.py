@@ -103,8 +103,8 @@ class ColetorAlunosHortolandia:
         Verifica um batch de IDs de alunos e retorna os que são de Hortolândia
         """
         for aluno_id in ids_batch:
-            try:
-                url = f"https://musical.congregacao.org.br/grp_musical/editar/{aluno_id}"
+            try:              
+                url = f"https://musical.congregacao.org.br/alunos/editar/{aluno_id}"
                 
                 resp = self.session.get(url, headers=self.headers, timeout=10)
                 self.requisicoes_feitas += 1
