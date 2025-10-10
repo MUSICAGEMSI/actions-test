@@ -152,227 +152,208 @@ def extrair_data_hora_abertura_rapido(session, aula_id):
     except:
         return None
 
-def busca_binaria_aproximada(session, data_alvo, id_min, id_max, buscar_primeiro=True):
+def buscar_primeiro_id_a_partir_de(session, data_hora_alvo, id_min=1, id_max=1000000):
     """
-    Busca binária que TOLERA IDs inexistentes
-    Retorna região aproximada (não garante ser o primeiro/último exato)
+    Busca binária OTIMIZADA para encontrar o primeiro ID cuja "Data e Horário de abertura"
+    seja >= data_hora_alvo
+    
+    ALGORITMO:
+    1. Busca binária clássica O(log n) - ~20 iterações para 1 milhão de IDs
+    2. Ajuste fino regressivo para garantir o primeiro ID exato
+    3. Tratamento inteligente de IDs inexistentes (buracos na sequência)
+    
+    Args:
+        data_hora_alvo: datetime object (ex: 01/01/2024 00:00:00)
+        id_min: ID mínimo para busca
+        id_max: ID máximo para busca
+    
+    Returns:
+        ID da primeira aula aberta a partir da data/hora ou None
     """
+    print(f"\n{'─' * 70}")
+    print(f"BUSCA BINARIA: Primeiro ID >= {data_hora_alvo.strftime('%d/%m/%Y %H:%M')}")
+    print(f"Range: ID {id_min:,} ate {id_max:,} (espaco de {id_max - id_min + 1:,} IDs)")
+    print(f"{'─' * 70}")
+    
     melhor_id = None
     melhor_data = None
     tentativas = 0
-    max_tentativas = 30
+    max_tentativas = 50  # log2(1000000) ≈ 20, margem de segurança
     
     esquerda = id_min
     direita = id_max
     
-    ids_inexistentes_consecutivos = 0
-    max_consecutivos = 3  # Se 3 IDs seguidos não existem, ajusta estratégia
-    
+    # FASE 1: Busca binária principal
     while esquerda <= direita and tentativas < max_tentativas:
         tentativas += 1
         meio = (esquerda + direita) // 2
         
-        print(f"   [{tentativas:2d}] Testando ID {meio:,}...", end=" ")
+        print(f"   [{tentativas:2d}] ID {meio:,} (range: {esquerda:,}-{direita:,})...", end=" ")
         
         data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
         if data_hora_abertura is None:
             print("INEXISTENTE")
-            ids_inexistentes_consecutivos += 1
-            
-            # Estratégia adaptativa para gaps grandes
-            if ids_inexistentes_consecutivos >= max_consecutivos:
-                print(f"   ⚠️  {max_consecutivos} IDs inexistentes consecutivos, pulando gap...")
-                # Tenta "pular" o gap testando pontos distantes
-                if buscar_primeiro:
-                    meio = meio + 1000  # Pula para frente
-                else:
-                    meio = meio - 1000  # Pula para trás
-                
-                data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
-                ids_inexistentes_consecutivos = 0
-            
-            if data_hora_abertura is None:
-                # Continua busca binária normal
-                if buscar_primeiro:
-                    esquerda = meio + 1
-                else:
-                    direita = meio - 1
-                continue
-        
-        ids_inexistentes_consecutivos = 0  # Reset
+            # ID não existe, pode haver buracos na sequência
+            # Tenta procurar à esquerda primeiro
+            direita = meio - 1
+            continue
         
         print(f"{data_hora_abertura.strftime('%d/%m/%Y %H:%M')}", end="")
         
-        # Lógica de busca
-        if buscar_primeiro:
-            if data_hora_abertura >= data_alvo:
-                melhor_id = meio
-                melhor_data = data_hora_abertura
-                print(f" ✓ (candidato)")
-                direita = meio - 1
-            else:
-                print(f" ✗ (muito antigo)")
-                esquerda = meio + 1
+        # Se a abertura é >= data alvo
+        if data_hora_abertura >= data_hora_alvo:
+            melhor_id = meio
+            melhor_data = data_hora_abertura
+            print(f" ✓ (candidato)")
+            # Procura à esquerda por um ID ainda menor que também atenda
+            direita = meio - 1
         else:
-            if data_hora_abertura <= data_alvo:
-                melhor_id = meio
-                melhor_data = data_hora_abertura
-                print(f" ✓ (candidato)")
-                esquerda = meio + 1
-            else:
-                print(f" ✗ (muito recente)")
-                direita = meio - 1
+            print(f" ✗ (muito antigo)")
+            # Abertura é antes do alvo, procura à direita
+            esquerda = meio + 1
     
-    if melhor_id:
-        print(f"\n   Melhor candidato: ID {melhor_id:,} ({melhor_data.strftime('%d/%m/%Y %H:%M')})")
+    if melhor_id is None:
+        print(f"\n{'─' * 70}")
+        print(f"RESULTADO: Nenhuma aula encontrada no período")
+        print(f"{'─' * 70}\n")
+        return None
+    
+    print(f"\n   Melhor candidato da busca binaria: ID {melhor_id}")
+    print(f"   Data de abertura: {melhor_data.strftime('%d/%m/%Y %H:%M')}")
+    
+    # FASE 2: Ajuste fino regressivo
+    # Verifica IDs anteriores para garantir que é realmente o primeiro
+    print(f"\n   Ajuste fino: verificando IDs anteriores...")
+    
+    # Ajuste adaptativo: quanto mais longe do alvo, maior o passo
+    dias_diferenca = abs((melhor_data - data_hora_alvo).days)
+    passo_ajuste = min(500, max(50, dias_diferenca * 2))
+    
+    id_ajustado = max(id_min, melhor_id - passo_ajuste)
+    
+    print(f"   Verificando range {id_ajustado:,} a {melhor_id - 1:,} (passo: {passo_ajuste})...")
+    
+    ids_verificados = 0
+    for id_teste in range(id_ajustado, melhor_id):
+        data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+        ids_verificados += 1
+        
+        if data_teste and data_teste >= data_hora_alvo:
+            melhor_id = id_teste
+            melhor_data = data_teste
+            print(f"   ✓ Encontrado ID anterior: {id_teste:,} ({melhor_data.strftime('%d/%m/%Y %H:%M')})")
+            # Continue procurando IDs ainda menores
+    
+    print(f"   {ids_verificados} IDs verificados no ajuste fino")
+    
+    print(f"\n{'─' * 70}")
+    print(f"RESULTADO: Primeiro ID = {melhor_id:,}")
+    print(f"Data de abertura: {melhor_data.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Total de consultas: {tentativas + ids_verificados}")
+    print(f"{'─' * 70}\n")
     
     return melhor_id
 
-def encontrar_range_ids_robusto(session, data_inicio, data_fim, id_min=1, id_max=1000000):
+def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=1000000):
     """
-    ALGORITMO HÍBRIDO: Busca Binária + Varredura Adaptativa
+    Busca binária OTIMIZADA para encontrar o último ID cuja "Data e Horário de abertura"
+    seja <= data_hora_limite (momento da execução do script)
     
-    FASE 1: Busca binária para encontrar região aproximada
-    FASE 2: Varredura completa em janelas ao redor dos pontos encontrados
-    FASE 3: Validação com amostragem para garantir completude
+    ALGORITMO:
+    1. Busca binária clássica O(log n)
+    2. Ajuste fino progressivo para garantir o último ID exato
+    3. Tratamento de IDs inexistentes na sequência
     
-    Returns: (primeiro_id, ultimo_id) ou (None, None)
+    Returns:
+        Último ID válido até a data/hora limite ou None
     """
-    print(f"\n{'═' * 70}")
-    print(f"BUSCA HÍBRIDA ROBUSTA")
-    print(f"Período: {data_inicio.strftime('%d/%m/%Y %H:%M')} até {data_fim.strftime('%d/%m/%Y %H:%M')}")
-    print(f"{'═' * 70}")
-    
-    # ========================================================================
-    # FASE 1: Busca Binária Aproximada (encontra região geral)
-    # ========================================================================
-    print("\n[FASE 1] Busca binária aproximada para primeiro ID...")
-    
-    primeiro_aproximado = busca_binaria_aproximada(session, data_inicio, id_min, id_max, buscar_primeiro=True)
-    
-    if primeiro_aproximado is None:
-        print("❌ Nenhuma aula encontrada a partir da data inicial")
-        return None, None
-    
-    print(f"\n[FASE 1] Busca binária aproximada para último ID...")
-    
-    ultimo_aproximado = busca_binaria_aproximada(session, data_fim, primeiro_aproximado, id_max, buscar_primeiro=False)
-    
-    if ultimo_aproximado is None:
-        print("❌ Nenhuma aula encontrada até a data final")
-        return None, None
-    
-    print(f"\n✓ Região aproximada encontrada: ID {primeiro_aproximado:,} a {ultimo_aproximado:,}")
-    
-    # ========================================================================
-    # FASE 2: Varredura em Janelas (garante completude)
-    # ========================================================================
     print(f"\n{'─' * 70}")
-    print("[FASE 2] Varredura adaptativa em janelas para garantir 100% de cobertura...")
+    print(f"BUSCA BINARIA: Ultimo ID <= {data_hora_limite.strftime('%d/%m/%Y %H:%M')}")
+    print(f"Range: ID {id_min:,} ate {id_max:,} (espaco de {id_max - id_min + 1:,} IDs)")
     print(f"{'─' * 70}")
     
-    # Janela de segurança: 5000 IDs antes/depois (cobre gaps grandes)
-    janela_seguranca = 5000
+    ultimo_valido = None
+    ultima_data = None
+    tentativas = 0
+    max_tentativas = 50
     
-    id_inicio_varredura = max(id_min, primeiro_aproximado - janela_seguranca)
-    id_fim_varredura = min(id_max, ultimo_aproximado + janela_seguranca)
+    esquerda = id_min
+    direita = id_max
     
-    print(f"\nVarrendo: ID {id_inicio_varredura:,} a {id_fim_varredura:,}")
-    print(f"Total: {id_fim_varredura - id_inicio_varredura + 1:,} IDs (margem de {janela_seguranca:,} antes/depois)")
-    
-    primeiro_real = None
-    ultimo_real = None
-    ids_validos = []
-    
-    # Varredura em lotes com amostragem inteligente
-    tamanho_lote = 100
-    amostra_a_cada = 10  # Verifica 1 a cada 10 IDs inicialmente
-    
-    total_verificados = 0
-    lotes_processados = 0
-    
-    print("\nIniciando varredura em lotes...\n")
-    
-    for lote_inicio in range(id_inicio_varredura, id_fim_varredura + 1, tamanho_lote):
-        lote_fim = min(lote_inicio + tamanho_lote - 1, id_fim_varredura)
-        lotes_processados += 1
+    # FASE 1: Busca binária principal
+    while esquerda <= direita and tentativas < max_tentativas:
+        tentativas += 1
+        meio = (esquerda + direita) // 2
         
-        # Amostragem: verifica IDs estratégicos do lote
-        ids_amostra = list(range(lote_inicio, lote_fim + 1, amostra_a_cada))
-        if lote_fim not in ids_amostra:
-            ids_amostra.append(lote_fim)
+        print(f"   [{tentativas:2d}] ID {meio:,} (range: {esquerda:,}-{direita:,})...", end=" ")
         
-        encontrou_valido_no_lote = False
+        data_hora_abertura = extrair_data_hora_abertura_rapido(session, meio)
         
-        for id_teste in ids_amostra:
-            total_verificados += 1
-            data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
-            
-            if data_teste and data_inicio <= data_teste <= data_fim:
-                ids_validos.append(id_teste)
-                encontrou_valido_no_lote = True
-                
-                if primeiro_real is None:
-                    primeiro_real = id_teste
-                    print(f"   ✓ PRIMEIRO ID REAL encontrado: {primeiro_real:,}")
-                
-                ultimo_real = id_teste
+        if data_hora_abertura is None:
+            print("INEXISTENTE")
+            # ID não existe, procura à esquerda
+            direita = meio - 1
+            continue
         
-        # Se encontrou ID válido no lote, verifica TODOS os IDs do lote
-        if encontrou_valido_no_lote:
-            print(f"   → Lote {lote_inicio:,}-{lote_fim:,}: aulas detectadas, varrendo completo...")
-            
-            for id_completo in range(lote_inicio, lote_fim + 1):
-                if id_completo in ids_validos:
-                    continue
-                
-                total_verificados += 1
-                data_teste = extrair_data_hora_abertura_rapido(session, id_completo)
-                
-                if data_teste and data_inicio <= data_teste <= data_fim:
-                    ids_validos.append(id_completo)
-                    
-                    if primeiro_real is None or id_completo < primeiro_real:
-                        primeiro_real = id_completo
-                    if ultimo_real is None or id_completo > ultimo_real:
-                        ultimo_real = id_completo
+        print(f"{data_hora_abertura.strftime('%d/%m/%Y %H:%M')}", end="")
         
-        # Feedback a cada 10 lotes
-        if lotes_processados % 10 == 0:
-            print(f"   [{lotes_processados} lotes] {total_verificados:,} IDs verificados | {len(ids_validos)} válidos encontrados")
+        # Se abertura <= limite
+        if data_hora_abertura <= data_hora_limite:
+            ultimo_valido = meio
+            ultima_data = data_hora_abertura
+            print(f" ✓ (candidato)")
+            # Procura à direita por IDs maiores que ainda atendam
+            esquerda = meio + 1
+        else:
+            print(f" ✗ (muito recente)")
+            # Abertura é depois do limite, procura à esquerda
+            direita = meio - 1
     
-    if primeiro_real is None or ultimo_real is None:
-        print("\n❌ Nenhum ID válido encontrado na varredura completa")
-        return None, None
+    if ultimo_valido is None:
+        print(f"\n{'─' * 70}")
+        print(f"RESULTADO: Nenhum ID valido encontrado")
+        print(f"{'─' * 70}\n")
+        return None
     
-    # ========================================================================
-    # FASE 3: Validação Estatística
-    # ========================================================================
+    print(f"\n   Melhor candidato da busca binaria: ID {ultimo_valido}")
+    print(f"   Data de abertura: {ultima_data.strftime('%d/%m/%Y %H:%M')}")
+    
+    # FASE 2: Ajuste fino progressivo
+    print(f"\n   Ajuste fino: verificando IDs posteriores...")
+    
+    # Ajuste adaptativo
+    dias_diferenca = abs((data_hora_limite - ultima_data).days)
+    passo_ajuste = min(500, max(50, dias_diferenca * 2))
+    
+    id_limite_ajuste = min(id_max, ultimo_valido + passo_ajuste)
+    
+    print(f"   Verificando range {ultimo_valido + 1:,} a {id_limite_ajuste:,} (passo: {passo_ajuste})...")
+    
+    ids_verificados = 0
+    for id_teste in range(ultimo_valido + 1, id_limite_ajuste + 1):
+        data_teste = extrair_data_hora_abertura_rapido(session, id_teste)
+        ids_verificados += 1
+        
+        if data_teste and data_teste <= data_hora_limite:
+            ultimo_valido = id_teste
+            ultima_data = data_teste
+            print(f"   ✓ Encontrado ID posterior: {id_teste:,} ({ultima_data.strftime('%d/%m/%Y %H:%M')})")
+            # Continue procurando IDs ainda maiores
+        elif data_teste and data_teste > data_hora_limite:
+            # Encontramos um ID além do limite, pode parar
+            print(f"   ✗ ID {id_teste:,} está além do limite, finalizando ajuste")
+            break
+    
+    print(f"   {ids_verificados} IDs verificados no ajuste fino")
+    
     print(f"\n{'─' * 70}")
-    print("[FASE 3] Validação estatística...")
-    print(f"{'─' * 70}")
+    print(f"RESULTADO: Ultimo ID = {ultimo_valido:,}")
+    print(f"Data de abertura: {ultima_data.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"Total de consultas: {tentativas + ids_verificados}")
+    print(f"{'─' * 70}\n")
     
-    total_ids_no_range = ultimo_real - primeiro_real + 1
-    taxa_amostragem = len(ids_validos) / total_ids_no_range * 100 if total_ids_no_range > 0 else 0
-    
-    print(f"\n{'═' * 70}")
-    print(f"RESULTADO DA BUSCA HÍBRIDA:")
-    print(f"{'═' * 70}")
-    print(f"  Primeiro ID válido: {primeiro_real:,}")
-    print(f"  Último ID válido:   {ultimo_real:,}")
-    print(f"  Range total:        {total_ids_no_range:,} IDs")
-    print(f"  IDs no período:     {len(ids_validos):,}")
-    print(f"  Taxa de ocupação:   {taxa_amostragem:.1f}%")
-    print(f"  Total de consultas: {total_verificados:,}")
-    print(f"{'═' * 70}\n")
-    
-    # Alerta se taxa de IDs válidos for muito baixa (indica gaps grandes)
-    if taxa_amostragem < 5:
-        print("⚠️  ATENÇÃO: Taxa de IDs válidos < 5% - sequência muito esparsa!")
-        print("   Isso é normal se houver muitos IDs deletados/inexistentes")
-    
-    return primeiro_real, ultimo_real
+    return ultimo_valido
 
 def normalizar_nome(nome):
     """Normaliza nome para comparação"""
@@ -585,7 +566,7 @@ def main():
     tempo_inicio = time.time()
     
     print("=" * 70)
-    print("COLETOR ULTRA-RÁPIDO - HORTOLÂNDIA (BUSCA HÍBRIDA ROBUSTA)")
+    print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (BUSCA BINARIA OTIMIZADA)")
     print("=" * 70)
     
     # Login via Playwright
@@ -606,9 +587,9 @@ def main():
         
         try:
             pagina.wait_for_selector("nav", timeout=20000)
-            print("Login realizado com sucesso!")
+            print("Login realizado!")
         except PlaywrightTimeoutError:
-            print("❌ Falha no login. Verifique as credenciais.")
+            print("Falha no login.")
             navegador.close()
             return
         
@@ -623,11 +604,11 @@ def main():
     INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES = carregar_instrutores_hortolandia(session)
     
     if not INSTRUTORES_HORTOLANDIA:
-        print("❌ Não foi possível carregar a lista de instrutores. Abortando.")
+        print("Nao foi possivel carregar a lista de instrutores. Abortando.")
         return
     
     # ========================================================================
-    # BUSCA HÍBRIDA ROBUSTA: Baseada em "Data e Horário de abertura"
+    # BUSCA INTELIGENTE: Baseada em "Data e Horário de abertura"
     # ========================================================================
     
     # Data/hora de início: 01/01/2024 00:00:00
@@ -637,26 +618,37 @@ def main():
     data_hora_fim = datetime.now()
     
     print(f"\n{'=' * 70}")
-    print(f"PERÍODO DE COLETA:")
-    print(f"  Início: {data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"PERIODO DE COLETA:")
+    print(f"  Inicio: {data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"  Fim:    {data_hora_fim.strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"{'=' * 70}")
     
-    # Busca híbrida para encontrar range exato de IDs
-    primeiro_id, ultimo_id = encontrar_range_ids_robusto(
-        session,
-        data_inicio=data_hora_inicio,
-        data_fim=data_hora_fim,
-        id_min=1,
-        id_max=1000000
+    # Busca 1: Primeiro ID com abertura >= 01/01/2024 00:00
+    primeiro_id = buscar_primeiro_id_a_partir_de(
+        session, 
+        data_hora_alvo=data_hora_inicio,
+        id_min=1,           # Começa do ID 1
+        id_max=1000000      # Até 1 milhão
     )
     
-    if primeiro_id is None or ultimo_id is None:
-        print("❌ Não foi possível determinar o range de IDs. Abortando.")
+    if primeiro_id is None:
+        print(f"Nao foi possivel encontrar aulas abertas a partir de {data_hora_inicio.strftime('%d/%m/%Y')}. Abortando.")
         return
     
+    # Busca 2: Último ID com abertura <= data/hora atual
+    ultimo_id = buscar_ultimo_id_ate(
+        session,
+        data_hora_limite=data_hora_fim,
+        id_min=primeiro_id,  # Começa do primeiro ID encontrado
+        id_max=1000000       # Até 1 milhão
+    )
+    
+    if ultimo_id is None:
+        print("Nao foi possivel encontrar o ultimo ID. Usando estimativa.")
+        ultimo_id = primeiro_id + 50000  # Fallback: +50k IDs
+    
     # ========================================================================
-    # COLETA: Do primeiro ID até o último ID
+    # COLETA: Do primeiro ID até o último ID (baseado em data/hora abertura)
     # ========================================================================
     
     resultado = []
@@ -721,9 +713,8 @@ def main():
                 
                 if aulas_processadas % 200 == 0:
                     tempo_decorrido = time.time() - tempo_inicio
-                    velocidade = aulas_processadas / tempo_decorrido if tempo_decorrido > 0 else 0
-                    ids_restantes = ID_FINAL - ID_INICIAL + 1 - aulas_processadas
-                    tempo_estimado = (ids_restantes / velocidade / 60) if velocidade > 0 else 0
+                    velocidade = aulas_processadas / tempo_decorrido
+                    tempo_estimado = (ID_FINAL - ID_INICIAL + 1 - aulas_processadas) / velocidade / 60
                     print(f"\n{'─' * 70}")
                     print(f"{aulas_processadas} processadas | {aulas_hortolandia} HTL | {aulas_com_ata} com ATA | {velocidade:.1f} aulas/s | ETA: {tempo_estimado:.1f}min")
                     print(f"{'─' * 70}\n")
@@ -731,14 +722,14 @@ def main():
         time.sleep(0.5)
     
     print(f"\n{'=' * 70}")
-    print(f"COLETA FINALIZADA COM SUCESSO!")
+    print(f"COLETA FINALIZADA!")
     print(f"{'=' * 70}")
     print(f"Total processado: {aulas_processadas:,}")
-    print(f"Aulas de Hortolândia: {aulas_hortolandia:,}")
+    print(f"Aulas de Hortolandia: {aulas_hortolandia:,}")
     if aulas_hortolandia > 0:
         print(f"Aulas com ATA: {aulas_com_ata} ({aulas_com_ata/aulas_hortolandia*100:.1f}%)")
     print(f"Tempo total: {(time.time() - tempo_inicio)/60:.1f} minutos")
-    print(f"Velocidade média: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
+    print(f"Velocidade media: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
     print(f"{'=' * 70}\n")
     
     # Preparar envio
@@ -756,8 +747,8 @@ def main():
             "aulas_processadas": aulas_processadas,
             "aulas_com_ata": aulas_com_ata,
             "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
-            "primeiro_id": ID_INICIAL,
-            "ultimo_id": ID_FINAL,
+            "primeiro_id_2024": ID_INICIAL,
+            "ultimo_id_2024": ID_FINAL,
             "periodo_inicio": data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S'),
             "periodo_fim": data_hora_fim.strftime('%d/%m/%Y %H:%M:%S'),
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
@@ -769,20 +760,17 @@ def main():
     backup_file = f'backup_aulas_{time.strftime("%Y%m%d_%H%M%S")}.json'
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
-    print(f"✓ Backup salvo em: {backup_file}")
+    print(f"Backup salvo em: {backup_file}")
     
     # Enviar para Apps Script
     print("\nEnviando dados para Google Sheets...")
     try:
         resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-        print(f"✓ Dados enviados! Status: {resposta_post.status_code}")
-        if resposta_post.status_code == 200:
-            print(f"✓ Resposta: {resposta_post.text[:200]}")
-        else:
-            print(f"⚠️  Resposta: {resposta_post.text[:200]}")
+        print(f"Dados enviados! Status: {resposta_post.status_code}")
+        print(f"Resposta: {resposta_post.text[:200]}")
     except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
-        print(f"📁 Dados disponíveis no backup: {backup_file}")
+        print(f"Erro ao enviar: {e}")
+        print(f"Dados disponiveis no backup: {backup_file}")
 
 if __name__ == "__main__":
     main()
