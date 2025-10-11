@@ -16,6 +16,7 @@ on:
           - script_historicoht.py
           - script_ministerio.py
           - script_usuarios.py
+          - script_orquestraccb1.py
 
 jobs:
   coleta:
