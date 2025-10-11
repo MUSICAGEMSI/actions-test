@@ -17,7 +17,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 
 # Parâmetros de range
-RANGE_INICIO = 1
+RANGE_INICIO = 600000
 RANGE_FIM = 800000
 NUM_THREADS = 25
 
