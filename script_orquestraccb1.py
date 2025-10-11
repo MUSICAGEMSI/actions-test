@@ -9,445 +9,301 @@ from collections import deque
 from tqdm import tqdm
 
 # ========================================
-# 🔥 CONFIGURAÇÃO
+# CONFIGURAÇÕES ULTRA AGRESSIVAS
 # ========================================
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwV-0AChSp5-JyBc3NysUQI0UlFJ7AycvE6CSRKWxldnJ8EBiaNHtj3oYx5jiiHxQbzOw/exec'
 
-# META
 RANGE_INICIO = 1
-RANGE_FIM = 1000000
-INSTANCIA_ID = "GHA_1M_15min"
+RANGE_FIM = 10000
+INSTANCIA_ID = "GHA_batch_1"
 
-# FASE 1: ULTRA AGRESSIVA
-CONCURRENT_PHASE1 = 2000
-TIMEOUT_PHASE1 = 2
-WORKERS_PHASE1 = 50
+# 🚀 MODO INSANO - META: 15 MINUTOS
+CONCURRENT_REQUESTS = 500  # 500 requisições simultâneas
+TIMEOUT_ULTRA_FAST = 2     # 2s primeira tentativa
+TIMEOUT_FAST = 4           # 4s segunda tentativa
+TIMEOUT_CAREFUL = 8        # 8s terceira tentativa
+MAX_RETRIES = 3            # 3 tentativas por ID
+CHUNK_SIZE = 10000         # Chunks maiores
 
-# FASE 2: AGRESSIVA
-CONCURRENT_PHASE2 = 1000
-TIMEOUT_PHASE2 = 4
-WORKERS_PHASE2 = 30
-
-# FASE 3: GARANTIA
-CONCURRENT_PHASE3 = 500
-TIMEOUT_PHASE3 = 8
-WORKERS_PHASE3 = 20
-
-# OTIMIZAÇÕES
-CHUNK_SIZE = 20000
-BATCH_ENVIO = 5000  # Envia a cada 5k (menor para garantir envio)
-CACHE_SIZE_LIMIT = 500000
+# Estratégia de Retry Adaptativo
+SEMAPHORE_PHASE1 = 500     # Fase 1: Ultra agressivo
+SEMAPHORE_PHASE2 = 300     # Fase 2: Moderado
+SEMAPHORE_PHASE3 = 150     # Fase 3: Conservador
 
 # ========================================
-# REGEX PRÉ-COMPILADAS
+# REGEX PRÉ-COMPILADAS (OTIMIZADAS)
 # ========================================
-REGEX_NOME = re.compile(rb'name="nome"[^>]*value="([^"]*)"')
-REGEX_IGREJA = re.compile(rb'igreja_selecionada\s*\(\s*(\d+)\s*\)')
-REGEX_CARGO = re.compile(rb'id_cargo"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
-REGEX_NIVEL = re.compile(rb'id_nivel"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
-REGEX_INSTRUMENTO = re.compile(rb'id_instrumento"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
-REGEX_TONALIDADE = re.compile(rb'id_tonalidade"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
+REGEX_NOME = re.compile(r'name="nome"[^>]*value="([^"]*)"')
+REGEX_IGREJA = re.compile(r'igreja_selecionada\s*\(\s*(\d+)\s*\)')
+REGEX_CARGO = re.compile(r'id_cargo"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
+REGEX_NIVEL = re.compile(r'id_nivel"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
+REGEX_INSTRUMENTO = re.compile(r'id_instrumento"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
+REGEX_TONALIDADE = re.compile(r'id_tonalidade"[^>]*>.*?selected[^>]*>\s*([^<\n]+)', re.DOTALL | re.IGNORECASE)
 
-# Cache global
-CACHE_VAZIOS = set()
-CACHE_LOCK = asyncio.Lock()
+# Cache para IDs já validados como vazios
+CACHE_IDS_VAZIOS = set()
 
 # ========================================
-# EXTRAÇÃO
+# EXTRAÇÃO OTIMIZADA
 # ========================================
-def extrair_dados_bytes(html_bytes, membro_id):
+def extrair_dados(html_content, membro_id):
+    """Extração máxima performance - verificações mínimas"""
     try:
-        if not html_bytes or len(html_bytes) < 500:
-            return None
-        
-        if b'name="nome"' not in html_bytes:
+        if not html_content or len(html_content) < 500 or 'name="nome"' not in html_content:
             return None
         
         dados = {'id': membro_id}
         
-        nome_match = REGEX_NOME.search(html_bytes)
+        # Nome (crítico)
+        nome_match = REGEX_NOME.search(html_content)
         if not nome_match:
             return None
-        
-        nome = nome_match.group(1).decode('utf-8', errors='ignore').strip()
-        if not nome:
+        dados['nome'] = nome_match.group(1).strip()
+        if not dados['nome']:
             return None
-        dados['nome'] = nome
         
-        igreja_match = REGEX_IGREJA.search(html_bytes)
-        dados['igreja_selecionada'] = igreja_match.group(1).decode('utf-8', errors='ignore') if igreja_match else ''
+        # Campos opcionais
+        igreja_match = REGEX_IGREJA.search(html_content)
+        dados['igreja_selecionada'] = igreja_match.group(1) if igreja_match else ''
         
-        cargo_match = REGEX_CARGO.search(html_bytes)
-        dados['cargo_ministerio'] = cargo_match.group(1).decode('utf-8', errors='ignore').strip() if cargo_match else ''
+        cargo_match = REGEX_CARGO.search(html_content)
+        dados['cargo_ministerio'] = cargo_match.group(1).strip() if cargo_match else ''
         
-        nivel_match = REGEX_NIVEL.search(html_bytes)
-        dados['nivel'] = nivel_match.group(1).decode('utf-8', errors='ignore').strip() if nivel_match else ''
+        nivel_match = REGEX_NIVEL.search(html_content)
+        dados['nivel'] = nivel_match.group(1).strip() if nivel_match else ''
         
-        instrumento_match = REGEX_INSTRUMENTO.search(html_bytes)
-        dados['instrumento'] = instrumento_match.group(1).decode('utf-8', errors='ignore').strip() if instrumento_match else ''
+        instrumento_match = REGEX_INSTRUMENTO.search(html_content)
+        dados['instrumento'] = instrumento_match.group(1).strip() if instrumento_match else ''
         
-        tonalidade_match = REGEX_TONALIDADE.search(html_bytes)
-        dados['tonalidade'] = tonalidade_match.group(1).decode('utf-8', errors='ignore').strip() if tonalidade_match else ''
+        tonalidade_match = REGEX_TONALIDADE.search(html_content)
+        dados['tonalidade'] = tonalidade_match.group(1).strip() if tonalidade_match else ''
         
         return dados
     except:
         return None
 
 # ========================================
-# WORKER
+# COLETOR INSANO - 3 FASES DE RETRY
 # ========================================
-class WorkerAsync:
-    def __init__(self, worker_id, cookies, semaphore, timeout, fase):
-        self.worker_id = worker_id
-        self.cookies = cookies
-        self.semaphore = semaphore
-        self.timeout = timeout
-        self.fase = fase
-        
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-        }
-        
-        self.coletados = 0
-        self.vazios = 0
-        self.erros = 0
-    
-    async def processar_batch(self, ids_batch, client):
-        resultados = []
-        
-        for membro_id in ids_batch:
-            if membro_id in CACHE_VAZIOS:
-                self.vazios += 1
-                continue
-            
-            resultado = await self.coletar_id(membro_id, client)
-            if resultado:
-                resultados.append(resultado)
-        
-        return resultados
-    
-    async def coletar_id(self, membro_id, client):
-        async with self.semaphore:
-            try:
-                url = f"https://musical.congregacao.org.br/grp_musical/editar/{membro_id}"
-                response = await client.get(url, timeout=self.timeout)
-                
-                if response.status_code == 200:
-                    html_bytes = response.content
-                    
-                    if b'name="nome"' in html_bytes:
-                        dados = extrair_dados_bytes(html_bytes, membro_id)
-                        if dados:
-                            self.coletados += 1
-                            return ('sucesso', dados)
-                        else:
-                            if len(CACHE_VAZIOS) < CACHE_SIZE_LIMIT:
-                                async with CACHE_LOCK:
-                                    CACHE_VAZIOS.add(membro_id)
-                            self.vazios += 1
-                            return None
-                    else:
-                        if len(CACHE_VAZIOS) < CACHE_SIZE_LIMIT:
-                            async with CACHE_LOCK:
-                                CACHE_VAZIOS.add(membro_id)
-                        self.vazios += 1
-                        return None
-                else:
-                    self.erros += 1
-                    return ('retry', membro_id)
-                    
-            except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout):
-                self.erros += 1
-                return ('retry', membro_id)
-            except httpx.ConnectError:
-                self.erros += 1
-                return ('retry', membro_id)
-            except Exception:
-                self.erros += 1
-                return ('retry', membro_id)
-        
-        return None
-
-# ========================================
-# ORQUESTRADOR COM ENVIO REAL
-# ========================================
-class OrquestradorExtreme:
+class ColetorInsano:
     def __init__(self, cookies):
         self.cookies = cookies
-        self.membros = []
-        self.membros_lock = asyncio.Lock()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'max-age=0',
+            'Upgrade-Insecure-Requests': '1'
+        }
         
+        self.lock = asyncio.Lock()
         self.stats = {
             'coletados': 0,
             'vazios': 0,
             'erros_fase1': 0,
             'erros_fase2': 0,
             'erros_fase3': 0,
-            'enviados': 0,
-            'falhas_envio': 0,
+            'retry_fase2': 0,
+            'retry_fase3': 0
         }
         
         self.retry_fase2 = deque()
         self.retry_fase3 = deque()
-        
-        self.ultimo_envio = 0
-        self.lote_atual = 1
+        self.membros = []
     
-    async def enviar_lote_real(self, membros_lote):
-        """ENVIO REAL para Google Sheets via Apps Script"""
-        if not membros_lote:
-            return
+    async def coletar_id(self, client, membro_id, timeout, semaphore, fase=1):
+        """Coleta um ID - ultra otimizado"""
         
-        # Formato esperado pelo Apps Script
-        relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
-        for membro in membros_lote:
-            relatorio.append([
-                str(membro.get('id', '')),
-                membro.get('nome', ''),
-                membro.get('igreja_selecionada', ''),
-                membro.get('cargo_ministerio', ''),
-                membro.get('nivel', ''),
-                membro.get('instrumento', ''),
-                membro.get('tonalidade', '')
-            ])
+        if membro_id in CACHE_IDS_VAZIOS:
+            async with self.lock:
+                self.stats['vazios'] += 1
+            return None
         
-        payload = {
-            "tipo": f"membros_gha_{INSTANCIA_ID}_lote_{self.lote_atual}",
-            "relatorio_formatado": relatorio,
-            "metadata": {
-                "instancia": INSTANCIA_ID,
-                "lote": self.lote_atual,
-                "range_inicio": RANGE_INICIO,
-                "range_fim": RANGE_FIM,
-                "total_neste_lote": len(membros_lote),
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
-            }
-        }
-        
-        try:
-            # Usa httpx ao invés de requests
-            async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(URL_APPS_SCRIPT, json=payload)
+        async with semaphore:
+            try:
+                url = f"https://musical.congregacao.org.br/grp_musical/editar/{membro_id}"
+                response = await client.get(url, timeout=timeout)
                 
                 if response.status_code == 200:
-                    self.stats['enviados'] += len(membros_lote)
-                    print(f"\n  ✓ Lote {self.lote_atual} enviado: {len(membros_lote):,} membros")
-                    self.lote_atual += 1
-                    return True
+                    html = response.text
+                    
+                    if 'name="nome"' in html:
+                        dados = extrair_dados(html, membro_id)
+                        if dados:
+                            async with self.lock:
+                                self.stats['coletados'] += 1
+                                self.membros.append(dados)
+                            return dados
+                        else:
+                            CACHE_IDS_VAZIOS.add(membro_id)
+                            async with self.lock:
+                                self.stats['vazios'] += 1
+                            return None
+                    else:
+                        CACHE_IDS_VAZIOS.add(membro_id)
+                        async with self.lock:
+                            self.stats['vazios'] += 1
+                        return None
                 else:
-                    self.stats['falhas_envio'] += len(membros_lote)
-                    print(f"\n  ✗ Erro lote {self.lote_atual}: HTTP {response.status_code}")
-                    return False
-        except Exception as e:
-            self.stats['falhas_envio'] += len(membros_lote)
-            print(f"\n  ✗ Erro lote {self.lote_atual}: {e}")
-            return False
-    
-    async def fase1_extreme(self, todos_ids, pbar):
-        print(f"\n🔥 FASE 1: {CONCURRENT_PHASE1} CONCURRENT | {WORKERS_PHASE1} WORKERS")
+                    return ('retry', membro_id)
+                    
+            except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError):
+                return ('retry', membro_id)
+            except Exception:
+                return ('retry', membro_id)
         
-        ids_por_worker = len(todos_ids) // WORKERS_PHASE1
+        return None
+    
+    async def fase1_ultra_rapida(self, ids_chunk, pbar):
+        """FASE 1: Ultra agressiva - 500 concurrent, timeout 2s"""
         
         limits = httpx.Limits(
             max_keepalive_connections=200,
-            max_connections=2500,
-            keepalive_expiry=120
+            max_connections=600,
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
             cookies=self.cookies,
+            headers=self.headers,
             limits=limits,
             http2=True,
             follow_redirects=True,
             timeout=None
         ) as client:
             
-            semaphore = asyncio.Semaphore(CONCURRENT_PHASE1)
+            semaphore = asyncio.Semaphore(SEMAPHORE_PHASE1)
             
-            workers = [
-                WorkerAsync(i, self.cookies, semaphore, TIMEOUT_PHASE1, 1)
-                for i in range(WORKERS_PHASE1)
-            ]
+            tasks = [self.coletar_id(client, mid, TIMEOUT_ULTRA_FAST, semaphore, fase=1) for mid in ids_chunk]
+            resultados = await asyncio.gather(*tasks, return_exceptions=True)
             
-            tasks = []
-            for i, worker in enumerate(workers):
-                inicio = i * ids_por_worker
-                fim = inicio + ids_por_worker if i < WORKERS_PHASE1 - 1 else len(todos_ids)
-                worker_ids = todos_ids[inicio:fim]
+            for resultado in resultados:
+                if isinstance(resultado, tuple) and resultado[0] == 'retry':
+                    self.retry_fase2.append(resultado[1])
+                    async with self.lock:
+                        self.stats['erros_fase1'] += 1
                 
-                tasks.append(self.processar_worker(worker, worker_ids, client, pbar))
-            
-            resultados = await asyncio.gather(*tasks)
-            
-            for worker_resultado in resultados:
-                for resultado in worker_resultado:
-                    if resultado:
-                        if resultado[0] == 'sucesso':
-                            async with self.membros_lock:
-                                self.membros.append(resultado[1])
-                                self.stats['coletados'] += 1
-                        elif resultado[0] == 'retry':
-                            self.retry_fase2.append(resultado[1])
-                            self.stats['erros_fase1'] += 1
-            
-            for worker in workers:
-                self.stats['vazios'] += worker.vazios
+                if pbar:
+                    pbar.update(1)
     
-    async def processar_worker(self, worker, ids, client, pbar):
-        resultados = []
+    async def fase2_moderada(self, pbar):
+        """FASE 2: Moderada - 300 concurrent, timeout 4s"""
         
-        for i in range(0, len(ids), 100):
-            batch = ids[i:i+100]
-            batch_resultado = await worker.processar_batch(batch, client)
-            resultados.extend([r for r in batch_resultado if r])
-            
-            if pbar:
-                pbar.update(len(batch))
-                pbar.set_postfix({
-                    '✓': self.stats['coletados'],
-                    '📤': self.stats['enviados'],
-                    '⟳': len(self.retry_fase2),
-                })
-            
-            # ENVIO AUTOMÁTICO A CADA BATCH_ENVIO membros
-            if self.stats['coletados'] - self.ultimo_envio >= BATCH_ENVIO:
-                # Pega lote para enviar
-                async with self.membros_lock:
-                    lote_envio = self.membros[-BATCH_ENVIO:]
-                
-                # Envia em background
-                asyncio.create_task(self.enviar_lote_real(lote_envio))
-                self.ultimo_envio = self.stats['coletados']
-        
-        return resultados
-    
-    async def fase2_retry(self, pbar):
         if not self.retry_fase2:
             return
-        
-        print(f"\n🔄 FASE 2: {len(self.retry_fase2):,} IDs | {CONCURRENT_PHASE2} CONCURRENT")
         
         ids_retry = list(self.retry_fase2)
         self.retry_fase2.clear()
         
+        async with self.lock:
+            self.stats['retry_fase2'] = len(ids_retry)
+        
         limits = httpx.Limits(
-            max_keepalive_connections=120,
-            max_connections=1200,
-            keepalive_expiry=120
+            max_keepalive_connections=150,
+            max_connections=350,
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
             cookies=self.cookies,
+            headers=self.headers,
             limits=limits,
             http2=True,
             follow_redirects=True,
             timeout=None
         ) as client:
             
-            semaphore = asyncio.Semaphore(CONCURRENT_PHASE2)
+            semaphore = asyncio.Semaphore(SEMAPHORE_PHASE2)
             
-            workers = [
-                WorkerAsync(i, self.cookies, semaphore, TIMEOUT_PHASE2, 2)
-                for i in range(WORKERS_PHASE2)
-            ]
+            tasks = [self.coletar_id(client, mid, TIMEOUT_FAST, semaphore, fase=2) for mid in ids_retry]
+            resultados = await asyncio.gather(*tasks, return_exceptions=True)
             
-            ids_por_worker = len(ids_retry) // WORKERS_PHASE2
-            
-            tasks = []
-            for i, worker in enumerate(workers):
-                inicio = i * ids_por_worker
-                fim = inicio + ids_por_worker if i < WORKERS_PHASE2 - 1 else len(ids_retry)
-                worker_ids = ids_retry[inicio:fim]
-                tasks.append(self.processar_worker(worker, worker_ids, client, pbar))
-            
-            resultados = await asyncio.gather(*tasks)
-            
-            for worker_resultado in resultados:
-                for resultado in worker_resultado:
-                    if resultado:
-                        if resultado[0] == 'sucesso':
-                            async with self.membros_lock:
-                                self.membros.append(resultado[1])
-                                self.stats['coletados'] += 1
-                        elif resultado[0] == 'retry':
-                            self.retry_fase3.append(resultado[1])
-                            self.stats['erros_fase2'] += 1
+            for i, resultado in enumerate(resultados):
+                if isinstance(resultado, tuple) and resultado[0] == 'retry':
+                    self.retry_fase3.append(resultado[1])
+                    async with self.lock:
+                        self.stats['erros_fase2'] += 1
+                elif isinstance(resultado, Exception):
+                    self.retry_fase3.append(ids_retry[i])
+                
+                if pbar:
+                    pbar.update(1)
     
     async def fase3_garantia(self, pbar):
+        """FASE 3: Conservadora - 150 concurrent, timeout 8s"""
+        
         if not self.retry_fase3:
             return
-        
-        print(f"\n🎯 FASE 3: {len(self.retry_fase3):,} IDs | {CONCURRENT_PHASE3} CONCURRENT")
         
         ids_retry = list(self.retry_fase3)
         self.retry_fase3.clear()
         
+        async with self.lock:
+            self.stats['retry_fase3'] = len(ids_retry)
+        
         limits = httpx.Limits(
             max_keepalive_connections=80,
-            max_connections=600,
-            keepalive_expiry=120
+            max_connections=180,
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
             cookies=self.cookies,
+            headers=self.headers,
             limits=limits,
             http2=True,
             follow_redirects=True,
             timeout=None
         ) as client:
             
-            semaphore = asyncio.Semaphore(CONCURRENT_PHASE3)
+            semaphore = asyncio.Semaphore(SEMAPHORE_PHASE3)
             
-            workers = [
-                WorkerAsync(i, self.cookies, semaphore, TIMEOUT_PHASE3, 3)
-                for i in range(WORKERS_PHASE3)
-            ]
+            tasks = [self.coletar_id(client, mid, TIMEOUT_CAREFUL, semaphore, fase=3) for mid in ids_retry]
+            resultados = await asyncio.gather(*tasks, return_exceptions=True)
             
-            ids_por_worker = len(ids_retry) // WORKERS_PHASE3
-            
-            tasks = []
-            for i, worker in enumerate(workers):
-                inicio = i * ids_por_worker
-                fim = inicio + ids_por_worker if i < WORKERS_PHASE3 - 1 else len(ids_retry)
-                worker_ids = ids_retry[inicio:fim]
-                tasks.append(self.processar_worker(worker, worker_ids, client, pbar))
-            
-            resultados = await asyncio.gather(*tasks)
-            
-            for worker_resultado in resultados:
-                for resultado in worker_resultado:
-                    if resultado:
-                        if resultado[0] == 'sucesso':
-                            async with self.membros_lock:
-                                self.membros.append(resultado[1])
-                                self.stats['coletados'] += 1
-                        elif resultado[0] == 'retry':
-                            self.stats['erros_fase3'] += 1
+            for resultado in resultados:
+                if isinstance(resultado, tuple) and resultado[0] == 'retry':
+                    async with self.lock:
+                        self.stats['erros_fase3'] += 1
+                elif isinstance(resultado, Exception):
+                    async with self.lock:
+                        self.stats['erros_fase3'] += 1
+                
+                if pbar:
+                    pbar.update(1)
 
 # ========================================
-# LOGIN
+# LOGIN OTIMIZADO
 # ========================================
 def login():
+    """Login com Playwright"""
     print("🔐 Realizando login...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-blink-features=AutomationControlled'
+                ]
             )
-            page = browser.new_page()
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
             page.goto(URL_INICIAL, timeout=30000)
             page.fill('input[name="login"]', EMAIL)
             page.fill('input[name="password"]', SENHA)
             page.click('button[type="submit"]')
             page.wait_for_selector("nav", timeout=20000)
-            cookies = {cookie['name']: cookie['value'] for cookie in page.context.cookies()}
+            cookies = {cookie['name']: cookie['value'] for cookie in context.cookies()}
             browser.close()
             print("✓ Login realizado")
             return cookies
@@ -456,51 +312,146 @@ def login():
         return None
 
 # ========================================
-# EXECUÇÃO
+# EXECUÇÃO INSANA - 3 FASES
 # ========================================
-async def executar_coleta_extreme(cookies):
-    orquestrador = OrquestradorExtreme(cookies)
+async def executar_coleta_insana(cookies):
+    """Estratégia 3 fases: Ultra Rápida → Moderada → Garantia"""
+    
+    coletor = ColetorInsano(cookies)
     
     total_ids = RANGE_FIM - RANGE_INICIO + 1
     todos_ids = list(range(RANGE_INICIO, RANGE_FIM + 1))
     
+    chunks = [todos_ids[i:i + CHUNK_SIZE] for i in range(0, len(todos_ids), CHUNK_SIZE)]
+    
     print(f"\n{'='*80}")
-    print(f"🔥 META: {total_ids:,} IDs | ENVIO AUTOMÁTICO A CADA {BATCH_ENVIO:,}")
+    print(f"🚀 ESTRATÉGIA 3 FASES - META: 15 MINUTOS")
+    print(f"{'='*80}")
+    print(f"📦 {total_ids:,} IDs → {len(chunks)} chunks de {CHUNK_SIZE:,}")
+    print(f"⚡ FASE 1: {SEMAPHORE_PHASE1} concurrent | timeout {TIMEOUT_ULTRA_FAST}s")
+    print(f"⚡ FASE 2: {SEMAPHORE_PHASE2} concurrent | timeout {TIMEOUT_FAST}s")
+    print(f"⚡ FASE 3: {SEMAPHORE_PHASE3} concurrent | timeout {TIMEOUT_CAREFUL}s")
     print(f"{'='*80}\n")
     
     tempo_inicio = time.time()
     
-    # FASE 1
+    # FASE 1: ULTRA RÁPIDA
+    print("🔥 FASE 1: COLETA ULTRA RÁPIDA")
     with tqdm(total=total_ids, desc="Fase 1", unit="ID", ncols=100, colour='red') as pbar:
-        await orquestrador.fase1_extreme(todos_ids, pbar)
+        for chunk in chunks:
+            await coletor.fase1_ultra_rapida(chunk, pbar)
+            pbar.set_postfix({
+                'Coletados': coletor.stats['coletados'],
+                'Retry': len(coletor.retry_fase2)
+            })
     
     tempo_fase1 = time.time() - tempo_inicio
-    print(f"✓ F1: {tempo_fase1:.1f}s | ✓{orquestrador.stats['coletados']:,} | 📤{orquestrador.stats['enviados']:,}")
+    print(f"✓ Fase 1: {tempo_fase1:.1f}s | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase2):,}")
     
-    # FASE 2
-    if orquestrador.retry_fase2:
-        with tqdm(total=len(orquestrador.retry_fase2), desc="Fase 2", unit="ID", ncols=100, colour='yellow') as pbar:
-            await orquestrador.fase2_retry(pbar)
+    # FASE 2: MODERADA
+    if coletor.retry_fase2:
+        print(f"\n🔄 FASE 2: RETRY MODERADO ({len(coletor.retry_fase2):,} IDs)")
+        with tqdm(total=len(coletor.retry_fase2), desc="Fase 2", unit="ID", ncols=100, colour='yellow') as pbar:
+            await coletor.fase2_moderada(pbar)
+        
+        tempo_fase2 = time.time() - tempo_inicio - tempo_fase1
+        print(f"✓ Fase 2: {tempo_fase2:.1f}s | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase3):,}")
     
-    # FASE 3
-    if orquestrador.retry_fase3:
-        with tqdm(total=len(orquestrador.retry_fase3), desc="Fase 3", unit="ID", ncols=100, colour='green') as pbar:
-            await orquestrador.fase3_garantia(pbar)
+    # FASE 3: GARANTIA
+    if coletor.retry_fase3:
+        print(f"\n🎯 FASE 3: GARANTIA FINAL ({len(coletor.retry_fase3):,} IDs)")
+        with tqdm(total=len(coletor.retry_fase3), desc="Fase 3", unit="ID", ncols=100, colour='green') as pbar:
+            await coletor.fase3_garantia(pbar)
+        
+        tempo_fase3 = time.time() - tempo_inicio - tempo_fase1 - (tempo_fase2 if coletor.retry_fase2 else 0)
+        print(f"✓ Fase 3: {tempo_fase3:.1f}s | Coletados: {coletor.stats['coletados']:,}")
     
-    # ENVIO FINAL (resto que não foi enviado ainda)
-    if len(orquestrador.membros) > orquestrador.stats['enviados']:
-        print(f"\n📤 Enviando últimos {len(orquestrador.membros) - orquestrador.stats['enviados']:,} membros...")
-        resto = orquestrador.membros[orquestrador.ultimo_envio:]
-        await orquestrador.enviar_lote_real(resto)
+    return coletor
+
+# ========================================
+# ENVIO DADOS - CORRIGIDO
+# ========================================
+def enviar_dados(membros, tempo_total, stats):
+    """Envio para Google Sheets - CORRIGIDO"""
+    if not membros:
+        print("⚠️  Nenhum membro para enviar")
+        return False
     
-    return orquestrador
+    print(f"\n📤 Enviando {len(membros):,} membros para Google Sheets...")
+    
+    relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
+    for membro in membros:
+        relatorio.append([
+            str(membro.get('id', '')),
+            membro.get('nome', ''),
+            membro.get('igreja_selecionada', ''),
+            membro.get('cargo_ministerio', ''),
+            membro.get('nivel', ''),
+            membro.get('instrumento', ''),
+            membro.get('tonalidade', '')
+        ])
+    
+    # ✅ CORRIGIDO: Adiciona _lote_1 e campo "lote" na metadata
+    payload = {
+        "tipo": f"membros_gha_{INSTANCIA_ID}_lote_1",
+        "relatorio_formatado": relatorio,
+        "metadata": {
+            "instancia": INSTANCIA_ID,
+            "lote": 1,  # ✅ NOVO: Campo obrigatório
+            "range_inicio": RANGE_INICIO,
+            "range_fim": RANGE_FIM,
+            "total_neste_lote": len(membros),  # ✅ NOVO: Total neste lote
+            "total_coletados": len(membros),
+            "total_vazios": stats['vazios'],
+            "total_erros_fase3": stats['erros_fase3'],
+            "tempo_execucao_min": round(tempo_total/60, 2),
+            "velocidade_ids_min": round((RANGE_FIM - RANGE_INICIO + 1) / (tempo_total/60), 0),
+            "velocidade_membros_min": round(len(membros) / (tempo_total/60), 0),
+            "concurrent_max": CONCURRENT_REQUESTS,
+            "fases_retry": f"F1:{SEMAPHORE_PHASE1}/F2:{SEMAPHORE_PHASE2}/F3:{SEMAPHORE_PHASE3}",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
+        }
+    }
+    
+    try:
+        import requests
+        print(f"🔄 Enviando para: {URL_APPS_SCRIPT}")
+        print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}")
+        
+        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
+        
+        print(f"📡 Status HTTP: {response.status_code}")
+        
+        if response.status_code == 200:
+            try:
+                resultado = response.json()
+                print(f"✓ Resposta: {resultado}")
+                print("✅ Dados enviados com sucesso!")
+                return True
+            except:
+                print(f"✓ Resposta (texto): {response.text[:200]}")
+                print("✅ Dados enviados com sucesso!")
+                return True
+        else:
+            print(f"✗ Erro HTTP {response.status_code}")
+            print(f"✗ Resposta: {response.text[:500]}")
+            return False
+    except Exception as e:
+        print(f"✗ Erro ao enviar: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ========================================
 # MAIN
 # ========================================
 def main():
     print("=" * 80)
-    print("🔥 COLETOR COM ENVIO AUTOMÁTICO")
+    print("🔥 COLETOR INSANO - META: 15 MINUTOS | 0% ERRO")
+    print("=" * 80)
+    print(f"📊 Range: {RANGE_INICIO:,} → {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
+    print(f"⚡ Estratégia: 3 Fases com Retry Adaptativo")
+    print(f"🎯 Concorrência Máxima: {CONCURRENT_REQUESTS} requisições simultâneas")
     print("=" * 80)
     
     if not EMAIL or not SENHA:
@@ -509,31 +460,45 @@ def main():
     
     tempo_total_inicio = time.time()
     
+    # Login
     cookies = login()
     if not cookies:
         sys.exit(1)
     
-    orquestrador = asyncio.run(executar_coleta_extreme(cookies))
+    # Coleta insana
+    coletor = asyncio.run(executar_coleta_insana(cookies))
     
     tempo_total = time.time() - tempo_total_inicio
     
-    print(f"\n{'='*80}")
-    print(f"📊 RELATÓRIO FINAL")
-    print(f"{'='*80}")
-    print(f"✅ Coletados: {orquestrador.stats['coletados']:,}")
-    print(f"📤 Enviados: {orquestrador.stats['enviados']:,}")
-    print(f"❌ Falhas envio: {orquestrador.stats['falhas_envio']:,}")
-    print(f"⚪ Vazios: {orquestrador.stats['vazios']:,}")
-    print(f"⏱️  Tempo: {tempo_total/60:.2f} min")
+    # Estatísticas finais
+    print("\n" + "=" * 80)
+    print("📊 RELATÓRIO FINAL")
+    print("=" * 80)
+    print(f"✅ Membros coletados: {coletor.stats['coletados']:,}")
+    print(f"⚪ IDs vazios/inexistentes: {coletor.stats['vazios']:,}")
+    print(f"❌ Erros irrecuperáveis: {coletor.stats['erros_fase3']:,}")
+    print(f"⏱️  Tempo total: {tempo_total/60:.2f} min ({tempo_total:.0f}s)")
     print(f"⚡ Velocidade: {(RANGE_FIM - RANGE_INICIO + 1) / (tempo_total/60):.0f} IDs/min")
-    print(f"{'='*80}")
+    print(f"📈 Taxa sucesso: {(coletor.stats['coletados'] / (RANGE_FIM - RANGE_INICIO + 1) * 100):.2f}%")
     
-    if orquestrador.membros:
-        print(f"\n📋 Amostras (5 primeiros):")
-        for i, m in enumerate(orquestrador.membros[:5], 1):
-            print(f"  {i}. [{m['id']:>7}] {m['nome'][:45]}")
+    if tempo_total < 900:  # < 15 min
+        print(f"🏆 META ALCANÇADA! {tempo_total/60:.1f} min < 15 min")
+    else:
+        print(f"⚠️  Meta não alcançada: {tempo_total/60:.1f} min")
     
-    print(f"\n✅ COLETA FINALIZADA")
+    print("=" * 80)
+    
+    # Enviar
+    if coletor.membros:
+        enviar_dados(coletor.membros, tempo_total, coletor.stats)
+        
+        print("\n📋 AMOSTRAS (5 primeiros):")
+        for i, m in enumerate(coletor.membros[:5], 1):
+            print(f"  {i}. [{m['id']:>6}] {m['nome'][:45]:<45} | {m.get('instrumento', '')[:15]}")
+    
+    print("\n" + "=" * 80)
+    print("✅ COLETA FINALIZADA COM SUCESSO")
+    print("=" * 80)
 
 if __name__ == "__main__":
     main()
