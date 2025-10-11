@@ -117,30 +117,39 @@ def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igr
     
     print(f"\n📤 Enviando {len(alunos)} alunos para Google Sheets...")
     
-    relatorio = [
-        ["ID_ALUNO", "NOME_COMPLETO", "IGREJA", "NIVEL"]
-    ]
+    # Separar headers e dados
+    headers = ["ID_ALUNO", "NOME_COMPLETO", "IGREJA", "NIVEL"]
     
+    dados_alunos = []
     for aluno in alunos:
-        relatorio.append([
+        dados_alunos.append([
             str(aluno['id_aluno']),
             aluno['nome'],
             aluno['igreja'],
             aluno['nivel']
         ])
     
+    # Estatísticas por instrumento para o resumo
+    from collections import Counter
+    distribuicao = Counter([a['nivel'] for a in alunos])
+    
+    resumo = {
+        "Total de Alunos": len(alunos),
+        "Total de Igrejas": len(ids_igrejas),
+        "Tempo de Execução (seg)": round(tempo_execucao, 2),
+        "Data/Hora": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "---": "---"
+    }
+    
+    # Adicionar distribuição por instrumento
+    for instrumento, qtd in distribuicao.most_common():
+        resumo[f"📊 {instrumento}"] = qtd
+    
     payload = {
-        "acao": "criar_aba_alunos_hortolandia",
-        "dados": relatorio,
-        "nome_aba": f"Alunos HT {time.strftime('%d-%m-%Y')}",
-        "metadata": {
-            "total_alunos": len(alunos),
-            "total_igrejas_monitoradas": len(ids_igrejas),
-            "tempo_execucao_seg": round(tempo_execucao, 2),
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "ids_igrejas": sorted(list(ids_igrejas)),
-            "fonte": "listagem_json"
-        }
+        "tipo": "alunos_hortolandia",
+        "headers": headers,
+        "dados": dados_alunos,
+        "resumo": resumo
     }
     
     try:
