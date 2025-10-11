@@ -1,362 +1,443 @@
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-import os
-import sys
-import re
-import requests
-import time
-import json
-import concurrent.futures
-import unicodedata
+from playwright.sync_api import sync_playwright
+import os, requests, time, json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Optional
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from threading import Lock
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwV-0AChSp5-JyBc3NysUQI0UlFJ7AycvE6CSRKWxldnJ8EBiaNHtj3oYx5jiiHxQbzOw/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
 
-# Parâmetros de range
-if len(sys.argv) >= 3:
-    RANGE_INICIO = int(sys.argv[1])
-    RANGE_FIM = int(sys.argv[2])
-    INSTANCIA_ID = f"igrejas_{RANGE_INICIO}_{RANGE_FIM}"
-else:
-    RANGE_INICIO = 1
-    RANGE_FIM = 30000
-    INSTANCIA_ID = "igrejas_completo"
+# ✅ COLETA DIRETA: Range de IDs fixo
+RANGE_INICIO = 1
+RANGE_FIM = 50000
 
-print(f"🏛️ Coleta de Igrejas - Instância {INSTANCIA_ID}")
-print(f"📊 Range: {RANGE_INICIO:,} - {RANGE_FIM:,}")
+NUM_THREADS = 20
+WORKERS_POR_BATCH = 5
+BATCH_SIZE_ENVIO = 3000
+MAX_RETRIES = 5
+RETRY_BACKOFF = 1.0
+TIMEOUT_REQUEST = 15
+
+# Locks para thread-safety
+cache_lock = Lock()
+resultado_lock = Lock()
+
+# Cache com controle de falhas
+cache_verificados = set()
+cache_falhas = {}
+MAX_TENTATIVAS_ID = 3
 
 if not EMAIL or not SENHA:
-    print("❌ Erro: Credenciais não definidas")
+    print("Erro: Credenciais não definidas")
     exit(1)
 
-def normalizar_texto_unicode(texto):
-    """
-    Converte caracteres Unicode escaped (\u00c2) para caracteres normais
-    """
+def verificar_hortolandia(texto: str) -> bool:
+    """Verifica se o texto contém referência a Hortolândia DO SETOR CAMPINAS"""
+    if not texto:
+        return False
+    
+    texto_upper = texto.upper()
+    
+    # Verifica se contém variações de Hortolândia
+    variacoes_hortolandia = ["HORTOL", "HORTOLANDIA", "HORTOLÃNDIA", "HORTOLÂNDIA"]
+    tem_hortolandia = any(var in texto_upper for var in variacoes_hortolandia)
+    
+    if not tem_hortolandia:
+        return False
+    
+    # CRÍTICO: Verifica se pertence ao setor CAMPINAS
+    tem_setor_campinas = "BR-SP-CAMPINAS" in texto_upper or "CAMPINAS-HORTOL" in texto_upper
+    
+    return tem_setor_campinas
+    
+def extrair_dados_localidade(texto_completo: str, igreja_id: int) -> Dict:
+    """Extrai dados estruturados da localidade"""
     try:
-        if not texto:
-            return ""
+        partes = texto_completo.split(' - ')
         
-        # Decodificar sequências Unicode como \u00c2
-        if '\\u' in texto:
-            texto = texto.encode().decode('unicode_escape')
+        if len(partes) >= 2:
+            nome_localidade = partes[0].strip()
+            caminho_completo = partes[1].strip()
+            caminho_partes = caminho_completo.split('-')
+            
+            if len(caminho_partes) >= 4:
+                pais = caminho_partes[0].strip()
+                estado = caminho_partes[1].strip()
+                regiao = caminho_partes[2].strip()
+                cidade = caminho_partes[3].strip()
+                setor = f"{pais}-{estado}-{regiao}"
+                
+                return {
+                    'id_igreja': igreja_id,
+                    'nome_localidade': nome_localidade,
+                    'setor': setor,
+                    'cidade': cidade,
+                    'texto_completo': texto_completo
+                }
+            elif len(caminho_partes) >= 3:
+                setor = '-'.join(caminho_partes[:-1])
+                cidade = caminho_partes[-1].strip()
+                
+                return {
+                    'id_igreja': igreja_id,
+                    'nome_localidade': nome_localidade,
+                    'setor': setor,
+                    'cidade': cidade,
+                    'texto_completo': texto_completo
+                }
         
-        # Normalizar caracteres Unicode (NFD -> NFC)
-        texto = unicodedata.normalize('NFC', texto)
-        
-        # Limpar espaços extras
-        texto = re.sub(r'\s+', ' ', texto).strip()
-        
-        return texto
-    except Exception as e:
-        print(f"⚠️ Erro ao normalizar texto '{texto}': {e}")
-        return texto
-
-def extrair_dados_igreja(json_response, igreja_id):
-    """
-    Extrai dados da igreja do JSON response
-    """
-    try:
-        if not json_response:
-            return None
-        
-        # Tentar parsear como JSON
-        if isinstance(json_response, str):
-            try:
-                data = json.loads(json_response)
-            except json.JSONDecodeError:
-                return None
-        else:
-            data = json_response
-        
-        # Verificar se é uma lista com dados
-        if not isinstance(data, list) or len(data) == 0:
-            return None
-        
-        # Pegar o primeiro item da lista
-        igreja_data = data[0]
-        
-        # Extrair informações básicas
-        igreja_id_response = igreja_data.get('id', str(igreja_id))
-        texto_completo = igreja_data.get('text', '')
-        
-        if not texto_completo:
-            return None
-        
-        # Normalizar texto Unicode
-        texto_normalizado = normalizar_texto_unicode(texto_completo)
-        
-        # Parsear o texto: "NOME - LOCAL-SETOR-CIDADE"
-        dados = {
-            'id': igreja_id_response,
-            'nome_completo': texto_normalizado,
-            'local': '',
+        return {
+            'id_igreja': igreja_id,
+            'nome_localidade': texto_completo,
             'setor': '',
-            'cidade': ''
+            'cidade': 'HORTOLANDIA',
+            'texto_completo': texto_completo
         }
-        
-        # Dividir por " - " para separar nome e localização
-        if ' - ' in texto_normalizado:
-            partes = texto_normalizado.split(' - ', 1)
-            dados['local'] = partes[0].strip()
-            
-            # Processar a parte da localização (BR-SP-CIDADE-SETOR)
-            if len(partes) > 1:
-                localizacao = partes[1].strip()
-                
-                # Tentar extrair padrão BR-SP-CIDADE-SETOR ou variações
-                # Exemplo: "BR-SP-CAMPINAS-HORTOLÂNDIA"
-                partes_localizacao = localizacao.split('-')
-                
-                if len(partes_localizacao) >= 3:
-                    # Assumindo padrão: BR-SP-CIDADE-SETOR ou BR-SP-CIDADE
-                    if len(partes_localizacao) >= 4:
-                        dados['cidade'] = partes_localizacao[2].strip()
-                        dados['setor'] = '-'.join(partes_localizacao[3:]).strip()
-                    elif len(partes_localizacao) == 3:
-                        dados['cidade'] = partes_localizacao[2].strip()
-                        dados['setor'] = ''
-                else:
-                    # Se não seguir o padrão, colocar tudo em cidade
-                    dados['cidade'] = localizacao
-        else:
-            # Se não tem " - ", o texto todo é o local
-            dados['local'] = texto_normalizado
-        
-        return dados
         
     except Exception as e:
-        print(f"⚠️ Erro ao processar igreja {igreja_id}: {e}")
-        return None
-
-class ColetorIgrejas:
-    def __init__(self, session, thread_id=0):
-        self.session = session
-        self.thread_id = thread_id
-        self.sucessos = 0
-        self.falhas = 0
-        self.headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json, text/javascript, */*; q=0.01',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+        print(f"⚠ Erro ao extrair dados do ID {igreja_id}: {e}")
+        return {
+            'id_igreja': igreja_id,
+            'nome_localidade': texto_completo,
+            'setor': '',
+            'cidade': 'HORTOLANDIA',
+            'texto_completo': texto_completo
         }
-    
-    def coletar_batch_igrejas(self, ids_batch):
-        """
-        Coleta um batch de IDs de igrejas
-        """
-        igrejas_coletadas = []
-        
-        for igreja_id in ids_batch:
-            try:
-                url = f"https://musical.congregacao.org.br/igrejas/filtra_igreja_setor?id_igreja={igreja_id}"
-                
-                resp = self.session.get(url, headers=self.headers, timeout=10)
-                
-                if resp.status_code == 200:
-                    # Verificar se retornou JSON válido
-                    try:
-                        json_data = resp.json()
-                        dados_igreja = extrair_dados_igreja(json_data, igreja_id)
-                        
-                        if dados_igreja:
-                            igrejas_coletadas.append(dados_igreja)
-                            self.sucessos += 1
-                            
-                            # Log a cada 20 sucessos
-                            if self.sucessos % 20 == 0:
-                                print(f"✅ T{self.thread_id}: {self.sucessos} igrejas - Última: {dados_igreja['local'][:30]}")
-                        else:
-                            self.falhas += 1
-                            
-                    except (json.JSONDecodeError, TypeError):
-                        # Não é um JSON válido ou está vazio
-                        self.falhas += 1
-                        
-                else:
-                    self.falhas += 1
-                
-                # Pausa mínima entre requisições
-                time.sleep(0.1)
-                
-            except Exception as e:
-                self.falhas += 1
-                if "timeout" in str(e).lower():
-                    print(f"⏱️ T{self.thread_id}: Timeout na igreja {igreja_id}")
-                continue
-        
-        return igrejas_coletadas
 
-def executar_coleta_paralela_igrejas(session, range_inicio, range_fim, num_threads=10):
-    """
-    Executa coleta paralela de igrejas
-    """
-    total_ids = range_fim - range_inicio + 1
-    ids_per_thread = total_ids // num_threads
+def criar_sessao_otimizada(cookies_dict: Dict) -> requests.Session:
+    """Cria sessão HTTP com configurações robustas"""
+    session = requests.Session()
+    session.cookies.update(cookies_dict)
     
-    print(f"📈 Dividindo {total_ids:,} IDs em {num_threads} threads ({ids_per_thread:,} IDs/thread)")
+    retry_strategy = Retry(
+        total=4,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"]
+    )
     
-    # Criar ranges por thread
-    thread_ranges = []
-    for i in range(num_threads):
-        inicio = range_inicio + (i * ids_per_thread)
-        fim = inicio + ids_per_thread - 1
+    adapter = HTTPAdapter(
+        pool_connections=NUM_THREADS * 2,
+        pool_maxsize=NUM_THREADS * 2,
+        max_retries=retry_strategy
+    )
+    
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    
+    return session
+
+def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optional[Dict]:
+    """Verifica um único ID com retry inteligente"""
+    
+    with cache_lock:
+        if igreja_id in cache_verificados:
+            return None
         
-        if i == num_threads - 1:
-            fim = range_fim
+        if cache_falhas.get(igreja_id, 0) >= MAX_TENTATIVAS_ID:
+            return None
+    
+    for tentativa in range(1, MAX_RETRIES + 1):
+        try:
+            url = f"https://musical.congregacao.org.br/igrejas/filtra_igreja_setor?id_igreja={igreja_id}"
+            headers = {
+                'X-Requested-With': 'XMLHttpRequest',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Connection': 'keep-alive'
+            }
             
-        thread_ranges.append(list(range(inicio, fim + 1)))
-    
-    todas_igrejas = []
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        coletores = [ColetorIgrejas(session, i) for i in range(num_threads)]
+            resp = session.get(url, headers=headers, timeout=TIMEOUT_REQUEST)
+            
+            with cache_lock:
+                cache_verificados.add(igreja_id)
+            
+            if resp.status_code == 200:
+                resp.encoding = 'utf-8'
+                
+                try:
+                    json_data = resp.json()
+                except json.JSONDecodeError:
+                    try:
+                        json_data = json.loads(resp.content.decode('utf-8', errors='replace'))
+                    except Exception as e:
+                        print(f"⚠ ID {igreja_id}: JSON inválido - {e}")
+                        return None
+                
+                if isinstance(json_data, list) and len(json_data) > 0:
+                    texto_completo = json_data[0].get('text', '')
+                    
+                    if verificar_hortolandia(texto_completo):
+                        return extrair_dados_localidade(texto_completo, igreja_id)
+                
+                return None
+            
+            elif resp.status_code == 404:
+                with cache_lock:
+                    cache_verificados.add(igreja_id)
+                return None
+            
+            else:
+                print(f"⚠ ID {igreja_id}: HTTP {resp.status_code} (tentativa {tentativa}/{MAX_RETRIES})")
         
-        futures = []
-        for i, ids_thread in enumerate(thread_ranges):
-            future = executor.submit(coletores[i].coletar_batch_igrejas, ids_thread)
-            futures.append((future, i))
+        except requests.Timeout:
+            print(f"⏱ ID {igreja_id}: Timeout (tentativa {tentativa}/{MAX_RETRIES})")
         
-        # Aguardar conclusão
-        for future, thread_id in futures:
-            try:
-                igrejas_thread = future.result(timeout=1800)  # 30 min timeout
-                todas_igrejas.extend(igrejas_thread)
-                coletor = coletores[thread_id]
-                print(f"✅ Thread {thread_id}: {len(igrejas_thread)} igrejas | {coletor.sucessos} sucessos | {coletor.falhas} falhas")
-            except Exception as e:
-                print(f"❌ Thread {thread_id}: Erro - {e}")
+        except requests.RequestException as e:
+            print(f"⚠ ID {igreja_id}: Erro de rede - {e} (tentativa {tentativa}/{MAX_RETRIES})")
+        
+        except Exception as e:
+            print(f"❌ ID {igreja_id}: Erro inesperado - {e}")
+            with cache_lock:
+                cache_falhas[igreja_id] = cache_falhas.get(igreja_id, 0) + 1
+            return None
+        
+        if tentativa < MAX_RETRIES:
+            time.sleep(RETRY_BACKOFF * tentativa * 0.5)
     
-    return todas_igrejas
+    with cache_lock:
+        cache_falhas[igreja_id] = MAX_TENTATIVAS_ID
+    print(f"❌ ID {igreja_id}: FALHA após {MAX_RETRIES} tentativas")
+    return None
 
-def criar_relatorio_igrejas(igrejas):
-    """
-    Cria relatório formatado das igrejas
-    """
-    relatorio = [
-        ["ID", "LOCAL", "SETOR", "CIDADE", "NOME_COMPLETO"]
-    ]
+def coletar_batch_paralelo(ids_batch: List[int], session: requests.Session, batch_num: int) -> List[Dict]:
+    """Processa um batch de IDs em paralelo"""
+    localidades = []
+    total = len(ids_batch)
     
-    for igreja in igrejas:
-        linha = [
-            igreja.get('id', ''),
-            igreja.get('local', ''),
-            igreja.get('setor', ''),
-            igreja.get('cidade', ''),
-            igreja.get('nome_completo', '')
-        ]
-        relatorio.append(linha)
+    with ThreadPoolExecutor(max_workers=WORKERS_POR_BATCH) as executor:
+        futures = {executor.submit(verificar_id_hortolandia, id_igreja, session): id_igreja 
+                  for id_igreja in ids_batch}
+        
+        processados = 0
+        for future in as_completed(futures):
+            processados += 1
+            try:
+                resultado = future.result()
+                if resultado:
+                    with resultado_lock:
+                        localidades.append(resultado)
+                    print(f"✓ Batch {batch_num} [{processados}/{total}]: ID {resultado['id_igreja']} | {resultado['nome_localidade'][:50]}")
+            except Exception as e:
+                print(f"❌ Erro ao processar resultado: {e}")
     
-    return relatorio
+    return localidades
+
+def executar_coleta_paralela_ids(session: requests.Session, range_inicio: int, range_fim: int, num_threads: int) -> List[Dict]:
+    """Executa coleta paralela com controle de concorrência"""
+    total_ids = range_fim - range_inicio + 1
+    batch_size = max(50, total_ids // num_threads)
+    
+    print(f"📊 Configuração:")
+    print(f"   • Total IDs: {total_ids:,}")
+    print(f"   • Batch size: {batch_size}")
+    print(f"   • Threads principais: {num_threads}")
+    print(f"   • Workers por batch: {WORKERS_POR_BATCH}")
+    print(f"   • Timeout: {TIMEOUT_REQUEST}s")
+    print(f"   • Max retries: {MAX_RETRIES}\n")
+    
+    batches = []
+    for i in range(range_inicio, range_fim + 1, batch_size):
+        fim_batch = min(i + batch_size - 1, range_fim)
+        batches.append(list(range(i, fim_batch + 1)))
+    
+    todas_localidades = []
+    total_batches = len(batches)
+    
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = {executor.submit(coletar_batch_paralelo, batch, session, idx): idx 
+                  for idx, batch in enumerate(batches, 1)}
+        
+        for future in as_completed(futures):
+            batch_num = futures[future]
+            try:
+                localidades = future.result()
+                with resultado_lock:
+                    todas_localidades.extend(localidades)
+                print(f"{'='*60}")
+                print(f"✓ Batch {batch_num}/{total_batches} concluído: {len(localidades)} localidades encontradas")
+                print(f"{'='*60}\n")
+            except Exception as e:
+                print(f"❌ Batch {batch_num}/{total_batches} falhou: {e}")
+    
+    return todas_localidades
 
 def extrair_cookies_playwright(pagina):
-    """
-    Extrai cookies do Playwright para requests
-    """
+    """Extrai cookies da sessão do navegador"""
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
+def salvar_localidades_em_arquivo(localidades: List[Dict], nome_arquivo: str = "localidades_hortolandia.txt"):
+    """Salva localidades em arquivo texto"""
+    try:
+        with open(nome_arquivo, 'w', encoding='utf-8') as f:
+            f.write(f"# Localidades de Hortolândia\n")
+            f.write(f"# Total: {len(localidades)} localidades\n")
+            f.write(f"# Range: {RANGE_INICIO} - {RANGE_FIM}\n")
+            f.write(f"# Gerado em: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("ID | Nome Localidade | Setor | Cidade | Texto Completo\n")
+            f.write("-" * 120 + "\n")
+            
+            for loc in sorted(localidades, key=lambda x: x['id_igreja']):
+                f.write(f"{loc['id_igreja']} | {loc['nome_localidade']} | {loc['setor']} | {loc['cidade']} | {loc['texto_completo']}\n")
+                
+        print(f"\n✓ Localidades salvas em: {nome_arquivo}")
+    except Exception as e:
+        print(f"❌ Erro ao salvar arquivo: {e}")
+
+def enviar_chunk_para_planilha(chunk: List[Dict], total_localidades: int, chunk_index: int, total_chunks: int) -> bool:
+    """Envia chunk de dados para Google Sheets"""
+    dados_formatados = [
+        [
+            loc['id_igreja'],
+            loc['nome_localidade'],
+            loc['setor'],
+            loc['cidade'],
+            loc['texto_completo']
+        ]
+        for loc in chunk
+    ]
+    
+    payload = {
+        "tipo": "localidades_hortolandia",
+        "headers": ["ID_Igreja", "Nome_Localidade", "Setor", "Cidade", "Texto_Completo"],
+        "dados": dados_formatados,
+        "resumo": {
+            "total_localidades": total_localidades,
+            "batch": f"{chunk_index}/{total_chunks}",
+            "range_inicio": RANGE_INICIO,
+            "range_fim": RANGE_FIM,
+            "data_coleta": time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+    }
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"🔄 Enviando chunk {chunk_index}/{total_chunks} para Google Sheets...")
+            resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=60)
+            
+            if resp.status_code == 200:
+                try:
+                    resultado = resp.json()
+                    print(f"✓ Chunk {chunk_index}/{total_chunks} enviado: {resultado}")
+                    return True
+                except:
+                    print(f"✓ Chunk {chunk_index}/{total_chunks} enviado com sucesso (resposta texto)")
+                    return True
+            else:
+                print(f"⚠ Erro HTTP {resp.status_code} no chunk {chunk_index}: {resp.text[:200]}")
+        except Exception as e:
+            print(f"❌ Erro ao enviar chunk {chunk_index} (tentativa {attempt}/{MAX_RETRIES}): {e}")
+            
+        if attempt < MAX_RETRIES:
+            backoff = RETRY_BACKOFF * attempt
+            print(f"  ⏱ Aguardando {backoff}s antes de tentar novamente...")
+            time.sleep(backoff)
+        
+    print(f"❌ Falha no envio do chunk {chunk_index} após {MAX_RETRIES} tentativas")
+    return False
+
+def enviar_para_planilha(localidades: List[Dict], batch_size: int = BATCH_SIZE_ENVIO):
+    """Envia todas as localidades para Google Sheets em chunks"""
+    total = len(localidades)
+    if total == 0:
+        print("\n⚠ Nenhuma localidade para enviar")
+        return
+
+    chunks = [localidades[i:i+batch_size] for i in range(0, total, batch_size)]
+    total_chunks = len(chunks)
+    print(f"\n📤 Enviando {total} localidades em {total_chunks} chunk(s) (batch_size={batch_size})")
+
+    sucesso = 0
+    falhas = 0
+    
+    for idx, chunk in enumerate(chunks, start=1):
+        if enviar_chunk_para_planilha(chunk, total, idx, total_chunks):
+            sucesso += 1
+        else:
+            falhas += 1
+            
+    print(f"\n{'✓' if falhas == 0 else '⚠'} Envio finalizado: {sucesso} sucesso(s), {falhas} falha(s)")
+
 def main():
+    """Função principal"""
     tempo_inicio = time.time()
-    NUM_THREADS = 15  # Threads para coleta de igrejas
+    
+    print("=" * 80)
+    print(" " * 20 + "COLETA DE LOCALIDADES DE HORTOLÂNDIA")
+    print("=" * 80)
+    print(f"📍 Range: {RANGE_INICIO:,} até {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
+    print(f"🔧 Threads: {NUM_THREADS} | Timeout: {TIMEOUT_REQUEST}s | Max Retries: {MAX_RETRIES}")
+    print(f"🎯 Objetivo: Coletar IDs de Hortolândia do Setor Campinas")
+    print(f"📊 Batch de envio: {BATCH_SIZE_ENVIO} localidades por vez\n")
     
     print("🔐 Realizando login...")
-    
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
         pagina = navegador.new_page()
-        
-        pagina.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        pagina.set_extra_http_headers({'User-Agent': 'Mozilla/5.0'})
         
         try:
-            pagina.goto(URL_INICIAL)
+            pagina.goto(URL_INICIAL, timeout=20000)
             pagina.fill('input[name="login"]', EMAIL)
             pagina.fill('input[name="password"]', SENHA)
             pagina.click('button[type="submit"]')
-            pagina.wait_for_selector("nav", timeout=15000)
-            print("✅ Login realizado com sucesso!")
-            
+            pagina.wait_for_selector("nav", timeout=20000)
+            print("✓ Login realizado com sucesso!\n")
         except Exception as e:
             print(f"❌ Erro no login: {e}")
             navegador.close()
             return
-        
-        # Extrair cookies para sessão requests
+            
         cookies_dict = extrair_cookies_playwright(pagina)
         navegador.close()
-    
-    # Criar sessão requests otimizada
-    session = requests.Session()
-    session.cookies.update(cookies_dict)
-    
-    adapter = requests.adapters.HTTPAdapter(
-        pool_connections=20,
-        pool_maxsize=20,
-        max_retries=2
-    )
-    session.mount('https://', adapter)
-    
-    print("🏛️ Iniciando coleta de igrejas...")
-    
-    # Executar coleta paralela
-    igrejas_coletadas = executar_coleta_paralela_igrejas(session, RANGE_INICIO, RANGE_FIM, NUM_THREADS)
-    
+
+    session = criar_sessao_otimizada(cookies_dict)
+
+    print("🔍 Iniciando busca de localidades...\n")
+    localidades = executar_coleta_paralela_ids(session, RANGE_INICIO, RANGE_FIM, NUM_THREADS)
     tempo_total = time.time() - tempo_inicio
+
+    print("\n" + "=" * 80)
+    print(" " * 30 + "COLETA FINALIZADA!")
+    print("=" * 80)
+    print(f"✓ Localidades encontradas: {len(localidades)}")
+    print(f"⏱ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
+    print(f"⚡ Velocidade: {(RANGE_FIM - RANGE_INICIO + 1)/tempo_total:.1f} IDs/segundo")
     
-    print(f"🏁 COLETA DE IGREJAS FINALIZADA!")
-    print(f"📊 Igrejas coletadas: {len(igrejas_coletadas)}")
-    print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
-    if igrejas_coletadas:
-        print(f"⚡ Velocidade: {len(igrejas_coletadas)/tempo_total:.2f} igrejas/segundo")
+    with cache_lock:
+        total_verificados = len(cache_verificados)
+        total_falhas = len([k for k, v in cache_falhas.items() if v >= MAX_TENTATIVAS_ID])
     
-    # Mostrar exemplos dos dados coletados
-    if igrejas_coletadas:
-        print("\n📋 Exemplos de dados coletados:")
-        for i, igreja in enumerate(igrejas_coletadas[:3]):
-            print(f"   {i+1}. ID: {igreja['id']} | Local: {igreja['local']} | Cidade: {igreja['cidade']} | Setor: {igreja['setor']}")
+    print(f"📊 IDs verificados: {total_verificados:,} / {RANGE_FIM - RANGE_INICIO + 1:,}")
     
-    # Enviar dados para Google Sheets
-    if igrejas_coletadas:
-        print("📤 Enviando dados para Google Sheets...")
-        
-        relatorio = criar_relatorio_igrejas(igrejas_coletadas)
-        
-        payload = {
-            "tipo": f"igrejas_{INSTANCIA_ID}",
-            "relatorio_formatado": relatorio,
-            "metadata": {
-                "instancia": INSTANCIA_ID,
-                "range_inicio": RANGE_INICIO,
-                "range_fim": RANGE_FIM,
-                "total_coletadas": len(igrejas_coletadas),
-                "tempo_execucao_min": round(tempo_total/60, 2),
-                "threads_utilizadas": NUM_THREADS,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-        }
-        
-        try:
-            response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
-            if response.status_code == 200:
-                print("✅ Dados enviados com sucesso!")
-                print(f"📄 Resposta: {response.text[:100]}")
-            else:
-                print(f"⚠️ Status HTTP: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Erro no envio: {e}")
+    if total_falhas > 0:
+        print(f"⚠ IDs com falha permanente: {total_falhas}")
+        print(f"   (Execute novamente para tentar recuperar estes IDs)")
     
+    print("=" * 80)
+
+    if localidades:
+        salvar_localidades_em_arquivo(localidades)
+        enviar_para_planilha(localidades)
     else:
-        print("⚠️ Nenhuma igreja foi coletada neste range")
+        print("\n⚠ Nenhuma localidade de Hortolândia encontrada neste range")
     
-    print(f"🎯 Processo finalizado - Instância {INSTANCIA_ID}")
+    if cache_falhas:
+        with open("ids_com_falha.txt", "w") as f:
+            for id_igreja, tentativas in sorted(cache_falhas.items()):
+                if tentativas >= MAX_TENTATIVAS_ID:
+                    f.write(f"{id_igreja}\n")
+        print(f"\n📝 IDs com falha salvos em: ids_com_falha.txt")
 
 if __name__ == "__main__":
     main()
