@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 import os
 import sys
 import requests
@@ -48,87 +48,130 @@ def buscar_ids_igrejas_hortolandia() -> Set[int]:
         print(f"❌ Erro ao buscar IDs das igrejas: {e}")
         return set()
 
-def extrair_ids_da_listagem(pagina) -> List[int]:
+def extrair_ids_dos_checkboxes(html_content: str) -> List[int]:
     """
-    Extrai todos os IDs de alunos da página de listagem
-    Procura por links do tipo: /alunos/editar/ID
+    Extrai IDs dos checkboxes: <input type="checkbox" name="item[]" value="732523">
     """
-    ids_alunos = []
+    ids = []
     
-    try:
-        # Aguardar carregamento da tabela
-        pagina.wait_for_selector("table, .table, tbody", timeout=10000)
-        
-        # Extrair HTML da página
-        html = pagina.content()
-        
-        # Procurar por padrão: /alunos/editar/NUMERO
-        matches = re.findall(r'/alunos/editar/(\d+)', html)
-        
-        if matches:
-            ids_alunos = [int(id_str) for id_str in matches]
-            # Remover duplicatas mantendo a ordem
-            ids_alunos = list(dict.fromkeys(ids_alunos))
-            print(f"   📋 {len(ids_alunos)} IDs encontrados nesta página")
-        
-    except Exception as e:
-        print(f"   ⚠️ Erro ao extrair IDs: {e}")
+    # Procurar por padrão: name="item[]" value="NUMERO"
+    matches = re.findall(r'name="item\[\]"\s+value="(\d+)"', html_content)
     
-    return ids_alunos
+    if matches:
+        ids = [int(id_str) for id_str in matches]
+    
+    return ids
 
 def navegar_todas_paginas_listagem(pagina) -> List[int]:
     """
-    Navega por todas as páginas da listagem e coleta todos os IDs de alunos
+    Navega por todas as páginas da listagem e coleta todos os IDs dos checkboxes
     """
     print("\n📄 Navegando pela listagem de alunos...")
     
     todos_ids = []
     pagina_atual = 1
+    max_tentativas_sem_novos = 3
+    tentativas_sem_novos = 0
     
     while True:
         print(f"   🔍 Página {pagina_atual}...")
         
-        # Extrair IDs da página atual
-        ids_pagina = extrair_ids_da_listagem(pagina)
-        todos_ids.extend(ids_pagina)
-        
-        # Verificar se existe botão "Próxima" ou link para próxima página
         try:
-            # Tentar diferentes seletores comuns para paginação
-            proximo_seletores = [
-                'a:has-text("Próxima")',
-                'a:has-text("»")',
-                'a:has-text("Next")',
-                'a.next',
-                'li.next a',
-                'a[rel="next"]',
-                f'a:has-text("{pagina_atual + 1}")'  # Link com número da próxima página
+            # Aguardar carregamento - tentar múltiplos seletores
+            seletores_espera = [
+                'input[name="item[]"]',  # Checkbox dos alunos
+                'table',
+                'tbody',
+                '.tabela',
+                'form'
             ]
             
-            botao_proximo = None
-            for seletor in proximo_seletores:
+            elemento_encontrado = False
+            for seletor in seletores_espera:
                 try:
-                    elemento = pagina.locator(seletor).first
-                    if elemento.is_visible(timeout=2000):
-                        botao_proximo = elemento
-                        break
+                    pagina.wait_for_selector(seletor, timeout=15000, state='visible')
+                    elemento_encontrado = True
+                    print(f"   ✅ Elemento encontrado: {seletor}")
+                    break
                 except:
                     continue
             
-            if botao_proximo:
-                # Clicar no botão de próxima página
-                botao_proximo.click()
-                time.sleep(1.5)  # Aguardar carregamento
-                pagina_atual += 1
+            if not elemento_encontrado:
+                print(f"   ⚠️ Nenhum elemento de listagem encontrado")
+                break
+            
+            # Aguardar um pouco mais para garantir carregamento completo
+            time.sleep(2)
+            
+            # Extrair HTML da página
+            html = pagina.content()
+            
+            # Extrair IDs dos checkboxes
+            ids_pagina = extrair_ids_dos_checkboxes(html)
+            
+            if ids_pagina:
+                print(f"   📋 {len(ids_pagina)} IDs encontrados")
+                ids_anteriores = len(todos_ids)
+                todos_ids.extend(ids_pagina)
+                
+                # Verificar se encontrou novos IDs
+                if len(todos_ids) == ids_anteriores:
+                    tentativas_sem_novos += 1
+                    print(f"   ⚠️ Nenhum ID novo ({tentativas_sem_novos}/{max_tentativas_sem_novos})")
+                    
+                    if tentativas_sem_novos >= max_tentativas_sem_novos:
+                        print(f"   ✅ Fim da listagem (sem novos IDs)")
+                        break
+                else:
+                    tentativas_sem_novos = 0
             else:
-                print(f"   ✅ Última página alcançada (página {pagina_atual})")
+                print(f"   ⚠️ Nenhum ID encontrado nesta página")
+                break
+            
+            # Tentar ir para próxima página
+            try:
+                # Procurar botão de próxima página
+                proximo_seletores = [
+                    'a:has-text("Próxima")',
+                    'a:has-text("›")',
+                    'a:has-text("»")',
+                    'a.pagination-next',
+                    'li.next:not(.disabled) a',
+                    'a[rel="next"]',
+                    f'a:has-text("{pagina_atual + 1}")'
+                ]
+                
+                botao_proximo = None
+                for seletor in proximo_seletores:
+                    try:
+                        elementos = pagina.locator(seletor).all()
+                        for elem in elementos:
+                            if elem.is_visible() and elem.is_enabled():
+                                botao_proximo = elem
+                                break
+                        if botao_proximo:
+                            break
+                    except:
+                        continue
+                
+                if botao_proximo:
+                    print(f"   ➡️ Indo para página {pagina_atual + 1}...")
+                    botao_proximo.click()
+                    time.sleep(2)
+                    pagina_atual += 1
+                else:
+                    print(f"   ✅ Última página alcançada (página {pagina_atual})")
+                    break
+                    
+            except Exception as e:
+                print(f"   ✅ Fim da paginação: {str(e)[:50]}")
                 break
                 
         except Exception as e:
-            print(f"   ✅ Fim da paginação (página {pagina_atual})")
+            print(f"   ❌ Erro na página {pagina_atual}: {str(e)[:100]}")
             break
     
-    # Remover duplicatas
+    # Remover duplicatas mantendo ordem
     todos_ids = list(dict.fromkeys(todos_ids))
     
     print(f"\n✅ Total de IDs únicos coletados: {len(todos_ids)}")
@@ -206,7 +249,7 @@ class ColetorAlunosHortolandia:
                             self.alunos_encontrados.append(aluno_data)
                             print(f"✅ T{self.thread_id}: Aluno {aluno_id} | Igreja {igreja_id} | {nome_aluno[:40]}")
                 
-                time.sleep(0.05)
+                time.sleep(0.04)
                 
                 if self.requisicoes_feitas % 100 == 0:
                     print(f"📊 T{self.thread_id}: {self.requisicoes_feitas} requisições | {len(self.alunos_encontrados)} alunos encontrados")
@@ -348,7 +391,11 @@ def main():
     print("\n🔐 Realizando login...")
     
     with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
+        print("⏳ Iniciando navegador (pode demorar alguns segundos)...")
+        navegador = p.chromium.launch(
+            headless=True,
+            args=['--disable-blink-features=AutomationControlled']
+        )
         pagina = navegador.new_page()
         
         pagina.set_extra_http_headers({
@@ -356,23 +403,40 @@ def main():
         })
         
         try:
-            pagina.goto(URL_INICIAL)
+            print("🔗 Conectando ao site...")
+            pagina.goto(URL_INICIAL, wait_until='domcontentloaded', timeout=30000)
+            
+            print("📝 Preenchendo credenciais...")
             pagina.fill('input[name="login"]', EMAIL)
             pagina.fill('input[name="password"]', SENHA)
+            
+            print("🚀 Fazendo login...")
             pagina.click('button[type="submit"]')
-            pagina.wait_for_selector("nav", timeout=15000)
+            pagina.wait_for_selector("nav", timeout=20000)
             print("✅ Login realizado com sucesso!")
             
             # Navegar para página de listagem
-            print(f"\n🔗 Acessando: {URL_LISTAGEM}")
-            pagina.goto(URL_LISTAGEM)
-            time.sleep(2)
+            print(f"\n🔗 Acessando listagem de alunos...")
+            pagina.goto(URL_LISTAGEM, wait_until='domcontentloaded', timeout=30000)
+            
+            print("⏳ Aguardando carregamento da página...")
+            time.sleep(3)
             
             # Coletar todos os IDs da listagem
             ids_alunos = navegar_todas_paginas_listagem(pagina)
             
             if not ids_alunos:
                 print("❌ Nenhum ID de aluno encontrado na listagem!")
+                
+                # Salvar screenshot para debug
+                pagina.screenshot(path="debug_listagem.png")
+                print("📸 Screenshot salvo: debug_listagem.png")
+                
+                # Salvar HTML para debug
+                with open("debug_listagem.html", "w", encoding="utf-8") as f:
+                    f.write(pagina.content())
+                print("📄 HTML salvo: debug_listagem.html")
+                
                 navegador.close()
                 return
             
@@ -382,6 +446,14 @@ def main():
             
         except Exception as e:
             print(f"❌ Erro: {e}")
+            
+            # Salvar screenshot em caso de erro
+            try:
+                pagina.screenshot(path="erro_screenshot.png")
+                print("📸 Screenshot de erro salvo: erro_screenshot.png")
+            except:
+                pass
+                
             navegador.close()
             return
     
