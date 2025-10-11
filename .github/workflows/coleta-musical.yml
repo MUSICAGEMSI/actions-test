@@ -17,6 +17,7 @@ on:
           - script_ministerio.py
           - script_usuarios.py
           - script_orquestraccb1.py
+          - script_localidadesccb.py
 
 jobs:
   coleta:
