@@ -17,7 +17,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzbkdOTDjGJxabnlJNDX7ZKI4_vh-t5d84MDRp-4FO4KmocRPEVs2jkHL3gjKEG-efF/exec'
 
 RANGE_INICIO = 1
-RANGE_FIM = 8000
+RANGE_FIM = 1000000
 INSTANCIA_ID = "GHA_batch_1"
 
 # 🚀 MODO INSANO - META: 15 MINUTOS
