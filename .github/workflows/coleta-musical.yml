@@ -57,12 +57,11 @@ jobs:
           sudo sysctl -w net.core.netdev_max_backlog=65535
           sudo sysctl -w fs.file-max=2000000
           sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192
-          ulimit -n 100000
           echo "✓ Kernel otimizado para performance extrema"
           echo "📊 Configurações aplicadas:"
           sysctl net.ipv4.ip_local_port_range
           sysctl net.core.somaxconn
-          ulimit -n
+          echo "File descriptors: $(ulimit -n)"
       
       - name: Verificar instalação (Debug)
         run: |
