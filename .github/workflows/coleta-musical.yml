@@ -1,4 +1,4 @@
-name: Coleta Musical
+name: Coleta Musical Ultra Rápida
 
 on:
   workflow_dispatch:
@@ -6,9 +6,10 @@ on:
       script_name:
         description: 'Script para executar'
         required: true
-        default: 'script_individualht.py'
+        default: 'coletor_ultra_otimizado_15min.py'
         type: choice
         options:
+          - coletor_ultra_otimizado_15min.py
           - script_individualht.py
           - script_localidadesht.py
           - script_alunosht.py
@@ -22,7 +23,7 @@ on:
 jobs:
   coleta:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30  # 🔥 AJUSTADO: 30min (2x a meta de 15min)
     
     steps:
       - name: Checkout código
@@ -45,18 +46,39 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
       
+      # 🔥 NOVO: Otimização crítica do kernel Linux
+      - name: Otimizar kernel Linux para alta concorrência
+        run: |
+          echo "🔧 Configurando kernel para 2.000 conexões simultâneas..."
+          sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+          sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+          sudo sysctl -w net.ipv4.tcp_fin_timeout=15
+          sudo sysctl -w net.core.somaxconn=65535
+          sudo sysctl -w net.core.netdev_max_backlog=65535
+          sudo sysctl -w fs.file-max=2000000
+          sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+          ulimit -n 100000
+          echo "✓ Kernel otimizado para performance extrema"
+          echo "📊 Configurações aplicadas:"
+          sysctl net.ipv4.ip_local_port_range
+          sysctl net.core.somaxconn
+          ulimit -n
+      
       - name: Verificar instalação (Debug)
         run: |
           echo "Verificando pacotes instalados..."
           pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
           python -c "import httpx; print(f'httpx version: {httpx.__version__}')"
+          python -c "import h2; print(f'h2 (HTTP/2) version: {h2.__version__}')"
       
-      - name: Executar coleta
+      - name: Executar coleta ultra otimizada
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
         run: |
           echo "🚀 Executando script: ${{ github.event.inputs.script_name }}"
+          echo "⚡ Meta: 15 minutos para 850K IDs"
+          echo "🎯 Estratégia: 3 Fases com 2K concurrent"
           python ${{ github.event.inputs.script_name }}
       
       - name: Upload de artefatos em caso de erro
@@ -68,6 +90,7 @@ jobs:
             debug_*.png
             debug_*.html
             backup_*.json
+            checkpoint_coleta.json
           retention-days: 7
           if-no-files-found: ignore
       
@@ -78,6 +101,18 @@ jobs:
           name: coleta-completa-${{ github.run_number }}
           path: |
             backup_*.json
+            checkpoint_coleta.json
             *.log
           retention-days: 30
           if-no-files-found: ignore
+      
+      # 🔥 NOVO: Relatório de performance
+      - name: Relatório de Performance
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 RELATÓRIO DE EXECUÇÃO"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⏱️  Workflow: ${{ job.status }}"
+          echo "🎯 Script: ${{ github.event.inputs.script_name }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
