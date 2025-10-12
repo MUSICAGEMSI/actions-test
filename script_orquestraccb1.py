@@ -371,17 +371,22 @@ async def executar_coleta_insana(cookies):
 # ========================================
 # ENVIO DADOS - CORRIGIDO
 # ========================================
+# ========================================
+# ENVIO DADOS - GARANTIDO 7 COLUNAS
+# ========================================
 def enviar_dados(membros, tempo_total, stats):
-    """Envio para Google Sheets - CORRIGIDO"""
+    """Envio para Google Sheets - GARANTIDO 7 COLUNAS"""
     if not membros:
         print("⚠️  Nenhum membro para enviar")
         return False
     
     print(f"\n📤 Enviando {len(membros):,} membros para Google Sheets...")
     
+    # 🔥 GARANTE EXATAMENTE 7 COLUNAS (A-G)
     relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
+    
     for membro in membros:
-        relatorio.append([
+        linha = [
             str(membro.get('id', '')),
             membro.get('nome', ''),
             membro.get('igreja_selecionada', ''),
@@ -389,18 +394,20 @@ def enviar_dados(membros, tempo_total, stats):
             membro.get('nivel', ''),
             membro.get('instrumento', ''),
             membro.get('tonalidade', '')
-        ])
+        ]
+        # 🔥 FORÇA EXATAMENTE 7 COLUNAS (corta se tiver mais)
+        relatorio.append(linha[:7])
     
-    # ✅ CORRIGIDO: Adiciona _lote_1 e campo "lote" na metadata
+    # ✅ Payload com informação de 7 colunas
     payload = {
         "tipo": f"membros_gha_{INSTANCIA_ID}_lote_1",
         "relatorio_formatado": relatorio,
         "metadata": {
             "instancia": INSTANCIA_ID,
-            "lote": 1,  # ✅ NOVO: Campo obrigatório
+            "lote": 1,
             "range_inicio": RANGE_INICIO,
             "range_fim": RANGE_FIM,
-            "total_neste_lote": len(membros),  # ✅ NOVO: Total neste lote
+            "total_neste_lote": len(membros),
             "total_coletados": len(membros),
             "total_vazios": stats['vazios'],
             "total_erros_fase3": stats['erros_fase3'],
@@ -409,6 +416,7 @@ def enviar_dados(membros, tempo_total, stats):
             "velocidade_membros_min": round(len(membros) / (tempo_total/60), 0),
             "concurrent_max": CONCURRENT_REQUESTS,
             "fases_retry": f"F1:{SEMAPHORE_PHASE1}/F2:{SEMAPHORE_PHASE2}/F3:{SEMAPHORE_PHASE3}",
+            "num_colunas": 7,  # 🔥 NOVO: Informa quantas colunas
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
         }
     }
@@ -416,7 +424,7 @@ def enviar_dados(membros, tempo_total, stats):
     try:
         import requests
         print(f"🔄 Enviando para: {URL_APPS_SCRIPT}")
-        print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}")
+        print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}, colunas=7")
         
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
         
@@ -441,7 +449,6 @@ def enviar_dados(membros, tempo_total, stats):
         import traceback
         traceback.print_exc()
         return False
-
 # ========================================
 # MAIN
 # ========================================
