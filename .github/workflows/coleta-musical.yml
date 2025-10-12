@@ -1,117 +1,101 @@
-name: Coleta Musical Ultra Rápida
+name: Coleta Musical - Real-time Output
 
 on:
-  workflow_dispatch:
-    inputs:
-      script_name:
-        description: 'Script para executar'
-        required: true
-        default: 'coletor_ultra_otimizado_15min.py'
-        type: choice
-        options:
-          - coletor_ultra_otimizado_15min.py
-          - script_individualht.py
-          - script_localidadesht.py
-          - script_alunosht.py
-          - script_turmasht.py
-          - script_historicoht.py
-          - script_ministerio.py
-          - script_usuarios.py
-          - script_orquestraccb1.py
-          - script_localidadesccb.py
+  workflow_dispatch:  # Permite rodar manualmente
+  schedule:
+    - cron: '0 3 * * *'  # 3 AM UTC todos os dias (opcional)
+
+env:
+  PYTHONUNBUFFERED: 1  # CRÍTICO: força output unbuffered
 
 jobs:
-  coleta:
+  coletar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 🔥 AJUSTADO: 30min (2x a meta de 15min)
+    timeout-minutes: 45  # Timeout global do job
     
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
-        
+      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: Instalar dependências do sistema
+      - name: Instalar dependências
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxml2-dev libxslt-dev
-      
-      - name: Instalar dependências Python
-        run: |
+          echo "📦 Instalando dependências..."
           pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install chromium --with-deps
+          pip install httpx playwright tqdm requests
+          echo "✓ Dependências instaladas"
       
-      # 🔥 NOVO: Otimização crítica do kernel Linux
-      - name: Otimizar kernel Linux para alta concorrência
+      - name: Instalar Playwright e navegadores
         run: |
-          echo "🔧 Configurando kernel para 2.000 conexões simultâneas..."
-          sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
-          sudo sysctl -w net.ipv4.tcp_tw_reuse=1
-          sudo sysctl -w net.ipv4.tcp_fin_timeout=15
-          sudo sysctl -w net.core.somaxconn=65535
-          sudo sysctl -w net.core.netdev_max_backlog=65535
-          sudo sysctl -w fs.file-max=2000000
-          sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192
-          echo "✓ Kernel otimizado para performance extrema"
-          echo "📊 Configurações aplicadas:"
-          sysctl net.ipv4.ip_local_port_range
-          sysctl net.core.somaxconn
-          echo "File descriptors: $(ulimit -n)"
+          echo "🎭 Instalando Playwright..."
+          playwright install chromium
+          playwright install-deps chromium
+          echo "✓ Playwright configurado"
       
-      - name: Verificar instalação (Debug)
+      - name: Verificar configuração
         run: |
-          echo "Verificando pacotes instalados..."
-          pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
-          python -c "import httpx; print(f'httpx version: {httpx.__version__}')"
-          python -c "import h2; print(f'h2 (HTTP/2) version: {h2.__version__}')"
+          echo "🔍 Verificando ambiente..."
+          python --version
+          pip list | grep -E "httpx|playwright|tqdm"
+          echo "✓ Ambiente OK"
       
-      - name: Executar coleta ultra otimizada
+      - name: Executar coleta com output real-time
+        timeout-minutes: 40  # Timeout específico do step
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
         run: |
-          echo "🚀 Executando script: ${{ github.event.inputs.script_name }}"
-          echo "⚡ Meta: 15 minutos para 850K IDs"
-          echo "🎯 Estratégia: 3 Fases com 2K concurrent"
-          python ${{ github.event.inputs.script_name }}
+          echo "🚀 Iniciando coleta..."
+          echo "================================"
+          
+          # IMPORTANTE: stdbuf garante output em tempo real
+          stdbuf -oL -eL python coletor_realtime_output.py 2>&1 | while IFS= read -r line; do
+            echo "$line"
+          done
+          
+          exit_code=${PIPESTATUS[0]}
+          
+          if [ $exit_code -eq 0 ]; then
+            echo "================================"
+            echo "✅ Coleta finalizada com sucesso!"
+          else
+            echo "================================"
+            echo "❌ Coleta falhou com código: $exit_code"
+            exit $exit_code
+          fi
       
-      - name: Upload de artefatos em caso de erro
+      - name: Upload logs em caso de falha
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots-${{ github.run_number }}
+          name: logs-coleta-${{ github.run_number }}
           path: |
-            debug_*.png
-            debug_*.html
-            backup_*.json
+            coletor_debug.log
             checkpoint_coleta.json
           retention-days: 7
-          if-no-files-found: ignore
       
-      - name: Upload de logs e backups
-        if: success()
+      - name: Upload checkpoint (sempre)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coleta-completa-${{ github.run_number }}
-          path: |
-            backup_*.json
-            checkpoint_coleta.json
-            *.log
-          retention-days: 30
-          if-no-files-found: ignore
+          name: checkpoint-${{ github.run_number }}
+          path: checkpoint_coleta.json
+          retention-days: 3
       
-      # 🔥 NOVO: Relatório de performance
-      - name: Relatório de Performance
+      - name: Relatório final
         if: always()
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 RELATÓRIO DE EXECUÇÃO"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⏱️  Workflow: ${{ job.status }}"
-          echo "🎯 Script: ${{ github.event.inputs.script_name }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Informações da execução:"
+          echo "  - Run number: ${{ github.run_number }}"
+          echo "  - Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          if [ -f "checkpoint_coleta.json" ]; then
+            echo "  - Checkpoint disponível: ✓"
+          else
+            echo "  - Checkpoint disponível: ✗"
+          fi
