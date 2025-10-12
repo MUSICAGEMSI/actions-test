@@ -91,6 +91,8 @@ async def carregar_instrutores_async(client):
 
 def extrair_dados_aula(html_content, aula_id):
     """Extração ultra-rápida dos dados principais da aula"""
+    global NOMES_INSTRUTORES
+    
     try:
         if not html_content or len(html_content) < 300:
             return None
@@ -272,6 +274,8 @@ class ColetorAulasInsano:
     async def coletar_aula_completa(self, client, aula_id, timeout, semaphore, fase=1):
         """Coleta uma aula completa (3 requests) - ultra otimizado"""
         
+        global CACHE_IDS_NAO_HTL
+        
         # Cache negativo
         if aula_id in CACHE_IDS_NAO_HTL:
             async with self.lock:
@@ -348,6 +352,9 @@ class ColetorAulasInsano:
     async def fase1_ultra_rapida(self, ids_chunk, pbar):
         """FASE 1: Ultra agressiva"""
         
+        # Declarar global ANTES de usar
+        global INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES
+        
         limits = httpx.Limits(
             max_keepalive_connections=200,
             max_connections=500,
@@ -365,7 +372,6 @@ class ColetorAulasInsano:
             
             # Carregar instrutores uma vez
             if not INSTRUTORES_HORTOLANDIA:
-                global INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES
                 INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES = await carregar_instrutores_async(client)
             
             semaphore = asyncio.Semaphore(SEMAPHORE_PHASE1)
