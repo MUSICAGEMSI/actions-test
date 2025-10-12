@@ -5,7 +5,6 @@ import asyncio
 import httpx
 import time
 import random
-from playwright.sync_api import sync_playwright
 from collections import deque, defaultdict
 from tqdm import tqdm
 import json
@@ -120,7 +119,7 @@ class ColetorUltraRapido:
         self.lock = asyncio.Lock()
         self.batch_buffer = []
     
-    async def coletar_id(self, client, membro_id, timeout, semaphore):
+    async def coletar_id(self, client, membro_id, timeout, semaphore, debug=False):
         """Coleta individual - máxima performance"""
         
         # Cache hit
@@ -132,8 +131,25 @@ class ColetorUltraRapido:
                 url = f"https://musical.congregacao.org.br/grp_musical/editar/{membro_id}"
                 response = await client.get(url, timeout=timeout)
                 
+                # 🔥 DEBUG: Log do primeiro ID para verificar autenticação
+                if debug and membro_id <= 10:
+                    print(f"\n[DEBUG ID {membro_id}]")
+                    print(f"  Status: {response.status_code}")
+                    print(f"  URL Final: {response.url}")
+                    print(f"  Headers: {dict(response.headers)}")
+                    print(f"  Content length: {len(response.text)}")
+                    print(f"  Has 'nome': {'name=\"nome\"' in response.text}")
+                    if response.status_code != 200:
+                        print(f"  Content preview: {response.text[:500]}")
+                
                 if response.status_code == 200:
                     html = response.text
+                    
+                    # 🔥 VERIFICAÇÃO: Se foi redirecionado para login
+                    if 'name="login"' in html or 'name="password"' in html:
+                        if debug:
+                            print(f"  ⚠️ REDIRECIONADO PARA LOGIN! Sessão expirada.")
+                        return 'auth_error'
                     
                     # Validação rápida
                     if 'name="nome"' in html:
@@ -148,12 +164,20 @@ class ColetorUltraRapido:
                     CACHE_VAZIOS.add(membro_id)
                     return 'vazio'
                 
+                elif response.status_code == 302 or response.status_code == 301:
+                    # Redirecionamento = problema de autenticação
+                    if debug:
+                        print(f"  ⚠️ Redirect {response.status_code}: {response.headers.get('location')}")
+                    return 'auth_error'
+                
                 # Retry necessário
                 return 'retry'
                 
             except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout):
                 return 'retry'
-            except:
+            except Exception as e:
+                if debug and membro_id <= 10:
+                    print(f"  ❌ Exception: {e}")
                 return 'retry'
     
     async def fase0_sampling(self):
@@ -354,7 +378,7 @@ async def login():
 async def executar_coleta_ultra():
     """Pipeline completo ultra otimizado"""
     
-    cookies = login()
+    cookies = await login()
     if not cookies:
         sys.exit(1)
     
