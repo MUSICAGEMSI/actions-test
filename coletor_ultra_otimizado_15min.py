@@ -318,28 +318,30 @@ class ColetorUltraRapido:
             json.dump(checkpoint, f)
 
 # ========================================
-# LOGIN OTIMIZADO
+# LOGIN OTIMIZADO (ASYNC)
 # ========================================
-def login():
-    """Login com Playwright"""
+async def login():
+    """Login com Playwright Async API"""
     print("🔐 Realizando login...")
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
+        from playwright.async_api import async_playwright
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
                 headless=True,
                 args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
             )
-            context = browser.new_context(
+            context = await browser.new_context(
                 user_agent='Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36'
             )
-            page = context.new_page()
-            page.goto(URL_INICIAL, timeout=30000)
-            page.fill('input[name="login"]', EMAIL)
-            page.fill('input[name="password"]', SENHA)
-            page.click('button[type="submit"]')
-            page.wait_for_selector("nav", timeout=20000)
-            cookies = {c['name']: c['value'] for c in context.cookies()}
-            browser.close()
+            page = await context.new_page()
+            await page.goto(URL_INICIAL, timeout=30000)
+            await page.fill('input[name="login"]', EMAIL)
+            await page.fill('input[name="password"]', SENHA)
+            await page.click('button[type="submit"]')
+            await page.wait_for_selector("nav", timeout=20000)
+            cookies = {c['name']: c['value'] for c in await context.cookies()}
+            await browser.close()
             print("✓ Login realizado\n")
             return cookies
     except Exception as e:
