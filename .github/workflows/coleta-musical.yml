@@ -9,6 +9,10 @@ on:
         default: 'coletor_ultra_otimizado_15min.py'
         type: choice
         options:
+          - script_nivel.py
+          - script_det.py
+          - script_expandido.py
+          - script_turma.py
           - coletor_realtime_output.py
           - script_individualht.py
           - script_localidadesht.py
