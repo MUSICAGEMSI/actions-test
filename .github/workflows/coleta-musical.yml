@@ -23,7 +23,7 @@ on:
 jobs:
   coleta:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 🔥 AJUSTADO: 30min (2x a meta de 15min)
+    timeout-minutes: 360  # 🔥 6 HORAS - Tempo máximo do GitHub Actions
     
     steps:
       - name: Checkout código
@@ -46,8 +46,8 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
       
-      # 🔥 NOVO: Otimização crítica do kernel Linux
-      - name: Otimizar kernel Linux para alta concorrência
+      # 🔥 OTIMIZAÇÃO CRÍTICA: Kernel Linux para alta concorrência
+      - name: Otimizar kernel Linux para performance extrema
         run: |
           echo "🔧 Configurando kernel para 2.000 conexões simultâneas..."
           sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
@@ -57,27 +57,36 @@ jobs:
           sudo sysctl -w net.core.netdev_max_backlog=65535
           sudo sysctl -w fs.file-max=2000000
           sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+          sudo sysctl -w net.ipv4.tcp_keepalive_time=600
+          sudo sysctl -w net.ipv4.tcp_keepalive_probes=3
+          sudo sysctl -w net.ipv4.tcp_keepalive_intvl=15
           echo "✓ Kernel otimizado para performance extrema"
           echo "📊 Configurações aplicadas:"
           sysctl net.ipv4.ip_local_port_range
           sysctl net.core.somaxconn
           echo "File descriptors: $(ulimit -n)"
       
-      - name: Verificar instalação (Debug)
+      - name: Verificar instalação
         run: |
-          echo "Verificando pacotes instalados..."
+          echo "📦 Verificando pacotes instalados..."
           pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
-          python -c "import httpx; print(f'httpx version: {httpx.__version__}')"
-          python -c "import h2; print(f'h2 (HTTP/2) version: {h2.__version__}')"
+          python -c "import httpx; print(f'✓ httpx version: {httpx.__version__}')"
+          python -c "import h2; print(f'✓ h2 (HTTP/2) version: {h2.__version__}')"
+          python -c "import asyncio; print(f'✓ asyncio disponível')"
       
-      - name: Executar coleta ultra otimizada
+      - name: Executar coleta SEM LIMITE DE TEMPO
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
         run: |
-          echo "🚀 Executando script: ${{ github.event.inputs.script_name }}"
-          echo "⚡ Meta: 15 minutos para 850K IDs"
-          echo "🎯 Estratégia: 3 Fases com 2K concurrent"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🚀 EXECUTANDO COLETA SEM LIMITE DE TEMPO"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📜 Script: ${{ github.event.inputs.script_name }}"
+          echo "⏱️  Timeout: 6 HORAS (máximo do GitHub Actions)"
+          echo "🎯 Estratégia: 3 Fases com Retry até completar"
+          echo "💪 O script executará até processar TODOS os IDs"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           python ${{ github.event.inputs.script_name }}
       
       - name: Upload de artefatos em caso de erro
@@ -105,13 +114,22 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
       
-      # 🔥 NOVO: Relatório de performance
-      - name: Relatório de Performance
+      - name: Relatório de Performance Final
         if: always()
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 RELATÓRIO DE EXECUÇÃO"
+          echo "📊 RELATÓRIO FINAL DE EXECUÇÃO"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⏱️  Workflow: ${{ job.status }}"
-          echo "🎯 Script: ${{ github.event.inputs.script_name }}"
+          echo "⏱️  Status: ${{ job.status }}"
+          echo "📜 Script: ${{ github.event.inputs.script_name }}"
+          echo "🔢 Run Number: ${{ github.run_number }}"
+          echo "📅 Data/Hora: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Coleta finalizada com SUCESSO!"
+          elif [ "${{ job.status }}" == "failure" ]; then
+            echo "❌ Coleta finalizou com ERRO"
+          else
+            echo "⚠️  Coleta foi CANCELADA ou teve timeout"
+          fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
