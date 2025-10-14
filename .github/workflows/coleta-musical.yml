@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - script_nivel.py
+          - script_matriculados.py
           - script_det.py
           - script_expandido.py
           - script_turma.py
