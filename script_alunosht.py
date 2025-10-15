@@ -3,18 +3,27 @@ load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright
 import os
+import sys
 import requests
 import time
 import json
+import concurrent.futures
 from typing import List, Set, Dict
+import re
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_LISTAGEM = "https://musical.congregacao.org.br/alunos/listagem"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 
-print(f"🎓 COLETOR DE ALUNOS DE HORTOLÂNDIA (DA LISTAGEM)")
+# Parâmetros de range
+RANGE_INICIO = 1
+RANGE_FIM = 800000
+NUM_THREADS = 25
+
+print(f"🎓 COLETOR DE IDs - ALUNOS DE HORTOLÂNDIA")
+print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
+print(f"🧵 Threads: {NUM_THREADS}")
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -43,46 +52,138 @@ def buscar_ids_igrejas_hortolandia() -> Set[int]:
         print(f"❌ Erro ao buscar IDs das igrejas: {e}")
         return set()
 
-def extrair_alunos_do_json(json_data: dict, ids_igrejas: Set[int]) -> List[Dict]:
+def extrair_igreja_selecionada(html_content: str) -> int:
     """
-    Extrai alunos de Hortolândia do JSON da listagem
-    O JSON tem formato: {"data": [[id, nome, igreja, cargo, nivel, status, id2, flag], ...]}
+    Extrai o ID da igreja_selecionada do HTML
+    Procura por padrão: igreja_selecionada (15925)
     """
-    alunos_hortolandia = []
+    if not html_content:
+        return None
     
-    try:
-        data_array = json_data.get('data', [])
-        
-        print(f"📊 Processando {len(data_array)} alunos da listagem...")
-        
-        for row in data_array:
-            # row[0] = ID do aluno
-            # row[1] = Nome completo
-            # row[2] = Igreja (contém "HORTOLÂNDIA" no texto)
-            # row[4] = Nível (instrumento)
-            
-            id_aluno = row[0]
-            nome_completo = row[1]
-            igreja_info = row[2]
-            nivel = row[4]
-            
-            # Verificar se é de Hortolândia pelo texto
-            if "HORTOLÂNDIA" in igreja_info.upper() or "HORTOLANDIA" in igreja_info.upper():
-                aluno = {
-                    'id_aluno': id_aluno,
-                    'nome': nome_completo,
-                    'igreja': igreja_info,
-                    'nivel': nivel
-                }
-                
-                alunos_hortolandia.append(aluno)
-                
-        print(f"✅ {len(alunos_hortolandia)} alunos de Hortolândia encontrados")
-        
-    except Exception as e:
-        print(f"❌ Erro ao processar JSON: {e}")
+    # Padrão 1: igreja_selecionada (ID)
+    match = re.search(r'igreja_selecionada\s*\((\d+)\)', html_content)
+    if match:
+        return int(match.group(1))
     
-    return alunos_hortolandia
+    # Padrão 2: igreja_selecionada(ID) sem espaço
+    match = re.search(r'igreja_selecionada\((\d+)\)', html_content)
+    if match:
+        return int(match.group(1))
+    
+    return None
+
+def extrair_nome_aluno(html_content: str) -> str:
+    """
+    Extrai o nome do aluno do HTML
+    """
+    if not html_content:
+        return ""
+    
+    # Procura por: <input type="text" name="nome" ... value="NOME DO ALUNO"
+    match = re.search(r'name="nome"[^>]*value="([^"]+)"', html_content)
+    if match:
+        return match.group(1).strip()
+    
+    return ""
+
+class ColetorAlunosHortolandia:
+    def __init__(self, session, thread_id: int, ids_igrejas: Set[int]):
+        self.session = session
+        self.thread_id = thread_id
+        self.ids_igrejas = ids_igrejas
+        self.alunos_encontrados: List[Dict] = []
+        self.requisicoes_feitas = 0
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+    
+    def coletar_batch_alunos(self, ids_batch: List[int]) -> List[Dict]:
+        """
+        Verifica um batch de IDs de alunos e retorna os que são de Hortolândia
+        """
+        for aluno_id in ids_batch:
+            try:
+                url = f"https://musical.congregacao.org.br/grp_musical/editar/{aluno_id}"
+                
+                resp = self.session.get(url, headers=self.headers, timeout=10)
+                self.requisicoes_feitas += 1
+                
+                if resp.status_code == 200:
+                    html = resp.text
+                    
+                    # Verificar se o aluno existe (não é página de erro)
+                    if 'igreja_selecionada' in html:
+                        igreja_id = extrair_igreja_selecionada(html)
+                        
+                        # Verificar se é de Hortolândia
+                        if igreja_id and igreja_id in self.ids_igrejas:
+                            nome_aluno = extrair_nome_aluno(html)
+                            
+                            aluno_data = {
+                                'id_aluno': aluno_id,
+                                'id_igreja': igreja_id,
+                                'nome': nome_aluno
+                            }
+                            
+                            self.alunos_encontrados.append(aluno_data)
+                            print(f"✅ T{self.thread_id}: Aluno {aluno_id} | Igreja {igreja_id} | {nome_aluno[:40]}")
+                
+                # Pausa mínima entre requisições
+                time.sleep(0.08)
+                
+                # Log de progresso a cada 500 requisições
+                if self.requisicoes_feitas % 500 == 0:
+                    print(f"📊 T{self.thread_id}: {self.requisicoes_feitas:,} requisições | {len(self.alunos_encontrados)} alunos encontrados")
+                
+            except Exception as e:
+                if "timeout" in str(e).lower():
+                    print(f"⏱️ T{self.thread_id}: Timeout no ID {aluno_id}")
+                continue
+        
+        return self.alunos_encontrados
+
+def executar_coleta_paralela_alunos(session, ids_igrejas: Set[int], range_inicio: int, range_fim: int, num_threads: int) -> List[Dict]:
+    """
+    Executa coleta paralela de alunos de Hortolândia
+    """
+    total_ids = range_fim - range_inicio + 1
+    ids_per_thread = total_ids // num_threads
+    
+    print(f"📈 Dividindo {total_ids:,} IDs em {num_threads} threads ({ids_per_thread:,} IDs/thread)")
+    
+    # Criar ranges por thread
+    thread_ranges = []
+    for i in range(num_threads):
+        inicio = range_inicio + (i * ids_per_thread)
+        fim = inicio + ids_per_thread - 1
+        
+        if i == num_threads - 1:
+            fim = range_fim
+            
+        thread_ranges.append(list(range(inicio, fim + 1)))
+    
+    todos_alunos = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        coletores = [ColetorAlunosHortolandia(session, i, ids_igrejas) for i in range(num_threads)]
+        
+        futures = []
+        for i, ids_thread in enumerate(thread_ranges):
+            future = executor.submit(coletores[i].coletar_batch_alunos, ids_thread)
+            futures.append((future, i))
+        
+        # Aguardar conclusão
+        for future, thread_id in futures:
+            try:
+                alunos_thread = future.result(timeout=3600)  # 60 min timeout
+                todos_alunos.extend(alunos_thread)
+                coletor = coletores[thread_id]
+                print(f"✅ Thread {thread_id}: {len(alunos_thread)} alunos | {coletor.requisicoes_feitas:,} requisições")
+            except Exception as e:
+                print(f"❌ Thread {thread_id}: Erro - {e}")
+    
+    return todos_alunos
 
 def extrair_cookies_playwright(pagina):
     """
@@ -117,39 +218,31 @@ def enviar_alunos_para_sheets(alunos: List[Dict], tempo_execucao: float, ids_igr
     
     print(f"\n📤 Enviando {len(alunos)} alunos para Google Sheets...")
     
-    # Separar headers e dados
-    headers = ["ID_ALUNO", "NOME_COMPLETO", "IGREJA", "NIVEL"]
+    # Formatar dados para a planilha
+    relatorio = [
+        ["ID_ALUNO", "ID_IGREJA", "NOME_ALUNO"]
+    ]
     
-    dados_alunos = []
     for aluno in alunos:
-        dados_alunos.append([
+        relatorio.append([
             str(aluno['id_aluno']),
-            aluno['nome'],
-            aluno['igreja'],
-            aluno['nivel']
+            str(aluno['id_igreja']),
+            aluno['nome']
         ])
-    
-    # Estatísticas por instrumento para o resumo
-    from collections import Counter
-    distribuicao = Counter([a['nivel'] for a in alunos])
-    
-    resumo = {
-        "Total de Alunos": len(alunos),
-        "Total de Igrejas": len(ids_igrejas),
-        "Tempo de Execução (seg)": round(tempo_execucao, 2),
-        "Data/Hora": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "---": "---"
-    }
-    
-    # Adicionar distribuição por instrumento
-    for instrumento, qtd in distribuicao.most_common():
-        resumo[f"📊 {instrumento}"] = qtd
     
     payload = {
         "tipo": "alunos_hortolandia",
-        "headers": headers,
-        "dados": dados_alunos,
-        "resumo": resumo
+        "relatorio_formatado": relatorio,
+        "metadata": {
+            "total_alunos": len(alunos),
+            "total_igrejas_monitoradas": len(ids_igrejas),
+            "range_inicio": RANGE_INICIO,
+            "range_fim": RANGE_FIM,
+            "tempo_execucao_min": round(tempo_execucao/60, 2),
+            "threads_utilizadas": NUM_THREADS,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "ids_igrejas": sorted(list(ids_igrejas))
+        }
     }
     
     try:
@@ -192,58 +285,38 @@ def main():
         })
         
         try:
-            # Login
-            pagina.goto(URL_INICIAL, wait_until='domcontentloaded', timeout=30000)
+            pagina.goto(URL_INICIAL)
             pagina.fill('input[name="login"]', EMAIL)
             pagina.fill('input[name="password"]', SENHA)
             pagina.click('button[type="submit"]')
-            pagina.wait_for_selector("nav", timeout=20000)
+            pagina.wait_for_selector("nav", timeout=15000)
             print("✅ Login realizado com sucesso!")
             
-            # Acessar listagem
-            print(f"\n🔗 Acessando listagem de alunos...")
-            pagina.goto(URL_LISTAGEM, wait_until='domcontentloaded', timeout=30000)
-            time.sleep(2)  # Aguardar carregamento
-            
-            # Extrair o conteúdo da página (que é JSON)
-            print("📥 Extraindo dados JSON da listagem...")
-            conteudo = pagina.content()
-            
-            # Tentar extrair JSON do body
-            try:
-                # A página retorna JSON direto no body
-                body_text = pagina.locator("body").inner_text()
-                json_data = json.loads(body_text)
-                
-                print(f"✅ JSON extraído com sucesso!")
-                print(f"📊 Total de registros: {json_data.get('recordsTotal', 0)}")
-                
-            except json.JSONDecodeError as e:
-                print(f"❌ Erro ao decodificar JSON: {e}")
-                print(f"📄 Primeiros 500 caracteres do conteúdo:")
-                print(body_text[:500])
-                navegador.close()
-                return
-            
-            # Extrair cookies para possíveis requisições futuras
-            cookies_dict = extrair_cookies_playwright(pagina)
-            navegador.close()
-            
         except Exception as e:
-            print(f"❌ Erro: {e}")
-            
-            try:
-                pagina.screenshot(path="erro_screenshot.png")
-                print("📸 Screenshot de erro salvo: erro_screenshot.png")
-            except:
-                pass
-                
+            print(f"❌ Erro no login: {e}")
             navegador.close()
             return
+        
+        # Extrair cookies para sessão requests
+        cookies_dict = extrair_cookies_playwright(pagina)
+        navegador.close()
     
-    # Processar JSON e filtrar alunos de Hortolândia
-    print(f"\n🎓 Filtrando alunos de Hortolândia...")
-    alunos_hortolandia = extrair_alunos_do_json(json_data, ids_igrejas)
+    # Criar sessão requests otimizada
+    session = requests.Session()
+    session.cookies.update(cookies_dict)
+    
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=NUM_THREADS + 5,
+        pool_maxsize=NUM_THREADS + 5,
+        max_retries=2
+    )
+    session.mount('https://', adapter)
+    
+    print("\n🎓 Iniciando busca de alunos de Hortolândia...")
+    print(f"🏛️ Monitorando {len(ids_igrejas)} igrejas")
+    
+    # Executar coleta paralela
+    alunos_hortolandia = executar_coleta_paralela_alunos(session, ids_igrejas, RANGE_INICIO, RANGE_FIM, NUM_THREADS)
     
     tempo_total = time.time() - tempo_inicio
     
@@ -251,24 +324,25 @@ def main():
     print(f"🏁 COLETA DE ALUNOS FINALIZADA!")
     print(f"{'='*60}")
     print(f"🎓 Alunos de Hortolândia encontrados: {len(alunos_hortolandia)}")
-    print(f"⏱️ Tempo total: {tempo_total:.1f}s")
+    print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
+    print(f"📈 Range verificado: {RANGE_INICIO:,} - {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
     
     if alunos_hortolandia:
+        print(f"⚡ Velocidade: {(RANGE_FIM - RANGE_INICIO + 1)/tempo_total:.2f} IDs verificados/segundo")
         print(f"\n📋 Primeiros 10 alunos encontrados:")
+        
         for i, aluno in enumerate(alunos_hortolandia[:10]):
-            print(f"   {i+1}. ID: {aluno['id_aluno']} | {aluno['nome'][:50]}")
-            print(f"      Igreja: {aluno['igreja'][:60]}")
-            print(f"      Nível: {aluno['nivel']}")
+            print(f"   {i+1}. ID: {aluno['id_aluno']} | Igreja: {aluno['id_igreja']} | {aluno['nome'][:50]}")
         
         if len(alunos_hortolandia) > 10:
             print(f"   ... e mais {len(alunos_hortolandia) - 10} alunos")
         
-        # Estatísticas por nível/instrumento
-        print(f"\n📊 Distribuição por instrumento:")
+        # Estatísticas por igreja
+        print(f"\n📊 Distribuição por igreja:")
         from collections import Counter
-        distribuicao = Counter([a['nivel'] for a in alunos_hortolandia])
-        for nivel, qtd in distribuicao.most_common():
-            print(f"   {nivel}: {qtd} alunos")
+        distribuicao = Counter([a['id_igreja'] for a in alunos_hortolandia])
+        for igreja_id, qtd in distribuicao.most_common():
+            print(f"   Igreja {igreja_id}: {qtd} alunos")
         
         # Salvar em arquivo
         salvar_alunos_em_arquivo(alunos_hortolandia)
@@ -277,7 +351,7 @@ def main():
         enviar_alunos_para_sheets(alunos_hortolandia, tempo_total, ids_igrejas)
     
     else:
-        print("⚠️ Nenhum aluno de Hortolândia foi encontrado na listagem")
+        print("⚠️ Nenhum aluno de Hortolândia foi encontrado neste range")
     
     print(f"\n🎯 Processo finalizado!")
 
