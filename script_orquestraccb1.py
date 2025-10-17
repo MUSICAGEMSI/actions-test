@@ -372,76 +372,125 @@ async def executar_coleta_insana(cookies):
 # ENVIO DADOS - CORRIGIDO
 # ========================================
 def enviar_dados(membros, tempo_total, stats):
-    """Envio para Google Sheets - CORRIGIDO"""
+    """Envio em lotes para Google Sheets - CORRIGIDO"""
+    import requests
+    from tqdm import tqdm
+    
     if not membros:
         print("⚠️  Nenhum membro para enviar")
         return False
     
-    print(f"\n📤 Enviando {len(membros):,} membros para Google Sheets...")
+    # Configurações
+    TAMANHO_LOTE = 10000  # 10k registros por lote
+    TIMEOUT_ENVIO = 180   # 3 minutos
+    RETRY_LOTE = 3        # 3 tentativas
     
-    relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
-    for membro in membros:
-        relatorio.append([
-            str(membro.get('id', '')),
-            membro.get('nome', ''),
-            membro.get('igreja_selecionada', ''),
-            membro.get('cargo_ministerio', ''),
-            membro.get('nivel', ''),
-            membro.get('instrumento', ''),
-            membro.get('tonalidade', '')
-        ])
+    total_membros = len(membros)
+    total_lotes = (total_membros + TAMANHO_LOTE - 1) // TAMANHO_LOTE
     
-    # ✅ CORRIGIDO: Adiciona _lote_1 e campo "lote" na metadata
-    payload = {
-        "tipo": f"membros_gha_{INSTANCIA_ID}_lote_1",
-        "relatorio_formatado": relatorio,
-        "metadata": {
-            "instancia": INSTANCIA_ID,
-            "lote": 1,  # ✅ NOVO: Campo obrigatório
-            "range_inicio": RANGE_INICIO,
-            "range_fim": RANGE_FIM,
-            "total_neste_lote": len(membros),  # ✅ NOVO: Total neste lote
-            "total_coletados": len(membros),
-            "total_vazios": stats['vazios'],
-            "total_erros_fase3": stats['erros_fase3'],
-            "tempo_execucao_min": round(tempo_total/60, 2),
-            "velocidade_ids_min": round((RANGE_FIM - RANGE_INICIO + 1) / (tempo_total/60), 0),
-            "velocidade_membros_min": round(len(membros) / (tempo_total/60), 0),
-            "concurrent_max": CONCURRENT_REQUESTS,
-            "fases_retry": f"F1:{SEMAPHORE_PHASE1}/F2:{SEMAPHORE_PHASE2}/F3:{SEMAPHORE_PHASE3}",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
-        }
-    }
+    print(f"\n{'='*80}")
+    print(f"📤 ENVIANDO {total_membros:,} MEMBROS EM {total_lotes} LOTES")
+    print(f"{'='*80}")
+    print(f"📦 Tamanho do lote: {TAMANHO_LOTE:,} registros")
+    print(f"⏱️  Timeout por lote: {TIMEOUT_ENVIO}s")
+    print(f"{'='*80}\n")
     
-    try:
-        import requests
-        print(f"🔄 Enviando para: {URL_APPS_SCRIPT}")
-        print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}")
-        
-        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
-        
-        print(f"📡 Status HTTP: {response.status_code}")
-        
-        if response.status_code == 200:
-            try:
-                resultado = response.json()
-                print(f"✓ Resposta: {resultado}")
-                print("✅ Dados enviados com sucesso!")
-                return True
-            except:
-                print(f"✓ Resposta (texto): {response.text[:200]}")
-                print("✅ Dados enviados com sucesso!")
-                return True
-        else:
-            print(f"✗ Erro HTTP {response.status_code}")
-            print(f"✗ Resposta: {response.text[:500]}")
-            return False
-    except Exception as e:
-        print(f"✗ Erro ao enviar: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
+    cabecalho = ["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]
+    
+    lotes_sucesso = 0
+    lotes_falha = 0
+    
+    with tqdm(total=total_lotes, desc="Enviando lotes", unit="lote", ncols=100) as pbar:
+        for i in range(0, total_membros, TAMANHO_LOTE):
+            lote_numero = (i // TAMANHO_LOTE) + 1
+            fim_lote = min(i + TAMANHO_LOTE, total_membros)
+            membros_lote = membros[i:fim_lote]
+            
+            # Monta o payload do lote
+            relatorio = []
+            
+            # Cabeçalho apenas no primeiro lote
+            if lote_numero == 1:
+                relatorio.append(cabecalho)
+            
+            # Dados do lote
+            for membro in membros_lote:
+                relatorio.append([
+                    str(membro.get('id', '')),
+                    membro.get('nome', ''),
+                    membro.get('igreja_selecionada', ''),
+                    membro.get('cargo_ministerio', ''),
+                    membro.get('nivel', ''),
+                    membro.get('instrumento', ''),
+                    membro.get('tonalidade', '')
+                ])
+            
+            payload = {
+                "tipo": f"membros_gha_{INSTANCIA_ID}_lote_{lote_numero}",
+                "relatorio_formatado": relatorio,
+                "metadata": {
+                    "instancia": INSTANCIA_ID,
+                    "lote": lote_numero,
+                    "total_lotes": total_lotes,
+                    "range_inicio": RANGE_INICIO,
+                    "range_fim": RANGE_FIM,
+                    "total_neste_lote": len(membros_lote),
+                    "total_geral": total_membros,
+                    "total_coletados": total_membros,
+                    "total_vazios": stats['vazios'],
+                    "total_erros_fase3": stats['erros_fase3'],
+                    "tempo_execucao_min": round(tempo_total/60, 2),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
+                }
+            }
+            
+            # Tenta enviar o lote com retry
+            sucesso = False
+            for tentativa in range(1, RETRY_LOTE + 1):
+                try:
+                    response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=TIMEOUT_ENVIO)
+                    
+                    if response.status_code == 200:
+                        try:
+                            resultado = response.json()
+                            if resultado.get('status') == 'sucesso':
+                                sucesso = True
+                                lotes_sucesso += 1
+                                break
+                        except:
+                            if "sucesso" in response.text.lower():
+                                sucesso = True
+                                lotes_sucesso += 1
+                                break
+                    
+                    if tentativa < RETRY_LOTE:
+                        time.sleep(2)
+                        
+                except requests.exceptions.Timeout:
+                    print(f"\n⚠️  Lote {lote_numero}: Timeout na tentativa {tentativa}/{RETRY_LOTE}")
+                    if tentativa < RETRY_LOTE:
+                        time.sleep(5)
+                        
+                except Exception as e:
+                    print(f"\n✗ Lote {lote_numero}: Erro - {str(e)[:100]}")
+                    if tentativa < RETRY_LOTE:
+                        time.sleep(5)
+            
+            if not sucesso:
+                lotes_falha += 1
+                print(f"\n❌ FALHA no lote {lote_numero}")
+            
+            pbar.update(1)
+    
+    print(f"\n{'='*80}")
+    print(f"📊 RELATÓRIO DE ENVIO")
+    print(f"{'='*80}")
+    print(f"✅ Lotes enviados: {lotes_sucesso}/{total_lotes}")
+    print(f"❌ Lotes falhados: {lotes_falha}/{total_lotes}")
+    print(f"📈 Taxa de sucesso: {(lotes_sucesso/total_lotes*100):.1f}%")
+    print(f"{'='*80}\n")
+    
+    return lotes_falha == 0
 # ========================================
 # MAIN
 # ========================================
