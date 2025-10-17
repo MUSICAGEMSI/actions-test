@@ -12,15 +12,16 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime
 import json
+import unicodedata
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyvEGIUPIvgbSuT_yikqg03nEjqXryd6RfI121A3pRt75v9oJoFNLTdvo3-onNdEsJd/exec'
 
-# Cache de instrutores
+# Cache de instrutores - AGORA COM NOMENCLATURA COMPLETA (Nome + Estado Civil)
 INSTRUTORES_HORTOLANDIA = {}
-NOMES_INSTRUTORES = set()
+NOMES_COMPLETOS_NORMALIZADOS = set()
 
 def criar_sessao_robusta():
     """Cria sessão HTTP com retry automático"""
@@ -49,8 +50,30 @@ def extrair_cookies_playwright(pagina):
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
+def normalizar_nome(nome):
+    """
+    Normaliza nome para comparação consistente
+    Remove acentos, caracteres especiais, espaços extras
+    Converte: "ABIMAEL DINIZ CÂNDIDO - CASADO/55" -> "ABIMAEL DINIZ CANDIDO CASADO 55"
+    """
+    # Remove acentos (NFD = decomposição + remoção de diacríticos)
+    nome = unicodedata.normalize('NFD', nome)
+    nome = ''.join(char for char in nome if unicodedata.category(char) != 'Mn')
+    
+    # Remove caracteres especiais comuns
+    nome = nome.replace('/', ' ').replace('\\', ' ').replace('-', ' ')
+    
+    # Normaliza espaços e maiúsculas
+    nome = ' '.join(nome.upper().split())
+    
+    return nome
+
 def carregar_instrutores_hortolandia(session, max_tentativas=5):
-    """Carrega a lista completa de instrutores de Hortolândia COM RETRY ROBUSTO"""
+    """
+    Carrega a lista completa de instrutores de Hortolândia COM NOMENCLATURA COMPLETA
+    Formato: "NOME COMPLETO - ESTADO_CIVIL/IDADE"
+    Ex: "ABIMAEL DINIZ CÂNDIDO - CASADO/55"
+    """
     print("\nCarregando lista de instrutores de Hortolândia...")
     
     for tentativa in range(1, max_tentativas + 1):
@@ -75,18 +98,33 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
             instrutores = json.loads(resp.text)
             
             ids_dict = {}
-            nomes_set = set()
+            nomes_completos_normalizados = set()
             
             for instrutor in instrutores:
                 id_instrutor = instrutor['id']
                 texto_completo = instrutor['text']
-                nome = texto_completo.split(' - ')[0].strip()
                 
-                ids_dict[id_instrutor] = nome
-                nomes_set.add(nome)
+                # Formato: "NOME - ESTADO_CIVIL/IDADE - Comum"
+                # Ex: "ABIMAEL DINIZ CÂNDIDO - CASADO/55 - Parque do Horto"
+                partes = texto_completo.split(' - ')
+                
+                if len(partes) >= 2:
+                    # Nome completo COM estado civil: "ABIMAEL DINIZ CÂNDIDO - CASADO/55"
+                    nome_completo = f"{partes[0].strip()} - {partes[1].strip()}"
+                    
+                    # Normaliza para comparação (remove acentos, caracteres especiais)
+                    nome_normalizado = normalizar_nome(nome_completo)
+                    
+                    ids_dict[id_instrutor] = nome_completo
+                    nomes_completos_normalizados.add(nome_normalizado)
             
-            print(f"   {len(ids_dict)} instrutores carregados!\n")
-            return ids_dict, nomes_set
+            print(f"   ✓ {len(ids_dict)} instrutores carregados!")
+            if ids_dict:
+                exemplo = list(ids_dict.values())[0]
+                print(f"   Exemplo: {exemplo}")
+                print(f"   Normalizado: {normalizar_nome(exemplo)}\n")
+            
+            return ids_dict, nomes_completos_normalizados
             
         except requests.Timeout:
             print(f"   Timeout na tentativa {tentativa}")
@@ -97,7 +135,7 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
             if tentativa < max_tentativas:
                 time.sleep(tentativa * 2)
     
-    print("\nFalha ao carregar instrutores após todas as tentativas\n")
+    print("\n✗ Falha ao carregar instrutores após todas as tentativas\n")
     return {}, set()
 
 def extrair_data_hora_abertura_rapido(session, aula_id):
@@ -355,12 +393,11 @@ def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=1000000):
     
     return ultimo_valido
 
-def normalizar_nome(nome):
-    """Normaliza nome para comparação"""
-    return ' '.join(nome.upper().split())
-
 def coletar_tudo_de_uma_vez(session, aula_id):
-    """Coleta TODOS os dados em uma única chamada (3 requests por aula)"""
+    """
+    Coleta TODOS os dados em uma única chamada (3 requests por aula)
+    FILTRO: Apenas instrutores de Hortolândia (nomenclatura completa)
+    """
     try:
         # REQUEST 1: visualizar_aula
         url = f"https://musical.congregacao.org.br/aulas_abertas/visualizar_aula/{aula_id}"
@@ -396,7 +433,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         hora_inicio = ""
         hora_termino = ""
         data_hora_abertura = ""
-        nome_instrutor = ""
+        nome_instrutor_html = ""
         id_turma = ""
         
         rows = tbody.find_all('tr')
@@ -421,7 +458,8 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             elif 'Data e Horário de abertura' in label:
                 data_hora_abertura = valor
             elif 'Instrutor(a) que ministrou a aula' in label:
-                nome_instrutor = valor.split(' - ')[0].strip()
+                # Captura o texto COMPLETO: "NOME - ESTADO_CIVIL/IDADE"
+                nome_instrutor_html = valor.strip()
         
         # Extrair descrição
         table = soup.find('table', class_='table')
@@ -438,17 +476,20 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             if td_colspan:
                 descricao = td_colspan.get_text(strip=True)
         
-        # Verificar se o instrutor é de Hortolândia
+        # ========================================================================
+        # FILTRO CRÍTICO: Verificar se o instrutor é de Hortolândia
+        # Compara nomenclatura COMPLETA normalizada
+        # ========================================================================
         eh_hortolandia = False
-        if nome_instrutor:
-            nome_normalizado = normalizar_nome(nome_instrutor)
-            for nome_htl in NOMES_INSTRUTORES:
-                if normalizar_nome(nome_htl) == nome_normalizado:
-                    eh_hortolandia = True
-                    break
+        if nome_instrutor_html:
+            nome_html_normalizado = normalizar_nome(nome_instrutor_html)
+            
+            # Verifica se existe na lista de instrutores de Hortolândia
+            if nome_html_normalizado in NOMES_COMPLETOS_NORMALIZADOS:
+                eh_hortolandia = True
         
         if not eh_hortolandia:
-            return None
+            return None  # Instrutor não é de Hortolândia, descarta aula
         
         # Verificação de ATA
         tem_ata = "Não"
@@ -550,7 +591,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
             'data_hora_abertura': data_hora_abertura,
             'tem_ata': tem_ata,
             'texto_ata': texto_ata,
-            'instrutor': nome_instrutor,
+            'instrutor': nome_instrutor_html,
             'total_alunos': total_alunos,
             'presentes': presentes,
             'lista_presentes': lista_presentes,
@@ -561,12 +602,13 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         return None
 
 def main():
-    global INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES
+    global INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS
     
     tempo_inicio = time.time()
     
     print("=" * 70)
     print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (BUSCA BINARIA OTIMIZADA)")
+    print("FILTRO: Nomenclatura Completa (Nome + Estado Civil)")
     print("=" * 70)
     
     # Login via Playwright
@@ -587,9 +629,9 @@ def main():
         
         try:
             pagina.wait_for_selector("nav", timeout=20000)
-            print("Login realizado!")
+            print("✓ Login realizado!")
         except PlaywrightTimeoutError:
-            print("Falha no login.")
+            print("✗ Falha no login.")
             navegador.close()
             return
         
@@ -600,11 +642,11 @@ def main():
     session = criar_sessao_robusta()
     session.cookies.update(cookies_dict)
     
-    # Carregar instrutores
-    INSTRUTORES_HORTOLANDIA, NOMES_INSTRUTORES = carregar_instrutores_hortolandia(session)
+    # Carregar instrutores COM NOMENCLATURA COMPLETA
+    INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS = carregar_instrutores_hortolandia(session)
     
     if not INSTRUTORES_HORTOLANDIA:
-        print("Nao foi possivel carregar a lista de instrutores. Abortando.")
+        print("✗ Nao foi possivel carregar a lista de instrutores. Abortando.")
         return
     
     # ========================================================================
@@ -632,7 +674,7 @@ def main():
     )
     
     if primeiro_id is None:
-        print(f"Nao foi possivel encontrar aulas abertas a partir de {data_hora_inicio.strftime('%d/%m/%Y')}. Abortando.")
+        print(f"✗ Nao foi possivel encontrar aulas abertas a partir de {data_hora_inicio.strftime('%d/%m/%Y')}. Abortando.")
         return
     
     # Busca 2: Último ID com abertura <= data/hora atual
@@ -644,7 +686,7 @@ def main():
     )
     
     if ultimo_id is None:
-        print("Nao foi possivel encontrar o ultimo ID. Usando estimativa.")
+        print("✗ Nao foi possivel encontrar o ultimo ID. Usando estimativa.")
         ultimo_id = primeiro_id + 50000  # Fallback: +50k IDs
     
     # ========================================================================
@@ -666,6 +708,7 @@ def main():
     print(f"MODO TURBO ATIVADO!")
     print(f"Range: {ID_INICIAL:,} a {ID_FINAL:,} ({ID_FINAL - ID_INICIAL + 1:,} IDs)")
     print(f"{MAX_WORKERS} threads paralelas | Lotes de {LOTE_SIZE}")
+    print(f"Filtro: Nomenclatura completa normalizada")
     print(f"{'=' * 70}\n")
     
     for lote_inicio in range(ID_INICIAL, ID_FINAL + 1, LOTE_SIZE):
@@ -709,7 +752,7 @@ def main():
                     else:
                         ata_status = "   "
                     
-                    print(f"[{ata_status}] [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:25]:25s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
+                    print(f"[{ata_status}] [{aulas_processadas:5d}] ID {dados_completos['id_aula']}: {dados_completos['descricao'][:20]:20s} | {dados_completos['instrutor'][:30]:30s} | {dados_completos['presentes']}/{dados_completos['total_alunos']}")
                 
                 if aulas_processadas % 200 == 0:
                     tempo_decorrido = time.time() - tempo_inicio
@@ -760,16 +803,16 @@ def main():
     backup_file = f'backup_aulas_{time.strftime("%Y%m%d_%H%M%S")}.json'
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
-    print(f"Backup salvo em: {backup_file}")
+    print(f"✓ Backup salvo em: {backup_file}")
     
     # Enviar para Apps Script
     print("\nEnviando dados para Google Sheets...")
     try:
         resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-        print(f"Dados enviados! Status: {resposta_post.status_code}")
+        print(f"✓ Dados enviados! Status: {resposta_post.status_code}")
         print(f"Resposta: {resposta_post.text[:200]}")
     except Exception as e:
-        print(f"Erro ao enviar: {e}")
+        print(f"✗ Erro ao enviar: {e}")
         print(f"Dados disponiveis no backup: {backup_file}")
 
 if __name__ == "__main__":
