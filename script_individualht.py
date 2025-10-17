@@ -7,44 +7,118 @@ import requests
 import time
 import json
 from typing import List, Dict
-from collections import Counter
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 
-print(f"🎓 COLETOR DE LIÇÕES INDIVIDUAIS - HORTOLÂNDIA")
+print("=" * 70)
+print("🎓 COLETOR DE LIÇÕES INDIVIDUAIS - HORTOLÂNDIA")
+print("=" * 70)
+print(f"🔗 URL do Apps Script: {URL_APPS_SCRIPT}")
+print("=" * 70)
 
 if not EMAIL or not SENHA:
-    print("❌ Erro: Credenciais não definidas")
+    print("❌ Erro: Credenciais não definidas no arquivo credencial.env")
+    print("   Certifique-se de que LOGIN_MUSICAL e SENHA_MUSICAL estão configurados")
     exit(1)
 
 def buscar_alunos_da_planilha() -> List[Dict]:
     """
     Busca a lista de alunos (ID_ALUNO, ID_IGREJA, NOME) do Google Sheets
     """
-    print("📥 Buscando lista de alunos do Google Sheets...")
+    print("\n📥 BUSCANDO LISTA DE ALUNOS DO GOOGLE SHEETS")
+    print("-" * 70)
     
     try:
         params = {"acao": "listar_ids_alunos"}
+        print(f"📤 Enviando requisição GET...")
+        print(f"   URL: {URL_APPS_SCRIPT}")
+        print(f"   Parâmetros: {params}")
+        
         response = requests.get(URL_APPS_SCRIPT, params=params, timeout=30)
         
+        print(f"\n📡 RESPOSTA DO SERVIDOR:")
+        print(f"   Status HTTP: {response.status_code}")
+        
         if response.status_code == 200:
-            data = response.json()
-            if data.get('sucesso'):
-                alunos = data.get('alunos', [])
-                print(f"✅ {len(alunos)} alunos carregados da planilha")
-                return alunos
-            else:
-                print(f"⚠️ Erro na resposta: {data.get('erro', 'Desconhecido')}")
+            try:
+                data = response.json()
+                print(f"   Formato: JSON válido ✓")
+                print(f"\n📊 CONTEÚDO DA RESPOSTA:")
+                print(json.dumps(data, indent=2, ensure_ascii=False)[:1000])
+                
+                if data.get('sucesso'):
+                    alunos = data.get('alunos', [])
+                    total = data.get('total', 0)
+                    
+                    print(f"\n✅ SUCESSO!")
+                    print(f"   Total de alunos carregados: {len(alunos)}")
+                    print(f"   Total informado pelo servidor: {total}")
+                    
+                    # Mostrar primeiros 5 alunos como exemplo
+                    if alunos:
+                        print(f"\n📋 PRIMEIROS ALUNOS (exemplo):")
+                        print("-" * 70)
+                        for i, aluno in enumerate(alunos[:5], 1):
+                            print(f"   {i}. ID: {aluno['id_aluno']:6d} | Igreja: {aluno['id_igreja']:5d} | {aluno['nome']}")
+                        if len(alunos) > 5:
+                            print(f"   ... e mais {len(alunos) - 5} alunos")
+                        print("-" * 70)
+                    
+                    return alunos
+                else:
+                    erro = data.get('erro', 'Desconhecido')
+                    print(f"\n⚠️ ERRO NA RESPOSTA DO SERVIDOR:")
+                    print(f"   {erro}")
+                    
+                    # Informações de debug
+                    if 'parametros_recebidos' in data:
+                        print(f"\n🔍 Debug - Parâmetros recebidos pelo servidor:")
+                        print(f"   {data['parametros_recebidos']}")
+                    
+                    if 'acoes_disponiveis' in data:
+                        print(f"\n💡 Ações disponíveis no servidor:")
+                        for acao in data['acoes_disponiveis']:
+                            print(f"   - {acao}")
+                    
+                    if 'abas_disponiveis' in data:
+                        print(f"\n📑 Abas disponíveis na planilha:")
+                        for aba in data['abas_disponiveis']:
+                            print(f"   - {aba}")
+                    
+                    return []
+                    
+            except json.JSONDecodeError as e:
+                print(f"\n❌ ERRO: Resposta não é JSON válido")
+                print(f"   Erro: {e}")
+                print(f"\n📄 Resposta bruta (primeiros 1000 caracteres):")
+                print(response.text[:1000])
                 return []
         else:
-            print(f"⚠️ Erro ao buscar alunos: Status {response.status_code}")
+            print(f"\n⚠️ ERRO HTTP {response.status_code}")
+            print(f"📄 Resposta (primeiros 500 caracteres):")
+            print(response.text[:500])
             return []
             
+    except requests.exceptions.Timeout:
+        print(f"\n❌ TIMEOUT: Servidor não respondeu em 30 segundos")
+        print(f"   Possíveis causas:")
+        print(f"   1. URL do Apps Script incorreta")
+        print(f"   2. Web App não está publicado")
+        print(f"   3. Problemas de rede")
+        return []
+        
+    except requests.exceptions.RequestException as e:
+        print(f"\n❌ ERRO DE CONEXÃO: {e}")
+        return []
+        
     except Exception as e:
-        print(f"❌ Erro ao buscar alunos: {e}")
+        print(f"\n❌ ERRO INESPERADO: {e}")
+        import traceback
+        print(f"\n🔍 Traceback completo:")
+        print(traceback.format_exc())
         return []
 
 def coletar_licoes_aluno(pagina, id_aluno: int, nome_aluno: str) -> Dict:
@@ -286,7 +360,7 @@ def preparar_dados_para_envio(alunos_dados: List[Dict], tempo_total: float) -> D
         else:
             alunos_sem_dados += 1
         
-        # Resumo (14 colunas - sem ULTIMA_ATIVIDADE e DATA_COLETA)
+        # Resumo (14 colunas)
         resumo.append([
             id_aluno, nome, id_igreja,
             total_mts_ind, total_mts_grupo,
@@ -405,25 +479,39 @@ def enviar_para_sheets(dados: Dict) -> bool:
     """
     Envia dados para Google Sheets
     """
-    print(f"\n📤 Enviando dados para Google Sheets...")
+    print(f"\n📤 ENVIANDO DADOS PARA GOOGLE SHEETS")
+    print("-" * 70)
     
     try:
+        print(f"📦 Preparando envio...")
+        print(f"   Resumo: {len(dados['resumo'])} linhas")
+        print(f"   MTS Individual: {len(dados['mts_individual'])} linhas")
+        print(f"   Provas: {len(dados['provas'])} linhas")
+        
         response = requests.post(URL_APPS_SCRIPT, json=dados, timeout=300)
+        
+        print(f"\n📡 RESPOSTA DO SERVIDOR:")
+        print(f"   Status HTTP: {response.status_code}")
         
         if response.status_code == 200:
             resultado = response.json()
             if resultado.get('sucesso'):
-                print("✅ Dados enviados com sucesso!")
+                print(f"\n✅ DADOS ENVIADOS COM SUCESSO!")
+                print(f"   Total de alunos: {resultado.get('total_alunos', 0)}")
+                print(f"   Timestamp: {resultado.get('timestamp', '')}")
                 return True
             else:
-                print(f"⚠️ Erro: {resultado.get('erro', 'Desconhecido')}")
+                print(f"\n⚠️ ERRO: {resultado.get('erro', 'Desconhecido')}")
                 return False
         else:
-            print(f"⚠️ Status HTTP: {response.status_code}")
+            print(f"\n⚠️ ERRO HTTP {response.status_code}")
+            print(f"   Resposta: {response.text[:500]}")
             return False
             
     except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
+        print(f"\n❌ ERRO AO ENVIAR: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return False
 
 def main():
@@ -433,10 +521,28 @@ def main():
     alunos = buscar_alunos_da_planilha()
     
     if not alunos:
-        print("❌ Nenhum aluno encontrado. Abortando...")
+        print("\n" + "=" * 70)
+        print("❌ NENHUM ALUNO ENCONTRADO - VERIFIQUE:")
+        print("=" * 70)
+        print("1. A URL do Apps Script está correta?")
+        print("   Execute testarUrl() no Apps Script para obter a URL")
+        print()
+        print("2. O Web App foi publicado?")
+        print("   Implantar → Nova implementação → Web app")
+        print()
+        print("3. As permissões estão corretas?")
+        print("   'Quem tem acesso' deve ser 'Qualquer pessoa'")
+        print()
+        print("4. A aba 'alunos_hortolandia' existe na planilha?")
+        print("   ID da planilha: 1lnzzToyBao-c5sptw4IcnXA0QCvS4bKFpyiQUcxbA3Q")
+        print()
+        print("5. Execute testarListarIds() no Apps Script para verificar")
+        print("=" * 70)
         return
     
-    print(f"\n🎯 Iniciando coleta de {len(alunos)} alunos...")
+    print(f"\n{'=' * 70}")
+    print(f"🎯 INICIANDO COLETA DE {len(alunos)} ALUNOS")
+    print(f"{'=' * 70}")
     
     alunos_dados = []
     
@@ -450,20 +556,25 @@ def main():
         
         try:
             # Login
-            print("\n🔐 Realizando login...")
+            print("\n🔐 Realizando login no sistema musical...")
             pagina.goto(URL_INICIAL, wait_until='domcontentloaded', timeout=30000)
             pagina.fill('input[name="login"]', EMAIL)
             pagina.fill('input[name="password"]', SENHA)
             pagina.click('button[type="submit"]')
             pagina.wait_for_selector("nav", timeout=20000)
-            print("✅ Login realizado!")
+            print("✅ Login realizado com sucesso!")
             
             # Coletar dados de cada aluno
+            print(f"\n{'=' * 70}")
+            print(f"📊 COLETANDO DADOS DOS ALUNOS")
+            print(f"{'=' * 70}")
+            
             for i, aluno in enumerate(alunos, 1):
                 id_aluno = aluno['id_aluno']
                 nome = aluno['nome']
                 
-                print(f"\n[{i}/{len(alunos)}] Coletando: {nome} (ID: {id_aluno})")
+                print(f"\n[{i:3d}/{len(alunos)}] {nome}")
+                print(f"         ID: {id_aluno}")
                 
                 dados = coletar_licoes_aluno(pagina, id_aluno, nome)
                 dados['id_igreja'] = aluno['id_igreja']
@@ -482,36 +593,47 @@ def main():
                     len(dados['escalas_individual']),
                     len(dados['escalas_grupo'])
                 ])
-                print(f"   ✓ {totais} registros coletados")
+                print(f"         ✓ {totais} registros coletados")
                 
                 time.sleep(0.5)  # Pausa entre requisições
             
             navegador.close()
             
         except Exception as e:
-            print(f"❌ Erro: {e}")
+            print(f"\n❌ ERRO DURANTE COLETA: {e}")
+            import traceback
+            print(traceback.format_exc())
             navegador.close()
             return
     
     tempo_total = time.time() - tempo_inicio
     
     # Preparar e enviar dados
-    print(f"\n📊 Preparando dados para envio...")
+    print(f"\n{'=' * 70}")
+    print(f"📊 PREPARANDO DADOS PARA ENVIO")
+    print(f"{'=' * 70}")
+    
     dados_envio = preparar_dados_para_envio(alunos_dados, tempo_total)
     
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 70}")
     print(f"📈 ESTATÍSTICAS DA COLETA")
-    print(f"{'='*60}")
-    print(f"Total de alunos: {len(alunos_dados)}")
-    print(f"Alunos com dados: {dados_envio['metadata']['alunos_com_dados']}")
-    print(f"Alunos sem dados: {dados_envio['metadata']['alunos_sem_dados']}")
-    print(f"Tempo total: {tempo_total:.1f}s")
-    print(f"{'='*60}")
+    print(f"{'=' * 70}")
+    print(f"Total de alunos processados: {len(alunos_dados)}")
+    print(f"Alunos com dados.........: {dados_envio['metadata']['alunos_com_dados']}")
+    print(f"Alunos sem dados.........: {dados_envio['metadata']['alunos_sem_dados']}")
+    print(f"Tempo total..............: {tempo_total:.1f}s ({tempo_total/60:.1f} minutos)")
+    print(f"Média por aluno..........: {tempo_total/len(alunos_dados):.1f}s")
+    print(f"{'=' * 70}")
     
     # Enviar para Google Sheets
-    enviar_para_sheets(dados_envio)
+    sucesso = enviar_para_sheets(dados_envio)
     
-    print(f"\n🎯 Processo finalizado!")
+    print(f"\n{'=' * 70}")
+    if sucesso:
+        print(f"🎉 PROCESSO FINALIZADO COM SUCESSO!")
+    else:
+        print(f"⚠️ PROCESSO FINALIZADO COM ERROS NO ENVIO")
+    print(f"{'=' * 70}")
 
 if __name__ == "__main__":
     main()
