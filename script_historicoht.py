@@ -654,7 +654,7 @@ def main():
     # ========================================================================
     
     # Data/hora de início: 01/01/2024 00:00:00
-    data_hora_inicio = datetime(2024, 1, 1, 0, 0, 0)
+    data_hora_inicio = datetime(2025, 10, 1, 0, 0, 0)
     
     # Data/hora de fim: momento atual da execução
     data_hora_fim = datetime.now()
