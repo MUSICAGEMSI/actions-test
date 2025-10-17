@@ -16,11 +16,11 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzbkdOTDjGJxabnlJNDX7ZKI4_vh-t5d84MDRp-4FO4KmocRPEVs2jkHL3gjKEG-efF/exec'
 
-RANGE_INICIO = 1
-RANGE_FIM = 870000
+RANGE_INICIO = 300000
+RANGE_FIM = 320000
 INSTANCIA_ID = "GHA_batch_1"
 
-# 🚀 MODO INSANO - SEM LIMITES DE TEMPO
+# 🚀 MODO INSANO - META: 15 MINUTOS
 CONCURRENT_REQUESTS = 500  # 500 requisições simultâneas
 TIMEOUT_ULTRA_FAST = 2     # 2s primeira tentativa
 TIMEOUT_FAST = 4           # 4s segunda tentativa
@@ -32,10 +32,6 @@ CHUNK_SIZE = 10000         # Chunks maiores
 SEMAPHORE_PHASE1 = 500     # Fase 1: Ultra agressivo
 SEMAPHORE_PHASE2 = 300     # Fase 2: Moderado
 SEMAPHORE_PHASE3 = 150     # Fase 3: Conservador
-
-# 🔥 CONFIGURAÇÕES DE CONEXÃO PERSISTENTE (SEM TIMEOUT)
-KEEPALIVE_TIMEOUT = 300    # 5 minutos de keepalive
-CONNECTION_TIMEOUT = None  # SEM LIMITE de timeout de conexão
 
 # ========================================
 # REGEX PRÉ-COMPILADAS (OTIMIZADAS)
@@ -129,53 +125,37 @@ class ColetorInsano:
             return None
         
         async with semaphore:
-            max_tentativas = 5  # 🔥 Aumentado para garantir sucesso
-            for tentativa in range(max_tentativas):
-                try:
-                    url = f"https://musical.congregacao.org.br/grp_musical/editar/{membro_id}"
-                    response = await client.get(url, timeout=timeout)
+            try:
+                url = f"https://musical.congregacao.org.br/grp_musical/editar/{membro_id}"
+                response = await client.get(url, timeout=timeout)
+                
+                if response.status_code == 200:
+                    html = response.text
                     
-                    if response.status_code == 200:
-                        html = response.text
-                        
-                        if 'name="nome"' in html:
-                            dados = extrair_dados(html, membro_id)
-                            if dados:
-                                async with self.lock:
-                                    self.stats['coletados'] += 1
-                                    self.membros.append(dados)
-                                return dados
-                            else:
-                                CACHE_IDS_VAZIOS.add(membro_id)
-                                async with self.lock:
-                                    self.stats['vazios'] += 1
-                                return None
+                    if 'name="nome"' in html:
+                        dados = extrair_dados(html, membro_id)
+                        if dados:
+                            async with self.lock:
+                                self.stats['coletados'] += 1
+                                self.membros.append(dados)
+                            return dados
                         else:
                             CACHE_IDS_VAZIOS.add(membro_id)
                             async with self.lock:
                                 self.stats['vazios'] += 1
                             return None
                     else:
-                        if tentativa < max_tentativas - 1:
-                            await asyncio.sleep(0.5 * (tentativa + 1))  # Backoff progressivo
-                            continue
-                        return ('retry', membro_id)
-                        
-                except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout):
-                    if tentativa < max_tentativas - 1:
-                        await asyncio.sleep(0.5 * (tentativa + 1))
-                        continue
+                        CACHE_IDS_VAZIOS.add(membro_id)
+                        async with self.lock:
+                            self.stats['vazios'] += 1
+                        return None
+                else:
                     return ('retry', membro_id)
-                except httpx.ConnectError:
-                    if tentativa < max_tentativas - 1:
-                        await asyncio.sleep(1.0 * (tentativa + 1))
-                        continue
-                    return ('retry', membro_id)
-                except Exception as e:
-                    if tentativa < max_tentativas - 1:
-                        await asyncio.sleep(0.5 * (tentativa + 1))
-                        continue
-                    return ('retry', membro_id)
+                    
+            except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError):
+                return ('retry', membro_id)
+            except Exception:
+                return ('retry', membro_id)
         
         return None
     
@@ -185,7 +165,7 @@ class ColetorInsano:
         limits = httpx.Limits(
             max_keepalive_connections=200,
             max_connections=600,
-            keepalive_expiry=KEEPALIVE_TIMEOUT
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
@@ -194,7 +174,7 @@ class ColetorInsano:
             limits=limits,
             http2=True,
             follow_redirects=True,
-            timeout=None  # 🔥 SEM LIMITE DE TIMEOUT
+            timeout=None
         ) as client:
             
             semaphore = asyncio.Semaphore(SEMAPHORE_PHASE1)
@@ -226,7 +206,7 @@ class ColetorInsano:
         limits = httpx.Limits(
             max_keepalive_connections=150,
             max_connections=350,
-            keepalive_expiry=KEEPALIVE_TIMEOUT
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
@@ -235,7 +215,7 @@ class ColetorInsano:
             limits=limits,
             http2=True,
             follow_redirects=True,
-            timeout=None  # 🔥 SEM LIMITE DE TIMEOUT
+            timeout=None
         ) as client:
             
             semaphore = asyncio.Semaphore(SEMAPHORE_PHASE2)
@@ -269,7 +249,7 @@ class ColetorInsano:
         limits = httpx.Limits(
             max_keepalive_connections=80,
             max_connections=180,
-            keepalive_expiry=KEEPALIVE_TIMEOUT
+            keepalive_expiry=60
         )
         
         async with httpx.AsyncClient(
@@ -278,7 +258,7 @@ class ColetorInsano:
             limits=limits,
             http2=True,
             follow_redirects=True,
-            timeout=None  # 🔥 SEM LIMITE DE TIMEOUT
+            timeout=None
         ) as client:
             
             semaphore = asyncio.Semaphore(SEMAPHORE_PHASE3)
@@ -298,57 +278,44 @@ class ColetorInsano:
                     pbar.update(1)
 
 # ========================================
-# LOGIN OTIMIZADO - SEM TIMEOUT
+# LOGIN OTIMIZADO
 # ========================================
 def login():
-    """Login com Playwright - SEM LIMITE DE TEMPO"""
+    """Login com Playwright"""
     print("🔐 Realizando login...")
-    tentativas = 0
-    max_tentativas = 5
-    
-    while tentativas < max_tentativas:
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        '--no-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--disable-blink-features=AutomationControlled'
-                    ]
-                )
-                context = browser.new_context(
-                    user_agent='Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                )
-                page = context.new_page()
-                page.set_default_timeout(60000)  # 🔥 60s timeout (aumentado)
-                page.goto(URL_INICIAL, timeout=60000)
-                page.fill('input[name="login"]', EMAIL)
-                page.fill('input[name="password"]', SENHA)
-                page.click('button[type="submit"]')
-                page.wait_for_selector("nav", timeout=60000)
-                cookies = {cookie['name']: cookie['value'] for cookie in context.cookies()}
-                browser.close()
-                print("✓ Login realizado")
-                return cookies
-        except Exception as e:
-            tentativas += 1
-            print(f"✗ Tentativa {tentativas}/{max_tentativas} falhou: {e}")
-            if tentativas < max_tentativas:
-                print(f"⏳ Aguardando 5s antes de tentar novamente...")
-                time.sleep(5)
-            else:
-                print(f"✗ Erro no login após {max_tentativas} tentativas")
-                return None
-    
-    return None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-blink-features=AutomationControlled'
+                ]
+            )
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (X11; Linux x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
+            page.goto(URL_INICIAL, timeout=30000)
+            page.fill('input[name="login"]', EMAIL)
+            page.fill('input[name="password"]', SENHA)
+            page.click('button[type="submit"]')
+            page.wait_for_selector("nav", timeout=20000)
+            cookies = {cookie['name']: cookie['value'] for cookie in context.cookies()}
+            browser.close()
+            print("✓ Login realizado")
+            return cookies
+    except Exception as e:
+        print(f"✗ Erro no login: {e}")
+        return None
 
 # ========================================
-# EXECUÇÃO INSANA - 3 FASES (SEM LIMITES)
+# EXECUÇÃO INSANA - 3 FASES
 # ========================================
 async def executar_coleta_insana(cookies):
-    """Estratégia 3 fases: Ultra Rápida → Moderada → Garantia - SEM LIMITES DE TEMPO"""
+    """Estratégia 3 fases: Ultra Rápida → Moderada → Garantia"""
     
     coletor = ColetorInsano(cookies)
     
@@ -358,13 +325,12 @@ async def executar_coleta_insana(cookies):
     chunks = [todos_ids[i:i + CHUNK_SIZE] for i in range(0, len(todos_ids), CHUNK_SIZE)]
     
     print(f"\n{'='*80}")
-    print(f"🚀 ESTRATÉGIA 3 FASES - SEM LIMITES DE TEMPO")
+    print(f"🚀 ESTRATÉGIA 3 FASES - META: 15 MINUTOS")
     print(f"{'='*80}")
     print(f"📦 {total_ids:,} IDs → {len(chunks)} chunks de {CHUNK_SIZE:,}")
     print(f"⚡ FASE 1: {SEMAPHORE_PHASE1} concurrent | timeout {TIMEOUT_ULTRA_FAST}s")
     print(f"⚡ FASE 2: {SEMAPHORE_PHASE2} concurrent | timeout {TIMEOUT_FAST}s")
     print(f"⚡ FASE 3: {SEMAPHORE_PHASE3} concurrent | timeout {TIMEOUT_CAREFUL}s")
-    print(f"♾️  SEM LIMITE DE TEMPO - Vai até o fim!")
     print(f"{'='*80}\n")
     
     tempo_inicio = time.time()
@@ -372,20 +338,15 @@ async def executar_coleta_insana(cookies):
     # FASE 1: ULTRA RÁPIDA
     print("🔥 FASE 1: COLETA ULTRA RÁPIDA")
     with tqdm(total=total_ids, desc="Fase 1", unit="ID", ncols=100, colour='red') as pbar:
-        for i, chunk in enumerate(chunks, 1):
-            tempo_chunk_inicio = time.time()
+        for chunk in chunks:
             await coletor.fase1_ultra_rapida(chunk, pbar)
-            tempo_chunk = time.time() - tempo_chunk_inicio
-            
             pbar.set_postfix({
                 'Coletados': coletor.stats['coletados'],
-                'Retry': len(coletor.retry_fase2),
-                'Chunk': f"{i}/{len(chunks)}",
-                'Tempo': f"{tempo_chunk:.1f}s"
+                'Retry': len(coletor.retry_fase2)
             })
     
     tempo_fase1 = time.time() - tempo_inicio
-    print(f"✓ Fase 1: {tempo_fase1/60:.1f}min | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase2):,}")
+    print(f"✓ Fase 1: {tempo_fase1:.1f}s | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase2):,}")
     
     # FASE 2: MODERADA
     if coletor.retry_fase2:
@@ -394,7 +355,7 @@ async def executar_coleta_insana(cookies):
             await coletor.fase2_moderada(pbar)
         
         tempo_fase2 = time.time() - tempo_inicio - tempo_fase1
-        print(f"✓ Fase 2: {tempo_fase2/60:.1f}min | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase3):,}")
+        print(f"✓ Fase 2: {tempo_fase2:.1f}s | Coletados: {coletor.stats['coletados']:,} | Retry: {len(coletor.retry_fase3):,}")
     
     # FASE 3: GARANTIA
     if coletor.retry_fase3:
@@ -403,26 +364,24 @@ async def executar_coleta_insana(cookies):
             await coletor.fase3_garantia(pbar)
         
         tempo_fase3 = time.time() - tempo_inicio - tempo_fase1 - (tempo_fase2 if coletor.retry_fase2 else 0)
-        print(f"✓ Fase 3: {tempo_fase3/60:.1f}min | Coletados: {coletor.stats['coletados']:,}")
+        print(f"✓ Fase 3: {tempo_fase3:.1f}s | Coletados: {coletor.stats['coletados']:,}")
     
     return coletor
 
 # ========================================
-# ENVIO DADOS - GARANTIDO 7 COLUNAS
+# ENVIO DADOS - CORRIGIDO
 # ========================================
 def enviar_dados(membros, tempo_total, stats):
-    """Envio para Google Sheets - GARANTIDO 7 COLUNAS"""
+    """Envio para Google Sheets - CORRIGIDO"""
     if not membros:
         print("⚠️  Nenhum membro para enviar")
         return False
     
     print(f"\n📤 Enviando {len(membros):,} membros para Google Sheets...")
     
-    # 🔥 GARANTE EXATAMENTE 7 COLUNAS (A-G)
     relatorio = [["ID", "NOME", "IGREJA_SELECIONADA", "CARGO/MINISTERIO", "NÍVEL", "INSTRUMENTO", "TONALIDADE"]]
-    
     for membro in membros:
-        linha = [
+        relatorio.append([
             str(membro.get('id', '')),
             membro.get('nome', ''),
             membro.get('igreja_selecionada', ''),
@@ -430,20 +389,18 @@ def enviar_dados(membros, tempo_total, stats):
             membro.get('nivel', ''),
             membro.get('instrumento', ''),
             membro.get('tonalidade', '')
-        ]
-        # 🔥 FORÇA EXATAMENTE 7 COLUNAS (corta se tiver mais)
-        relatorio.append(linha[:7])
+        ])
     
-    # ✅ Payload com informação de 7 colunas
+    # ✅ CORRIGIDO: Adiciona _lote_1 e campo "lote" na metadata
     payload = {
         "tipo": f"membros_gha_{INSTANCIA_ID}_lote_1",
         "relatorio_formatado": relatorio,
         "metadata": {
             "instancia": INSTANCIA_ID,
-            "lote": 1,
+            "lote": 1,  # ✅ NOVO: Campo obrigatório
             "range_inicio": RANGE_INICIO,
             "range_fim": RANGE_FIM,
-            "total_neste_lote": len(membros),
+            "total_neste_lote": len(membros),  # ✅ NOVO: Total neste lote
             "total_coletados": len(membros),
             "total_vazios": stats['vazios'],
             "total_erros_fase3": stats['erros_fase3'],
@@ -452,63 +409,49 @@ def enviar_dados(membros, tempo_total, stats):
             "velocidade_membros_min": round(len(membros) / (tempo_total/60), 0),
             "concurrent_max": CONCURRENT_REQUESTS,
             "fases_retry": f"F1:{SEMAPHORE_PHASE1}/F2:{SEMAPHORE_PHASE2}/F3:{SEMAPHORE_PHASE3}",
-            "num_colunas": 7,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC")
         }
     }
     
-    max_tentativas = 5
-    for tentativa in range(1, max_tentativas + 1):
-        try:
-            import requests
-            print(f"🔄 Tentativa {tentativa}/{max_tentativas} de envio...")
-            print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}, colunas=7")
-            
-            response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=180)  # 🔥 3min timeout
-            
-            print(f"📡 Status HTTP: {response.status_code}")
-            
-            if response.status_code == 200:
-                try:
-                    resultado = response.json()
-                    print(f"✓ Resposta: {resultado}")
-                    print("✅ Dados enviados com sucesso!")
-                    return True
-                except:
-                    print(f"✓ Resposta (texto): {response.text[:200]}")
-                    print("✅ Dados enviados com sucesso!")
-                    return True
-            else:
-                print(f"✗ Erro HTTP {response.status_code}")
-                print(f"✗ Resposta: {response.text[:500]}")
-                if tentativa < max_tentativas:
-                    print(f"⏳ Aguardando {tentativa * 5}s antes de tentar novamente...")
-                    time.sleep(tentativa * 5)
-                    continue
-                return False
-        except Exception as e:
-            print(f"✗ Erro ao enviar (tentativa {tentativa}/{max_tentativas}): {e}")
-            if tentativa < max_tentativas:
-                print(f"⏳ Aguardando {tentativa * 5}s antes de tentar novamente...")
-                time.sleep(tentativa * 5)
-                continue
-            import traceback
-            traceback.print_exc()
+    try:
+        import requests
+        print(f"🔄 Enviando para: {URL_APPS_SCRIPT}")
+        print(f"📦 Payload: tipo={payload['tipo']}, linhas={len(relatorio)}")
+        
+        response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=120)
+        
+        print(f"📡 Status HTTP: {response.status_code}")
+        
+        if response.status_code == 200:
+            try:
+                resultado = response.json()
+                print(f"✓ Resposta: {resultado}")
+                print("✅ Dados enviados com sucesso!")
+                return True
+            except:
+                print(f"✓ Resposta (texto): {response.text[:200]}")
+                print("✅ Dados enviados com sucesso!")
+                return True
+        else:
+            print(f"✗ Erro HTTP {response.status_code}")
+            print(f"✗ Resposta: {response.text[:500]}")
             return False
-    
-    return False
+    except Exception as e:
+        print(f"✗ Erro ao enviar: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ========================================
 # MAIN
 # ========================================
 def main():
     print("=" * 80)
-    print("🔥 COLETOR INSANO - SEM LIMITES DE TEMPO | 0% ERRO")
+    print("🔥 COLETOR INSANO - META: 15 MINUTOS | 0% ERRO")
     print("=" * 80)
     print(f"📊 Range: {RANGE_INICIO:,} → {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
     print(f"⚡ Estratégia: 3 Fases com Retry Adaptativo")
     print(f"🎯 Concorrência Máxima: {CONCURRENT_REQUESTS} requisições simultâneas")
-    print(f"♾️  SEM LIMITES DE TEMPO - Executa até completar!")
     print("=" * 80)
     
     if not EMAIL or not SENHA:
@@ -517,7 +460,7 @@ def main():
     
     tempo_total_inicio = time.time()
     
-    # Login com retry
+    # Login
     cookies = login()
     if not cookies:
         sys.exit(1)
@@ -537,9 +480,15 @@ def main():
     print(f"⏱️  Tempo total: {tempo_total/60:.2f} min ({tempo_total:.0f}s)")
     print(f"⚡ Velocidade: {(RANGE_FIM - RANGE_INICIO + 1) / (tempo_total/60):.0f} IDs/min")
     print(f"📈 Taxa sucesso: {(coletor.stats['coletados'] / (RANGE_FIM - RANGE_INICIO + 1) * 100):.2f}%")
+    
+    if tempo_total < 900:  # < 15 min
+        print(f"🏆 META ALCANÇADA! {tempo_total/60:.1f} min < 15 min")
+    else:
+        print(f"⚠️  Meta não alcançada: {tempo_total/60:.1f} min")
+    
     print("=" * 80)
     
-    # Enviar com retry
+    # Enviar
     if coletor.membros:
         enviar_dados(coletor.membros, tempo_total, coletor.stats)
         
@@ -549,7 +498,6 @@ def main():
     
     print("\n" + "=" * 80)
     print("✅ COLETA FINALIZADA COM SUCESSO")
-    print(f"⏱️  Tempo total de execução: {tempo_total/60:.2f} minutos")
     print("=" * 80)
 
 if __name__ == "__main__":
