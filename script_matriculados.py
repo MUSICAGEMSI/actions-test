@@ -12,14 +12,64 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxnp24RMIG4zQEsot0KATnFjdeoEHP7nyrr4WXnp-LLLptQTT-Vc_UPYoy__VWipill/exec'
 
-# Lista de IDs das turmas
-IDS_TURMAS = [
-    174, 2802, 7933, 26002, 26141, 27292, 27294, 27297, 27300, 27534, 27629, 27630, 27749, 27751, 27752, 27753, 27755, 27791, 27792, 27793, 27795, 27839, 27842, 27843, 27844, 27845, 27847, 27850, 27851, 27857, 27858, 27859, 27860, 27866, 27894, 27895, 27896, 27924, 27927, 27928, 27953, 28014, 28015, 28016, 28029, 28030, 28031, 28034, 28074, 28078, 28093, 28099, 28141, 28218, 28219, 28234, 28235, 28236, 28243, 28246, 28252, 28255, 28304, 28305, 28307, 28311, 28397, 28483, 28897, 28900, 28903, 28904, 29031, 29042, 29418, 29419, 29436, 29445, 29538, 29539, 29776, 29820, 29823, 29825, 30029, 30500, 30502, 30503, 31019, 31022, 31381, 31577, 31800, 31804, 32397, 32493, 32515, 32516, 33173, 33573, 33680, 33751, 33821, 34370, 35356, 36008, 36412, 36877, 36879, 36999, 37000, 37048, 37311, 37454, 39302, 39811, 40056, 40119, 40165, 40195, 40196, 40320, 40941, 41143, 41161, 41355, 41434, 41492, 41628, 41913, 41915, 41932, 42181, 42233, 42733, 42807, 42846, 43120, 43237, 43238, 43242, 43243, 43244, 43466, 43472, 43473, 43474, 43475, 43478, 43519, 43531, 43533, 43534, 43535, 43536, 43537, 43920, 43921, 43929, 43963, 43980, 44028, 44318, 44324, 44524, 44564, 44568, 45041, 45545, 45574, 45678, 46012, 46013, 46014, 46017, 46021, 46023, 46032, 46533, 46758, 46771, 46777, 46779, 46929, 47136, 47137, 47196, 47505, 47612, 47978, 48019, 48100, 48101, 48183, 48513, 48531, 48639, 48655, 48761, 48836, 48905, 49008, 49059, 49060, 49258, 50027, 50045, 50113, 50167, 50488, 50489, 50490, 50609, 51527, 51542, 51553, 51570, 51660, 51713, 51764, 51836, 51935, 52063, 52206, 52363, 52896, 53150, 53153, 53155, 53281, 53404, 53527, 53546
-]
+# URL da planilha de origem (leitura dos IDs)
+PLANILHA_ORIGEM_ID = "1DHvQewO7luUqDrO3IVzdlaNuN2Fsl5Dm_bXI_O2RF8g"
+URL_LEITURA_IDS = f"https://docs.google.com/spreadsheets/d/{PLANILHA_ORIGEM_ID}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
+
+# ID da planilha de destino (onde serão escritos os resultados)
+PLANILHA_DESTINO_ID = "1ADdprL1glmSTCH3PPJ5hnNAEhYK-OXXWKUURrA98ZDs"
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
+
+def buscar_ids_planilha():
+    """
+    Busca os IDs das turmas da planilha do Google Sheets
+    """
+    try:
+        print("📥 Buscando IDs da planilha...")
+        
+        response = requests.get(URL_LEITURA_IDS, timeout=30)
+        response.encoding = 'utf-8'
+        
+        if response.status_code == 200:
+            linhas = response.text.strip().split('\n')
+            
+            # Identificar o índice da coluna ID_Turma
+            cabecalho = linhas[0].split(',')
+            
+            # Limpar aspas do cabeçalho
+            cabecalho = [col.strip('"') for col in cabecalho]
+            
+            if 'ID_Turma' not in cabecalho:
+                print("❌ Coluna 'ID_Turma' não encontrada no cabeçalho!")
+                print(f"Colunas disponíveis: {cabecalho}")
+                return []
+            
+            idx_id_turma = cabecalho.index('ID_Turma')
+            
+            ids_turmas = []
+            for i, linha in enumerate(linhas[1:], start=2):
+                try:
+                    colunas = linha.split(',')
+                    if len(colunas) > idx_id_turma:
+                        id_turma = colunas[idx_id_turma].strip('"').strip()
+                        if id_turma and id_turma.isdigit():
+                            ids_turmas.append(int(id_turma))
+                except Exception as e:
+                    print(f"⚠️ Erro ao processar linha {i}: {e}")
+                    continue
+            
+            print(f"✅ {len(ids_turmas)} IDs encontrados na planilha")
+            return ids_turmas
+        else:
+            print(f"❌ Erro ao acessar planilha. Status: {response.status_code}")
+            return []
+            
+    except Exception as e:
+        print(f"❌ Erro ao buscar IDs da planilha: {e}")
+        return []
 
 def contar_matriculados(session, turma_id):
     """
@@ -42,11 +92,9 @@ def contar_matriculados(session, turma_id):
             tbody = soup.find('tbody')
             if tbody:
                 rows = tbody.find_all('tr')
-                # Filtrar apenas linhas válidas (que contêm dados de alunos)
                 valid_rows = []
                 for row in rows:
                     tds = row.find_all('td')
-                    # Verificar se a linha tem pelo menos 4 colunas e não é mensagem de "sem registros"
                     if len(tds) >= 4:
                         primeiro_td = tds[0].get_text(strip=True)
                         if primeiro_td and 'Nenhum registro' not in primeiro_td:
@@ -85,7 +133,16 @@ def extrair_cookies_playwright(pagina):
 def main():
     tempo_inicio = time.time()
     
-    print(f"🚀 Iniciando coleta de {len(IDS_TURMAS)} turmas...")
+    print("🚀 Iniciando processo de coleta de matrículas...")
+    
+    # Buscar IDs da planilha
+    IDS_TURMAS = buscar_ids_planilha()
+    
+    if not IDS_TURMAS:
+        print("❌ Nenhum ID encontrado. Encerrando...")
+        return
+    
+    print(f"\n🎯 Total de turmas a processar: {len(IDS_TURMAS)}")
     
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True)
@@ -96,7 +153,7 @@ def main():
         })
         
         # Login
-        print("🔐 Realizando login...")
+        print("\n🔐 Realizando login...")
         pagina.goto(URL_INICIAL)
         pagina.fill('input[name="login"]', EMAIL)
         pagina.fill('input[name="password"]', SENHA)
@@ -146,11 +203,17 @@ def main():
         print("\n📤 Enviando dados para Google Sheets...")
         
         # Adicionar cabeçalho
-        dados_com_cabecalho = [["ID", "QUANTIDADE", "STATUS"]] + resultados
+        dados_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados
+        
+        # Adicionar data/hora de coleta
+        from datetime import datetime
+        data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
         body = {
             "tipo": "contagem_matriculas",
-            "dados": dados_com_cabecalho
+            "dados": dados_com_cabecalho,
+            "planilha_destino_id": PLANILHA_DESTINO_ID,
+            "data_coleta": data_coleta
         }
         
         # Enviar para Apps Script
