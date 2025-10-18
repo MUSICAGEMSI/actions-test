@@ -20,7 +20,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxb9NPBjodXgDiax8-yV_c0YqVnUEHGv2cyeanJBnm7OsVxVjBj7M2Q_Wtc_cJZh21udw/exec'
 
 RANGE_INICIO = 1
-RANGE_FIM = 200000
+RANGE_FIM = 850000
 INSTANCIA_ID = "ministros_batch_1"
 
 # Configurações de performance
