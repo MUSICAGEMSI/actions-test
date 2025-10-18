@@ -212,7 +212,6 @@ def main():
         body = {
             "tipo": "contagem_matriculas",
             "dados": dados_com_cabecalho,
-            "planilha_destino_id": PLANILHA_DESTINO_ID,
             "data_coleta": data_coleta
         }
         
