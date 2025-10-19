@@ -71,6 +71,68 @@ def buscar_ids_planilha():
         print(f"❌ Erro ao buscar IDs da planilha: {e}")
         return []
 
+def extrair_dados_alunos(session, turma_id):
+    """
+    Extrai dados detalhados de todos os alunos matriculados em uma turma
+    Retorna lista de dicionários com: Nome, Comum, Instrumento, Status
+    """
+    try:
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
+        resp = session.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            tbody = soup.find('tbody')
+            if not tbody:
+                return []
+            
+            alunos = []
+            rows = tbody.find_all('tr')
+            
+            for row in rows:
+                tds = row.find_all('td')
+                
+                # Verificar se a linha tem dados válidos
+                if len(tds) >= 4:
+                    primeiro_td = tds[0].get_text(strip=True)
+                    
+                    # Ignorar linhas vazias ou mensagens de "Nenhum registro"
+                    if not primeiro_td or 'Nenhum registro' in primeiro_td:
+                        continue
+                    
+                    # Extrair dados
+                    nome = tds[0].get_text(strip=True)
+                    comum = tds[1].get_text(strip=True)
+                    instrumento = tds[2].get_text(strip=True)
+                    status = tds[3].get_text(strip=True)
+                    
+                    aluno = {
+                        'ID_Turma': turma_id,
+                        'Nome': nome,
+                        'Comum': comum,
+                        'Instrumento': instrumento,
+                        'Status': status
+                    }
+                    
+                    alunos.append(aluno)
+            
+            return alunos
+        
+        else:
+            print(f"   ⚠️ Status {resp.status_code} para turma {turma_id}")
+            return None
+        
+    except Exception as e:
+        print(f"   ❌ Erro ao processar turma {turma_id}: {e}")
+        return None
+
 def contar_matriculados(session, turma_id):
     """
     Conta o número de alunos matriculados em uma turma específica
@@ -176,7 +238,8 @@ def main():
         navegador.close()
         
         # Coletar dados de cada turma
-        resultados = []
+        resultados_resumo = []
+        todos_alunos = []
         total = len(IDS_TURMAS)
         
         print(f"\n📊 Processando {total} turmas...")
@@ -184,17 +247,22 @@ def main():
         for idx, turma_id in enumerate(IDS_TURMAS, 1):
             print(f"[{idx}/{total}] Turma {turma_id}...", end=" ")
             
-            quantidade = contar_matriculados(session, turma_id)
+            # Extrair dados detalhados dos alunos
+            alunos = extrair_dados_alunos(session, turma_id)
             
-            if quantidade >= 0:
-                print(f"✅ {quantidade} matriculados")
+            if alunos is not None:
+                quantidade = len(alunos)
+                print(f"✅ {quantidade} alunos")
                 status = "Sucesso"
+                
+                # Adicionar alunos à lista geral
+                todos_alunos.extend(alunos)
             else:
                 print(f"⚠️ Erro na coleta")
                 quantidade = 0
                 status = "Erro"
             
-            resultados.append([turma_id, quantidade, status])
+            resultados_resumo.append([turma_id, quantidade, status])
             
             # Pausa para não sobrecarregar o servidor
             time.sleep(0.3)
@@ -202,37 +270,63 @@ def main():
         # Preparar dados para envio ao Google Sheets
         print("\n📤 Enviando dados para Google Sheets...")
         
-        # Adicionar cabeçalho
-        dados_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados
-        
-        # Adicionar data/hora de coleta
         from datetime import datetime
         data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
-        body = {
+        # Preparar dados de resumo (contagem)
+        dados_resumo_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados_resumo
+        
+        # Preparar dados detalhados (alunos)
+        dados_alunos_para_envio = [["ID_Turma", "Nome", "Comum", "Instrumento", "Status"]]
+        for aluno in todos_alunos:
+            dados_alunos_para_envio.append([
+                aluno['ID_Turma'],
+                aluno['Nome'],
+                aluno['Comum'],
+                aluno['Instrumento'],
+                aluno['Status']
+            ])
+        
+        # Enviar dados de resumo
+        body_resumo = {
             "tipo": "contagem_matriculas",
-            "dados": dados_com_cabecalho,
+            "dados": dados_resumo_com_cabecalho,
             "data_coleta": data_coleta
         }
         
-        # Enviar para Apps Script
+        # Enviar dados detalhados
+        body_detalhado = {
+            "tipo": "alunos_detalhados",
+            "dados": dados_alunos_para_envio,
+            "data_coleta": data_coleta
+        }
+        
         try:
-            resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=60)
-            print("✅ Dados enviados com sucesso!")
-            print(f"   Status code: {resposta_post.status_code}")
-            print(f"   Resposta: {resposta_post.text}")
+            # Enviar resumo
+            print("📊 Enviando resumo de contagem...")
+            resposta_resumo = requests.post(URL_APPS_SCRIPT, json=body_resumo, timeout=60)
+            print(f"   ✅ Resumo enviado - Status: {resposta_resumo.status_code}")
+            
+            # Enviar dados detalhados
+            print("📋 Enviando dados detalhados dos alunos...")
+            resposta_detalhado = requests.post(URL_APPS_SCRIPT, json=body_detalhado, timeout=60)
+            print(f"   ✅ Detalhes enviados - Status: {resposta_detalhado.status_code}")
+            print(f"   Total de alunos enviados: {len(todos_alunos)}")
+            
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
             # Salvar backup local em caso de falha
             import json
-            with open('backup_matriculas.json', 'w', encoding='utf-8') as f:
-                json.dump(resultados, f, indent=2, ensure_ascii=False)
-            print("💾 Backup salvo em 'backup_matriculas.json'")
+            with open('backup_resumo.json', 'w', encoding='utf-8') as f:
+                json.dump(resultados_resumo, f, indent=2, ensure_ascii=False)
+            with open('backup_alunos.json', 'w', encoding='utf-8') as f:
+                json.dump(todos_alunos, f, indent=2, ensure_ascii=False)
+            print("💾 Backups salvos em 'backup_resumo.json' e 'backup_alunos.json'")
         
         tempo_total = time.time() - tempo_inicio
         print(f"\n⏱️ Tempo total de execução: {tempo_total:.2f} segundos")
-        print(f"📊 Resumo: {len([r for r in resultados if r[2] == 'Sucesso'])} sucessos, "
-              f"{len([r for r in resultados if r[2] == 'Erro'])} erros")
+        print(f"📊 Resumo: {len([r for r in resultados_resumo if r[2] == 'Sucesso'])} turmas processadas com sucesso")
+        print(f"👥 Total de alunos coletados: {len(todos_alunos)}")
 
 if __name__ == "__main__":
     main()
