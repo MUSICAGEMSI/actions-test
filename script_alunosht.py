@@ -2,11 +2,8 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright
-import os
-import sys
-import requests
-import time
-import json
+import os, sys, requests, time, json
+from datetime import datetime
 import concurrent.futures
 from typing import List, Set, Dict, Optional
 import re
@@ -17,14 +14,9 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 
-# Parâmetros de range
 RANGE_INICIO = 1
 RANGE_FIM = 800000
 NUM_THREADS = 25
-
-print(f"🎓 COLETOR COMPLETO DE DADOS - ALUNOS DE HORTOLÂNDIA")
-print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
-print(f"🧵 Threads: {NUM_THREADS}")
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -52,16 +44,12 @@ def buscar_ids_igrejas_hortolandia() -> Set[int]:
         return set()
 
 def extrair_dados_completos_membro(html_content: str, id_membro: int) -> Optional[Dict]:
-    """
-    Extrai TODOS os dados disponíveis do membro do HTML
-    """
+    """Extrai TODOS os dados disponíveis do membro do HTML"""
     if not html_content or 'igreja_selecionada' not in html_content:
         return None
     
     soup = BeautifulSoup(html_content, 'html.parser')
     dados = {'id_membro': id_membro}
-    
-    # === DADOS GERAIS ===
     
     # Nome
     nome_input = soup.find('input', {'name': 'nome'})
@@ -115,18 +103,16 @@ def extrair_dados_completos_membro(html_content: str, id_membro: int) -> Optiona
             dados['id_tonalidade'] = ''
             dados['tonalidade_nome'] = ''
     
-    # Status (fl_tipo e status)
+    # Status
     fl_tipo_input = soup.find('input', {'name': 'fl_tipo'})
     dados['fl_tipo'] = fl_tipo_input.get('value', '') if fl_tipo_input else ''
     
     status_input = soup.find('input', {'name': 'status'})
     dados['status'] = status_input.get('value', '') if status_input else ''
     
-    # === HISTÓRICO DO REGISTRO ===
-    
+    # Histórico do Registro
     historico_div = soup.find('div', {'id': 'collapseOne'})
     if historico_div:
-        # Data de Cadastro
         cadastro_p = historico_div.find('p', string=re.compile(r'Cadastrado em:'))
         if cadastro_p:
             texto = cadastro_p.get_text()
@@ -136,7 +122,6 @@ def extrair_dados_completos_membro(html_content: str, id_membro: int) -> Optiona
             dados['data_cadastro'] = match_data.group(1).strip() if match_data else ''
             dados['cadastrado_por'] = match_usuario.group(1).strip() if match_usuario else ''
         
-        # Data de Atualização
         atualizacao_p = historico_div.find('p', string=re.compile(r'Atualizado em:'))
         if atualizacao_p:
             texto = atualizacao_p.get_text()
@@ -146,13 +131,9 @@ def extrair_dados_completos_membro(html_content: str, id_membro: int) -> Optiona
             dados['data_atualizacao'] = match_data.group(1).strip() if match_data else ''
             dados['atualizado_por'] = match_usuario.group(1).strip() if match_usuario else ''
     
-    # === DADOS MINISTERIAIS (Tab secundária) ===
-    # Nota: Esses dados também estão no HTML, mas em uma aba diferente
-    # Vamos coletar se disponíveis
-    
+    # Dados Ministeriais
     form_min = soup.find('form', {'id': 'grp-musical-min'})
     if form_min:
-        # Igreja (pode ser diferente da principal)
         igreja_min_select = form_min.find('select', {'name': 'id_igreja'})
         if igreja_min_select:
             igreja_min_option = igreja_min_select.find('option', {'selected': True})
@@ -250,14 +231,16 @@ def extrair_cookies_playwright(pagina):
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
-def salvar_membros_em_arquivo(membros: List[Dict], nome_arquivo: str = "membros_hortolandia_completo.json"):
+def salvar_membros_em_arquivo(membros: List[Dict], timestamp_execucao: datetime):
     """Salva os dados completos dos membros em arquivo JSON"""
+    nome_arquivo = timestamp_execucao.strftime("membros_%d_%m_%y-%H_%M.json")
+    
     try:
         with open(nome_arquivo, 'w', encoding='utf-8') as f:
             json.dump({
                 "membros": membros,
                 "total": len(membros),
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
                 "campos_coletados": list(membros[0].keys()) if membros else []
             }, f, indent=2, ensure_ascii=False)
         
@@ -265,15 +248,17 @@ def salvar_membros_em_arquivo(membros: List[Dict], nome_arquivo: str = "membros_
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_igrejas: Set[int]):
-    """Envia os dados completos dos membros para Google Sheets"""
+def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_igrejas: Set[int], timestamp_execucao: datetime):
+    """Envia os dados completos dos membros para nova planilha no Google Sheets"""
     if not membros:
         print("⚠️ Nenhum membro para enviar")
         return False
     
-    print(f"\n📤 Enviando {len(membros)} membros para Google Sheets...")
+    nome_planilha = timestamp_execucao.strftime("Membros_Completo_%d_%m_%y-%H:%M")
     
-    # Cabeçalhos completos
+    print(f"\n📤 Criando nova planilha: {nome_planilha}")
+    print(f"📊 Enviando {len(membros)} membros...")
+    
     headers = [
         "ID_MEMBRO", "NOME", "ID_IGREJA", 
         "ID_CARGO", "CARGO_NOME", 
@@ -313,7 +298,8 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         relatorio.append(linha)
     
     payload = {
-        "tipo": "membros_hortolandia_completo",
+        "tipo": "nova_planilha_membros_completo",
+        "nome_planilha": nome_planilha,
         "relatorio_formatado": relatorio,
         "metadata": {
             "total_membros": len(membros),
@@ -322,7 +308,8 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
             "range_fim": RANGE_FIM,
             "tempo_execucao_min": round(tempo_execucao/60, 2),
             "threads_utilizadas": NUM_THREADS,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp_unix": int(timestamp_execucao.timestamp()),
             "ids_igrejas": sorted(list(ids_igrejas)),
             "campos_coletados": headers
         }
@@ -332,7 +319,7 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=180)
         
         if response.status_code == 200:
-            print("✅ Dados completos enviados com sucesso para Google Sheets!")
+            print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
             print(f"📄 Resposta: {response.text[:150]}")
             return True
         else:
@@ -349,6 +336,16 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
 
 def main():
     tempo_inicio = time.time()
+    timestamp_execucao = datetime.now()
+    
+    print("=" * 80)
+    print("🎓 COLETOR COMPLETO DE DADOS - ALUNOS DE HORTOLÂNDIA")
+    print("=" * 80)
+    print(f"📅 Data/Hora: {timestamp_execucao.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
+    print(f"🧵 Threads: {NUM_THREADS}")
+    print(f"📄 Nova Planilha: {timestamp_execucao.strftime('Membros_Completo_%d_%m_%y-%H:%M')}")
+    print("=" * 80)
     
     ids_igrejas = buscar_ids_igrejas_hortolandia()
     
@@ -400,9 +397,9 @@ def main():
     
     tempo_total = time.time() - tempo_inicio
     
-    print(f"\n{'='*60}")
+    print(f"\n{'='*80}")
     print(f"🏁 COLETA COMPLETA FINALIZADA!")
-    print(f"{'='*60}")
+    print(f"{'='*80}")
     print(f"🎓 Membros de Hortolândia encontrados: {len(membros_hortolandia)}")
     print(f"⏱️ Tempo total: {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
     print(f"📈 Range verificado: {RANGE_INICIO:,} - {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
@@ -410,7 +407,6 @@ def main():
     if membros_hortolandia:
         print(f"⚡ Velocidade: {(RANGE_FIM - RANGE_INICIO + 1)/tempo_total:.2f} IDs verificados/segundo")
         
-        # Estatísticas detalhadas
         print(f"\n📋 Primeiros 5 membros (amostra de dados):")
         for i, membro in enumerate(membros_hortolandia[:5]):
             print(f"\n   {i+1}. {membro['nome']}")
@@ -433,13 +429,14 @@ def main():
         for instrumento, qtd in distribuicao_inst.most_common(10):
             print(f"   {instrumento}: {qtd} membros")
         
-        salvar_membros_em_arquivo(membros_hortolandia)
-        enviar_membros_para_sheets(membros_hortolandia, tempo_total, ids_igrejas)
+        salvar_membros_em_arquivo(membros_hortolandia, timestamp_execucao)
+        enviar_membros_para_sheets(membros_hortolandia, tempo_total, ids_igrejas, timestamp_execucao)
     
     else:
         print("⚠️ Nenhum membro de Hortolândia foi encontrado neste range")
     
-    print(f"\n🎯 Processo finalizado!")
+    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Membros_Completo_%d_%m_%y-%H:%M')}")
+    print(f"🎯 Processo finalizado!")
 
 if __name__ == "__main__":
     main()
