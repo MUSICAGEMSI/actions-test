@@ -493,7 +493,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         return None
 
 def executar_historico_aulas(session):
-    """Executa coleta de histórico de aulas e retorna ID da planilha criada"""
+    """Executa coleta de histórico de aulas e retorna ID da planilha criada + caminho do backup"""
     global INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS
     
     tempo_inicio = time.time()
@@ -506,7 +506,7 @@ def executar_historico_aulas(session):
     
     if not INSTRUTORES_HORTOLANDIA:
         print("❌ Não foi possível carregar instrutores. Abortando módulo.")
-        return None
+        return None, None
     
     data_hora_inicio = datetime(2025, 10, 10, 0, 0, 0)
     data_hora_fim = datetime.now()
@@ -517,7 +517,7 @@ def executar_historico_aulas(session):
     
     if primeiro_id is None:
         print("❌ Não foi possível encontrar primeiro ID. Abortando.")
-        return None
+        return None, None
     
     ultimo_id = buscar_ultimo_id_ate(session, data_hora_limite=data_hora_fim, id_min=primeiro_id, id_max=1000000)
     
@@ -628,22 +628,45 @@ def executar_historico_aulas(session):
                     print(f"   ID: {planilha_id}")
                     print(f"   URL: {detalhes.get('url')}")
                     
-                    return planilha_id
+                    return planilha_id, backup_file
         
         print("⚠️ Não foi possível obter ID da planilha")
-        return None
+        return None, backup_file
         
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        return None
+        return None, backup_file
 
 # ==================== MÓDULO 2: TURMAS ====================
 
-def buscar_ids_da_planilha_aulas(planilha_id):
-    """Busca IDs únicos da coluna ID_Turma da planilha de aulas"""
-    print(f"\n📂 Buscando IDs de turmas da planilha {planilha_id}...")
+def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
+    """Busca IDs únicos da coluna ID_Turma (prioriza backup local)"""
+    print(f"\n📂 Buscando IDs de turmas...")
     
+    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
+    if backup_file and os.path.exists(backup_file):
+        try:
+            print(f"   📄 Lendo backup local: {backup_file}")
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            ids_turmas = set()
+            for linha in data.get('dados', []):
+                if len(linha) >= 2:  # ID_Turma está na posição 1
+                    id_turma = str(linha[1]).strip()
+                    if id_turma and id_turma.isdigit():
+                        ids_turmas.add(int(id_turma))
+            
+            if ids_turmas:
+                ids_lista = sorted(list(ids_turmas))
+                print(f"   ✅ {len(ids_lista)} IDs únicos encontrados no backup")
+                return ids_lista
+        except Exception as e:
+            print(f"   ⚠️ Erro ao ler backup: {e}")
+    
+    # MÉTODO 2: Tentar acessar planilha Google (fallback)
     try:
+        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
         url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados"
         response = requests.get(url, timeout=30)
         response.encoding = 'utf-8'
@@ -653,7 +676,7 @@ def buscar_ids_da_planilha_aulas(planilha_id):
             cabecalho = [col.strip('"') for col in linhas[0].split(',')]
             
             if 'ID_Turma' not in cabecalho:
-                print("❌ Coluna 'ID_Turma' não encontrada!")
+                print("   ❌ Coluna 'ID_Turma' não encontrada!")
                 return []
             
             idx_id_turma = cabecalho.index('ID_Turma')
@@ -670,14 +693,14 @@ def buscar_ids_da_planilha_aulas(planilha_id):
                     continue
             
             ids_lista = sorted(list(ids_turmas))
-            print(f"✅ {len(ids_lista)} IDs únicos encontrados")
+            print(f"   ✅ {len(ids_lista)} IDs únicos encontrados na planilha")
             return ids_lista
         else:
-            print(f"❌ Erro HTTP {response.status_code}")
+            print(f"   ❌ Erro HTTP {response.status_code}")
             return []
             
     except Exception as e:
-        print(f"❌ Erro: {e}")
+        print(f"   ❌ Erro ao acessar planilha: {e}")
         return []
 
 def coletar_dados_turma(session, turma_id):
@@ -819,7 +842,7 @@ def coletar_dados_turma(session, turma_id):
     except Exception as e:
         return None
 
-def executar_turmas(session, planilha_aulas_id):
+def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
     """Executa coleta de dados de turmas e retorna ID da planilha criada"""
     tempo_inicio = time.time()
     timestamp_execucao = gerar_timestamp()
@@ -828,11 +851,7 @@ def executar_turmas(session, planilha_aulas_id):
     print("🎓 MÓDULO 2: DADOS DE TURMAS")
     print("=" * 80)
     
-    if not planilha_aulas_id:
-        print("❌ ID da planilha de aulas não fornecido. Abortando módulo.")
-        return None
-    
-    ids_turmas = buscar_ids_da_planilha_aulas(planilha_aulas_id)
+    ids_turmas = buscar_ids_da_planilha_aulas(planilha_aulas_id, backup_aulas_file)
     
     if not ids_turmas:
         print("❌ Nenhum ID encontrado. Abortando módulo.")
@@ -1177,14 +1196,14 @@ def main():
         return
     
     # PASSO 2: Executar Histórico de Aulas
-    planilha_aulas_id = executar_historico_aulas(session)
+    planilha_aulas_id, backup_aulas_file = executar_historico_aulas(session)
     
-    if not planilha_aulas_id:
-        print("\n⚠️ Módulo 1 falhou. Interrompendo processo.")
+    if not planilha_aulas_id and not backup_aulas_file:
+        print("\n⚠️ Módulo 1 falhou completamente. Interrompendo processo.")
         return
     
-    # PASSO 3: Executar Turmas
-    planilha_turmas_id = executar_turmas(session, planilha_aulas_id)
+    # PASSO 3: Executar Turmas (passa o backup como fallback)
+    planilha_turmas_id = executar_turmas(session, planilha_aulas_id, backup_aulas_file)
     
     if not planilha_turmas_id:
         print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
