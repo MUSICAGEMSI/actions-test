@@ -609,6 +609,7 @@ def main():
     print("=" * 70)
     print("COLETOR ULTRA-RAPIDO - HORTOLANDIA (BUSCA BINARIA OTIMIZADA)")
     print("FILTRO: Nomenclatura Completa (Nome + Estado Civil)")
+    print("MODO: Nova Planilha por Execução")
     print("=" * 70)
     
     # Login via Playwright
@@ -775,7 +776,10 @@ def main():
     print(f"Velocidade media: {aulas_processadas/(time.time() - tempo_inicio):.1f} aulas/segundo")
     print(f"{'=' * 70}\n")
     
-    # Preparar envio
+    # ========================================================================
+    # 🆕 ENVIO: Sem planilha_id (Apps Script criará nova planilha)
+    # ========================================================================
+    
     body = {
         "tipo": "historico_aulas_hortolandia",
         "dados": resultado,
@@ -797,23 +801,76 @@ def main():
             "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
             "velocidade_aulas_por_segundo": round(aulas_processadas/(time.time() - tempo_inicio), 2)
         }
+        # 🔥 REMOVIDO: "planilha_id" - Apps Script criará nova planilha automaticamente
     }
     
     # Salvar backup local
-    backup_file = f'backup_aulas_{time.strftime("%Y%m%d_%H%M%S")}.json'
+    timestamp_backup = time.strftime("%Y%m%d_%H%M%S")
+    backup_file = f'backup_aulas_{timestamp_backup}.json'
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
     print(f"✓ Backup salvo em: {backup_file}")
     
-    # Enviar para Apps Script
-    print("\nEnviando dados para Google Sheets...")
+    # Enviar para Apps Script (que criará nova planilha)
+    print("\n" + "=" * 70)
+    print("ENVIANDO DADOS PARA GOOGLE SHEETS...")
+    print("Apps Script criará nova planilha automaticamente")
+    print("=" * 70)
+    
     try:
-        resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-        print(f"✓ Dados enviados! Status: {resposta_post.status_code}")
-        print(f"Resposta: {resposta_post.text[:200]}")
+        resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=180)
+        
+        if resposta_post.status_code == 200:
+            try:
+                resposta_json = resposta_post.json()
+                
+                # Extrair informações da resposta
+                if 'body' in resposta_json:
+                    body_content = json.loads(resposta_json['body'])
+                    
+                    print("\n" + "=" * 70)
+                    print("✅ SUCESSO! NOVA PLANILHA CRIADA")
+                    print("=" * 70)
+                    
+                    if 'detalhes' in body_content:
+                        detalhes = body_content['detalhes']
+                        
+                        print(f"\n📊 DETALHES DA PLANILHA:")
+                        print(f"   Nome: {detalhes.get('nome_planilha', 'N/A')}")
+                        print(f"   URL: {detalhes.get('url', 'N/A')}")
+                        print(f"   ID: {detalhes.get('planilha_id', 'N/A')}")
+                        print(f"\n📈 ESTATÍSTICAS:")
+                        print(f"   Linhas gravadas: {detalhes.get('linhas_gravadas', 0):,}")
+                        print(f"   Total de aulas: {detalhes.get('total_aulas', 0):,}")
+                        print(f"   Aulas com ATA: {detalhes.get('aulas_com_ata', 0):,}")
+                        print(f"   Colunas: {detalhes.get('colunas', 0)}")
+                        print(f"   Aba: {detalhes.get('aba', 'N/A')}")
+                    
+                    print("\n" + "=" * 70)
+                    
+                else:
+                    print(f"\n✓ Dados enviados! Status: {resposta_post.status_code}")
+                    print(f"Resposta: {resposta_post.text[:300]}")
+                    
+            except json.JSONDecodeError:
+                print(f"\n✓ Dados enviados! Status: {resposta_post.status_code}")
+                print(f"Resposta (não JSON): {resposta_post.text[:300]}")
+        else:
+            print(f"\n⚠️ Status HTTP: {resposta_post.status_code}")
+            print(f"Resposta: {resposta_post.text[:500]}")
+            
+    except requests.Timeout:
+        print("\n⏱️ Timeout ao enviar dados (180s)")
+        print(f"Dados disponíveis no backup: {backup_file}")
+        print("NOTA: O processo pode ter sido concluído no servidor mesmo com timeout")
+        
     except Exception as e:
-        print(f"✗ Erro ao enviar: {e}")
-        print(f"Dados disponiveis no backup: {backup_file}")
+        print(f"\n✗ Erro ao enviar: {e}")
+        print(f"Dados disponíveis no backup: {backup_file}")
+    
+    print("\n" + "=" * 70)
+    print("PROCESSO FINALIZADO")
+    print("=" * 70 + "\n")
 
 if __name__ == "__main__":
     main()
