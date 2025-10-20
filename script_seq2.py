@@ -1003,6 +1003,74 @@ def coletar_dados_turma(session, turma_id):
     except Exception as e:
         return None
 
+def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
+    """Busca IDs de turmas da planilha de aulas (prioriza backup local)"""
+    print(f"\n📂 Buscando IDs de turmas...")
+    
+    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
+    if backup_file and os.path.exists(backup_file):
+        try:
+            print(f"   📄 Lendo backup local: {backup_file}")
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            ids_turmas = []
+            for linha in data.get('dados', []):
+                if len(linha) >= 2:  # ID_Turma está na posição 1 (segunda coluna)
+                    id_turma = str(linha[1]).strip()
+                    if id_turma and id_turma.isdigit():
+                        ids_turmas.append(int(id_turma))
+            
+            # Remover duplicatas
+            ids_turmas = sorted(list(set(ids_turmas)))
+            
+            if ids_turmas:
+                print(f"   ✅ {len(ids_turmas)} IDs únicos encontrados no backup")
+                return ids_turmas
+        except Exception as e:
+            print(f"   ⚠️ Erro ao ler backup: {e}")
+    
+    # MÉTODO 2: Tentar acessar planilha Google (fallback)
+    try:
+        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
+        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Histórico de Aulas"
+        response = requests.get(url, timeout=30)
+        response.encoding = 'utf-8'
+        
+        if response.status_code == 200:
+            linhas = response.text.strip().split('\n')
+            cabecalho = [col.strip('"') for col in linhas[0].split(',')]
+            
+            if 'ID_Turma' not in cabecalho:
+                print("   ❌ Coluna 'ID_Turma' não encontrada!")
+                return []
+            
+            idx_id_turma = cabecalho.index('ID_Turma')
+            
+            ids_turmas = []
+            for i, linha in enumerate(linhas[1:], start=2):
+                try:
+                    colunas = linha.split(',')
+                    if len(colunas) > idx_id_turma:
+                        id_turma = colunas[idx_id_turma].strip('"').strip()
+                        if id_turma and id_turma.isdigit():
+                            ids_turmas.append(int(id_turma))
+                except:
+                    continue
+            
+            # Remover duplicatas
+            ids_turmas = sorted(list(set(ids_turmas)))
+            
+            print(f"   ✅ {len(ids_turmas)} IDs únicos encontrados na planilha")
+            return ids_turmas
+        else:
+            print(f"   ❌ Erro HTTP {response.status_code}")
+            return []
+            
+    except Exception as e:
+        print(f"   ❌ Erro ao acessar planilha: {e}")
+        return []
+        
 def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
     """Executa coleta de dados de turmas e retorna ID da planilha criada + caminho do backup"""
     tempo_inicio = time.time()
