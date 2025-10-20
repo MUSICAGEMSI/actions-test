@@ -19,7 +19,6 @@ RANGE_INICIO = 1
 RANGE_FIM = 50000
 NUM_THREADS = 20
 WORKERS_POR_BATCH = 5
-BATCH_SIZE_ENVIO = 3000
 MAX_RETRIES = 5
 RETRY_BACKOFF = 1.0
 TIMEOUT_REQUEST = 15
@@ -293,18 +292,19 @@ def salvar_localidades_em_arquivo(localidades: List[Dict], timestamp_execucao: d
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_execucao: datetime):
-    """Envia localidades para nova planilha no Google Sheets"""
+def enviar_para_nova_planilha(localidades: List[Dict], tempo_total: float, timestamp_execucao: datetime):
+    """Cria NOVA PLANILHA no Google Sheets para cada execução"""
     if not localidades:
         print("\n⚠ Nenhuma localidade para enviar")
-        return
+        return False
 
-    # 🆕 NOVO FORMATO: Localidades_DD_MM_YY-HH:MM
+    # 🆕 Nome da planilha: Localidades_DD_MM_YY-HH:MM
     nome_planilha = timestamp_execucao.strftime("Localidades_%d_%m_%y-%H:%M")
     
     print(f"\n📤 Criando nova planilha: {nome_planilha}")
     print(f"📊 Enviando {len(localidades)} localidades...")
 
+    # Formatar dados para envio
     dados_formatados = [
         [
             loc['id_igreja'],
@@ -316,8 +316,9 @@ def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_
         for loc in localidades
     ]
     
+    # Payload para criar NOVA planilha
     payload = {
-        "tipo": "nova_planilha_localidades",  # 🆕 Tipo específico para nova planilha
+        "tipo": "nova_planilha_localidades",  # ✅ Tipo específico
         "nome_planilha": nome_planilha,
         "headers": ["ID_Igreja", "Nome_Localidade", "Setor", "Cidade", "Texto_Completo"],
         "dados": dados_formatados,
@@ -327,19 +328,27 @@ def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_
             "range_fim": RANGE_FIM,
             "tempo_execucao_min": round(tempo_total/60, 2),
             "threads_utilizadas": NUM_THREADS,
-            "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
-            "timestamp_unix": int(timestamp_execucao.timestamp())
+            "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S")
         }
     }
 
+    # Tentar enviar com retry
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=60)
+            
             if resp.status_code == 200:
-                print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
-                return True
+                resposta = resp.json()
+                
+                if resposta.get('status') == 'sucesso':
+                    print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
+                    print(f"🔗 URL: {resposta.get('planilha', {}).get('url', 'N/A')}")
+                    return True
+                else:
+                    print(f"⚠ Resposta: {resposta}")
             else:
                 print(f"⚠ Erro HTTP {resp.status_code}: {resp.text[:200]}")
+                
         except Exception as e:
             print(f"❌ Erro ao enviar (tentativa {attempt}/{MAX_RETRIES}): {e}")
             
@@ -347,7 +356,7 @@ def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_
             backoff = RETRY_BACKOFF * attempt
             print(f"  ⏱ Aguardando {backoff}s antes de tentar novamente...")
             time.sleep(backoff)
-        
+    
     print(f"❌ Falha no envio após {MAX_RETRIES} tentativas")
     return False
 
@@ -411,20 +420,29 @@ def main():
     print("=" * 80)
 
     if localidades:
+        # Salvar em arquivo local
         salvar_localidades_em_arquivo(localidades, timestamp_execucao)
-        enviar_para_planilha(localidades, tempo_total, timestamp_execucao)
+        
+        # Criar NOVA planilha no Google Sheets
+        sucesso = enviar_para_nova_planilha(localidades, tempo_total, timestamp_execucao)
+        
+        if sucesso:
+            print(f"\n✅ Planilha criada: {timestamp_execucao.strftime('Localidades_%d_%m_%y-%H:%M')}")
+        else:
+            print(f"\n⚠ Dados salvos localmente, mas houve erro ao criar planilha")
     else:
         print("\n⚠ Nenhuma localidade de Hortolândia encontrada neste range")
     
+    # Salvar IDs com falha permanente
     if cache_falhas:
         nome_arquivo_falhas = timestamp_execucao.strftime("ids_falha_%d_%m_%y-%H_%M.txt")
         with open(nome_arquivo_falhas, "w") as f:
+            f.write(f"# IDs com falha permanente após {MAX_TENTATIVAS_ID} tentativas\n")
+            f.write(f"# Total: {len([k for k, v in cache_falhas.items() if v >= MAX_TENTATIVAS_ID])}\n\n")
             for id_igreja, tentativas in sorted(cache_falhas.items()):
                 if tentativas >= MAX_TENTATIVAS_ID:
                     f.write(f"{id_igreja}\n")
         print(f"\n📝 IDs com falha salvos em: {nome_arquivo_falhas}")
-    
-    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Localidades_%d_%m_%y-%H:%M')}")
 
 if __name__ == "__main__":
     main()
