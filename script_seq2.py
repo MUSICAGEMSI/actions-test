@@ -1197,11 +1197,33 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
         
 # ==================== MÓDULO 3: MATRICULADOS ====================
 
-def buscar_ids_da_planilha_turmas(planilha_id):
-    """Busca IDs de turmas da planilha de turmas"""
-    print(f"\n📂 Buscando IDs da planilha de turmas {planilha_id}...")
+def buscar_ids_da_planilha_turmas(planilha_id, backup_file=None):
+    """Busca IDs de turmas (prioriza backup local)"""
+    print(f"\n📂 Buscando IDs de turmas...")
     
+    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
+    if backup_file and os.path.exists(backup_file):
+        try:
+            print(f"   📄 Lendo backup local: {backup_file}")
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            ids_turmas = []
+            for linha in data.get('dados', []):
+                if len(linha) >= 1:  # ID_Turma está na posição 0
+                    id_turma = str(linha[0]).strip()
+                    if id_turma and id_turma.isdigit():
+                        ids_turmas.append(int(id_turma))
+            
+            if ids_turmas:
+                print(f"   ✅ {len(ids_turmas)} IDs encontrados no backup")
+                return ids_turmas
+        except Exception as e:
+            print(f"   ⚠️ Erro ao ler backup: {e}")
+    
+    # MÉTODO 2: Tentar acessar planilha Google (fallback)
     try:
+        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
         url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
         response = requests.get(url, timeout=30)
         response.encoding = 'utf-8'
@@ -1211,7 +1233,7 @@ def buscar_ids_da_planilha_turmas(planilha_id):
             cabecalho = [col.strip('"') for col in linhas[0].split(',')]
             
             if 'ID_Turma' not in cabecalho:
-                print("❌ Coluna 'ID_Turma' não encontrada!")
+                print("   ❌ Coluna 'ID_Turma' não encontrada!")
                 return []
             
             idx_id_turma = cabecalho.index('ID_Turma')
@@ -1227,14 +1249,14 @@ def buscar_ids_da_planilha_turmas(planilha_id):
                 except:
                     continue
             
-            print(f"✅ {len(ids_turmas)} IDs encontrados")
+            print(f"   ✅ {len(ids_turmas)} IDs encontrados na planilha")
             return ids_turmas
         else:
-            print(f"❌ Erro HTTP {response.status_code}")
+            print(f"   ❌ Erro HTTP {response.status_code}")
             return []
             
     except Exception as e:
-        print(f"❌ Erro: {e}")
+        print(f"   ❌ Erro ao acessar planilha: {e}")
         return []
 
 def extrair_dados_alunos(session, turma_id):
@@ -1291,7 +1313,7 @@ def extrair_dados_alunos(session, turma_id):
     except Exception as e:
         return None
 
-def executar_matriculados(session, planilha_turmas_id):
+def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
     """Executa coleta de matrículas"""
     tempo_inicio = time.time()
     
@@ -1303,7 +1325,7 @@ def executar_matriculados(session, planilha_turmas_id):
         print("❌ ID da planilha de turmas não fornecido. Abortando módulo.")
         return
     
-    IDS_TURMAS = buscar_ids_da_planilha_turmas(planilha_turmas_id)
+    IDS_TURMAS = buscar_ids_da_planilha_turmas(planilha_turmas_id, backup_turmas_file)
     
     if not IDS_TURMAS:
         print("❌ Nenhum ID encontrado. Abortando módulo.")
