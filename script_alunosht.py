@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
-URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
 
 RANGE_INICIO = 1
 RANGE_FIM = 800000
@@ -254,7 +254,8 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         print("⚠️ Nenhum membro para enviar")
         return False
     
-    nome_planilha = timestamp_execucao.strftime("Membros_Completo_%d_%m_%y-%H:%M")
+    # 🆕 Formato: Membros_DD_MM_YY-HH:MM
+    nome_planilha = timestamp_execucao.strftime("Membros_%d_%m_%y-%H:%M")
     
     print(f"\n📤 Criando nova planilha: {nome_planilha}")
     print(f"📊 Enviando {len(membros)} membros...")
@@ -298,7 +299,7 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         relatorio.append(linha)
     
     payload = {
-        "tipo": "nova_planilha_membros_completo",
+        "tipo": "nova_planilha_membros_completo",  # 🆕 Tipo para criar nova planilha
         "nome_planilha": nome_planilha,
         "relatorio_formatado": relatorio,
         "metadata": {
@@ -344,7 +345,7 @@ def main():
     print(f"📅 Data/Hora: {timestamp_execucao.strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
     print(f"🧵 Threads: {NUM_THREADS}")
-    print(f"📄 Nova Planilha: {timestamp_execucao.strftime('Membros_Completo_%d_%m_%y-%H:%M')}")
+    print(f"📄 Nova Planilha: {timestamp_execucao.strftime('Membros_%d_%m_%y-%H:%M')}")
     print("=" * 80)
     
     ids_igrejas = buscar_ids_igrejas_hortolandia()
@@ -435,7 +436,7 @@ def main():
     else:
         print("⚠️ Nenhum membro de Hortolândia foi encontrado neste range")
     
-    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Membros_Completo_%d_%m_%y-%H:%M')}")
+    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Membros_%d_%m_%y-%H:%M')}")
     print(f"🎯 Processo finalizado!")
 
 if __name__ == "__main__":
