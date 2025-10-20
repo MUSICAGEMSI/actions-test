@@ -3,6 +3,7 @@ load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright
 import os, requests, time, json
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 from requests.adapters import HTTPAdapter
@@ -16,12 +17,12 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpx
 
 RANGE_INICIO = 1
 RANGE_FIM = 50000
-NUM_THREADS = 20  # Reduzido para evitar rate limiting
-WORKERS_POR_BATCH = 5  # Reduzido
+NUM_THREADS = 20
+WORKERS_POR_BATCH = 5
 BATCH_SIZE_ENVIO = 3000
-MAX_RETRIES = 5  # Aumentado
+MAX_RETRIES = 5
 RETRY_BACKOFF = 1.0
-TIMEOUT_REQUEST = 15  # Aumentado
+TIMEOUT_REQUEST = 15
 
 # Locks para thread-safety
 cache_lock = Lock()
@@ -29,7 +30,7 @@ resultado_lock = Lock()
 
 # Cache com controle de falhas
 cache_verificados = set()
-cache_falhas = {}  # {id: numero_de_tentativas}
+cache_falhas = {}
 MAX_TENTATIVAS_ID = 3
 
 if not EMAIL or not SENHA:
@@ -43,15 +44,12 @@ def verificar_hortolandia(texto: str) -> bool:
     
     texto_upper = texto.upper()
     
-    # Verifica se contém variações de Hortolândia
     variacoes_hortolandia = ["HORTOL", "HORTOLANDIA", "HORTOLÃNDIA", "HORTOLÂNDIA"]
     tem_hortolandia = any(var in texto_upper for var in variacoes_hortolandia)
     
     if not tem_hortolandia:
         return False
     
-    # CRÍTICO: Verifica se pertence ao setor CAMPINAS
-    # Padrão esperado: BR-SP-CAMPINAS-HORTOLÂNDIA
     tem_setor_campinas = "BR-SP-CAMPINAS" in texto_upper or "CAMPINAS-HORTOL" in texto_upper
     
     return tem_setor_campinas
@@ -115,7 +113,6 @@ def criar_sessao_otimizada(cookies_dict: Dict) -> requests.Session:
     session = requests.Session()
     session.cookies.update(cookies_dict)
     
-    # Retry agressivo para garantir 0% de erro
     retry_strategy = Retry(
         total=4,
         backoff_factor=0.5,
@@ -137,12 +134,10 @@ def criar_sessao_otimizada(cookies_dict: Dict) -> requests.Session:
 def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optional[Dict]:
     """Verifica um único ID com retry inteligente"""
     
-    # Verifica cache thread-safe
     with cache_lock:
         if igreja_id in cache_verificados:
             return None
         
-        # Verifica se já teve muitas falhas
         if cache_falhas.get(igreja_id, 0) >= MAX_TENTATIVAS_ID:
             return None
     
@@ -160,19 +155,16 @@ def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optio
             
             resp = session.get(url, headers=headers, timeout=TIMEOUT_REQUEST)
             
-            # Marca como verificado apenas em caso de sucesso
             with cache_lock:
                 cache_verificados.add(igreja_id)
             
             if resp.status_code == 200:
-                # Garante encoding UTF-8
                 resp.encoding = 'utf-8'
                 
                 try:
                     json_data = resp.json()
                 except json.JSONDecodeError:
                     try:
-                        # Fallback: decodificar manualmente
                         json_data = json.loads(resp.content.decode('utf-8', errors='replace'))
                     except Exception as e:
                         print(f"⚠ ID {igreja_id}: JSON inválido - {e}")
@@ -184,17 +176,14 @@ def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optio
                     if verificar_hortolandia(texto_completo):
                         return extrair_dados_localidade(texto_completo, igreja_id)
                 
-                # Sucesso mas não é Hortolândia
                 return None
             
             elif resp.status_code == 404:
-                # ID não existe
                 with cache_lock:
                     cache_verificados.add(igreja_id)
                 return None
             
             else:
-                # Erro HTTP - tentar novamente
                 print(f"⚠ ID {igreja_id}: HTTP {resp.status_code} (tentativa {tentativa}/{MAX_RETRIES})")
         
         except requests.Timeout:
@@ -209,11 +198,9 @@ def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optio
                 cache_falhas[igreja_id] = cache_falhas.get(igreja_id, 0) + 1
             return None
         
-        # Aguarda antes de tentar novamente
         if tentativa < MAX_RETRIES:
             time.sleep(RETRY_BACKOFF * tentativa * 0.5)
     
-    # Falhou após todas as tentativas
     with cache_lock:
         cache_falhas[igreja_id] = MAX_TENTATIVAS_ID
     print(f"❌ ID {igreja_id}: FALHA após {MAX_RETRIES} tentativas")
@@ -245,7 +232,7 @@ def coletar_batch_paralelo(ids_batch: List[int], session: requests.Session, batc
 def executar_coleta_paralela_ids(session: requests.Session, range_inicio: int, range_fim: int, num_threads: int) -> List[Dict]:
     """Executa coleta paralela com controle de concorrência"""
     total_ids = range_fim - range_inicio + 1
-    batch_size = max(50, total_ids // num_threads)  # Batches menores
+    batch_size = max(50, total_ids // num_threads)
     
     print(f"📊 Configuração:")
     print(f"   • Total IDs: {total_ids:,}")
@@ -286,14 +273,16 @@ def extrair_cookies_playwright(pagina):
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
-def salvar_localidades_em_arquivo(localidades: List[Dict], nome_arquivo: str = "localidades_hortolandia.txt"):
+def salvar_localidades_em_arquivo(localidades: List[Dict], timestamp_execucao: datetime):
     """Salva localidades em arquivo texto"""
+    nome_arquivo = timestamp_execucao.strftime("localidades_%d_%m_%y-%H_%M.txt")
+    
     try:
         with open(nome_arquivo, 'w', encoding='utf-8') as f:
             f.write(f"# Localidades de Hortolândia\n")
             f.write(f"# Total: {len(localidades)} localidades\n")
             f.write(f"# Range: {RANGE_INICIO} - {RANGE_FIM}\n")
-            f.write(f"# Gerado em: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"# Gerado em: {timestamp_execucao.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             f.write("ID | Nome Localidade | Setor | Cidade | Texto Completo\n")
             f.write("-" * 120 + "\n")
             
@@ -304,8 +293,17 @@ def salvar_localidades_em_arquivo(localidades: List[Dict], nome_arquivo: str = "
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_chunk_para_planilha(chunk: List[Dict], total_localidades: int, chunk_index: int, total_chunks: int) -> bool:
-    """Envia chunk de dados para Google Sheets"""
+def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_execucao: datetime):
+    """Envia localidades para nova planilha no Google Sheets"""
+    if not localidades:
+        print("\n⚠ Nenhuma localidade para enviar")
+        return
+
+    nome_planilha = timestamp_execucao.strftime("Localidades_%d_%m_%y-%H:%M")
+    
+    print(f"\n📤 Criando nova planilha: {nome_planilha}")
+    print(f"📊 Enviando {len(localidades)} localidades...")
+
     dados_formatados = [
         [
             loc['id_igreja'],
@@ -314,72 +312,56 @@ def enviar_chunk_para_planilha(chunk: List[Dict], total_localidades: int, chunk_
             loc['cidade'],
             loc['texto_completo']
         ]
-        for loc in chunk
+        for loc in localidades
     ]
     
     payload = {
-        "tipo": "localidades_hortolandia",
+        "tipo": "nova_planilha_localidades",
+        "nome_planilha": nome_planilha,
         "headers": ["ID_Igreja", "Nome_Localidade", "Setor", "Cidade", "Texto_Completo"],
         "dados": dados_formatados,
-        "resumo": {
-            "total_localidades": total_localidades,
-            "batch": f"{chunk_index}/{total_chunks}",
+        "metadata": {
+            "total_localidades": len(localidades),
             "range_inicio": RANGE_INICIO,
             "range_fim": RANGE_FIM,
-            "data_coleta": time.strftime('%Y-%m-%d %H:%M:%S')
+            "tempo_execucao_min": round(tempo_total/60, 2),
+            "threads_utilizadas": NUM_THREADS,
+            "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp_unix": int(timestamp_execucao.timestamp())
         }
     }
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=30)
+            resp = requests.post(URL_APPS_SCRIPT, json=payload, timeout=60)
             if resp.status_code == 200:
-                print(f"✓ Chunk {chunk_index}/{total_chunks} enviado com sucesso")
+                print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
                 return True
             else:
-                print(f"⚠ Erro HTTP {resp.status_code} no chunk {chunk_index}: {resp.text[:200]}")
+                print(f"⚠ Erro HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            print(f"❌ Erro ao enviar chunk {chunk_index} (tentativa {attempt}/{MAX_RETRIES}): {e}")
+            print(f"❌ Erro ao enviar (tentativa {attempt}/{MAX_RETRIES}): {e}")
             
         if attempt < MAX_RETRIES:
             backoff = RETRY_BACKOFF * attempt
             print(f"  ⏱ Aguardando {backoff}s antes de tentar novamente...")
             time.sleep(backoff)
         
-    print(f"❌ Falha no envio do chunk {chunk_index} após {MAX_RETRIES} tentativas")
+    print(f"❌ Falha no envio após {MAX_RETRIES} tentativas")
     return False
-
-def enviar_para_planilha(localidades: List[Dict], batch_size: int = BATCH_SIZE_ENVIO):
-    """Envia todas as localidades para Google Sheets em chunks"""
-    total = len(localidades)
-    if total == 0:
-        print("\n⚠ Nenhuma localidade para enviar")
-        return
-
-    chunks = [localidades[i:i+batch_size] for i in range(0, total, batch_size)]
-    total_chunks = len(chunks)
-    print(f"\n📤 Enviando {total} localidades em {total_chunks} chunk(s) (batch_size={batch_size})")
-
-    sucesso = 0
-    falhas = 0
-    
-    for idx, chunk in enumerate(chunks, start=1):
-        if enviar_chunk_para_planilha(chunk, total, idx, total_chunks):
-            sucesso += 1
-        else:
-            falhas += 1
-            
-    print(f"\n{'✓' if falhas == 0 else '⚠'} Envio finalizado: {sucesso} sucesso(s), {falhas} falha(s)")
 
 def main():
     """Função principal"""
     tempo_inicio = time.time()
+    timestamp_execucao = datetime.now()
     
     print("=" * 80)
     print(" " * 20 + "COLETA DE LOCALIDADES DE HORTOLÂNDIA")
     print("=" * 80)
+    print(f"📅 Data/Hora: {timestamp_execucao.strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"📍 Range: {RANGE_INICIO:,} até {RANGE_FIM:,} ({RANGE_FIM - RANGE_INICIO + 1:,} IDs)")
     print(f"🔧 Threads: {NUM_THREADS} | Timeout: {TIMEOUT_REQUEST}s | Max Retries: {MAX_RETRIES}")
+    print(f"📄 Nova Planilha: {timestamp_execucao.strftime('Localidades_%d_%m_%y-%H:%M')}")
     print(f"🎯 Objetivo: 0% de erro\n")
     
     print("🔐 Realizando login...")
@@ -424,23 +406,24 @@ def main():
     
     if total_falhas > 0:
         print(f"⚠ IDs com falha permanente: {total_falhas}")
-        print(f"   (Execute novamente para tentar recuperar estes IDs)")
     
     print("=" * 80)
 
     if localidades:
-        salvar_localidades_em_arquivo(localidades)
-        enviar_para_planilha(localidades)
+        salvar_localidades_em_arquivo(localidades, timestamp_execucao)
+        enviar_para_planilha(localidades, tempo_total, timestamp_execucao)
     else:
         print("\n⚠ Nenhuma localidade de Hortolândia encontrada neste range")
     
-    # Salva IDs com falha para debug
     if cache_falhas:
-        with open("ids_com_falha.txt", "w") as f:
+        nome_arquivo_falhas = timestamp_execucao.strftime("ids_falha_%d_%m_%y-%H_%M.txt")
+        with open(nome_arquivo_falhas, "w") as f:
             for id_igreja, tentativas in sorted(cache_falhas.items()):
                 if tentativas >= MAX_TENTATIVAS_ID:
                     f.write(f"{id_igreja}\n")
-        print(f"\n📝 IDs com falha salvos em: ids_com_falha.txt")
+        print(f"\n📝 IDs com falha salvos em: {nome_arquivo_falhas}")
+    
+    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Localidades_%d_%m_%y-%H:%M')}")
 
 if __name__ == "__main__":
     main()
