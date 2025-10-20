@@ -493,7 +493,7 @@ def coletar_tudo_de_uma_vez(session, aula_id):
         return None
 
 def executar_historico_aulas(session):
-    """Executa coleta de histórico de aulas e retorna ID da planilha criada + caminho do backup"""
+    """Executa coleta de histórico de aulas e RETORNA OS DADOS COLETADOS"""
     global INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS
     
     tempo_inicio = time.time()
@@ -506,7 +506,7 @@ def executar_historico_aulas(session):
     
     if not INSTRUTORES_HORTOLANDIA:
         print("❌ Não foi possível carregar instrutores. Abortando módulo.")
-        return None, None
+        return None
     
     data_hora_inicio = datetime(2025, 10, 10, 0, 0, 0)
     data_hora_fim = datetime.now()
@@ -517,7 +517,7 @@ def executar_historico_aulas(session):
     
     if primeiro_id is None:
         print("❌ Não foi possível encontrar primeiro ID. Abortando.")
-        return None, None
+        return None
     
     ultimo_id = buscar_ultimo_id_ate(session, data_hora_limite=data_hora_fim, id_min=primeiro_id, id_max=1000000)
     
@@ -584,7 +584,10 @@ def executar_historico_aulas(session):
     
     print(f"\n✅ Coleta finalizada: {aulas_hortolandia:,} aulas de Hortolândia")
     
-    # Enviar para Google Sheets
+    # Backup local ANTES de enviar
+    timestamp_backup = time.strftime("%Y%m%d_%H%M%S")
+    backup_file = f'backup_aulas_{timestamp_backup}.json'
+    
     body = {
         "tipo": "historico_aulas_hortolandia",
         "dados": resultado,
@@ -602,8 +605,6 @@ def executar_historico_aulas(session):
         }
     }
     
-    timestamp_backup = time.strftime("%Y%m%d_%H%M%S")
-    backup_file = f'backup_aulas_{timestamp_backup}.json'
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
@@ -627,19 +628,17 @@ def executar_historico_aulas(session):
                     print(f"   Nome: {detalhes.get('nome_planilha')}")
                     print(f"   ID: {planilha_id}")
                     print(f"   URL: {detalhes.get('url')}")
-                    
-                    return planilha_id, backup_file
-        
-        print("⚠️ Não foi possível obter ID da planilha")
-        return None, backup_file
+        else:
+            print("⚠️ Erro ao enviar para Google Sheets")
         
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        return None, backup_file
+    
+    # RETORNA OS DADOS COLETADOS (independente do sucesso do envio)
+    print(f"📦 Retornando {len(resultado)} linhas de dados para o próximo módulo")
+    return resultado
 
 # ==================== MÓDULO 2: TURMAS ====================
-
-# ==================== MÓDULO 3: MATRICULADOS ====================
 
 def buscar_ids_da_planilha_turmas(planilha_id, backup_file=None):
     """Busca IDs de turmas (prioriza backup local)"""
@@ -757,31 +756,30 @@ def extrair_dados_alunos(session, turma_id):
     except Exception as e:
         return None
 
-def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
-    """Executa coleta de matrículas"""
+def executar_matriculados(session, ids_turmas_modulo2):
+    """Executa coleta de matrículas usando IDs diretos do Módulo 2"""
     tempo_inicio = time.time()
     
     print("\n" + "=" * 80)
     print("👥 MÓDULO 3: ALUNOS MATRICULADOS")
     print("=" * 80)
     
-    IDS_TURMAS = buscar_ids_da_planilha_turmas(planilha_turmas_id, backup_turmas_file)
-    
-    if not IDS_TURMAS:
-        print("❌ Nenhum ID encontrado. Abortando módulo.")
+    # Recebe IDs direto da memória (do Módulo 2)
+    if not ids_turmas_modulo2:
+        print("❌ Nenhum ID de turma recebido do Módulo 2. Abortando módulo.")
         return
     
-    print(f"\n🎯 Total de turmas a processar: {len(IDS_TURMAS)}")
+    print(f"\n🎯 Total de turmas a processar: {len(ids_turmas_modulo2)}")
     
     resultados_resumo = []
     todos_alunos = []
-    total = len(IDS_TURMAS)
+    total = len(ids_turmas_modulo2)
     
     print(f"\n{'=' * 80}")
     print("🚀 Processando turmas...")
     print(f"{'=' * 80}\n")
     
-    for idx, turma_id in enumerate(IDS_TURMAS, 1):
+    for idx, turma_id in enumerate(ids_turmas_modulo2, 1):
         print(f"[{idx}/{total}] Turma {turma_id}...", end=" ")
         
         alunos = extrair_dados_alunos(session, turma_id)
@@ -815,6 +813,13 @@ def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
             aluno['Instrumento'],
             aluno['Status']
         ])
+    
+    # Backup local ANTES de enviar
+    timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
+    backup_file = f'backup_matriculas_{timestamp}.json'
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
+    print(f"💾 Backup salvo: {backup_file}")
     
     # Enviar resumo
     body_resumo = {
@@ -854,16 +859,14 @@ def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
                     resultado_detalhado = resposta_detalhado.json()
                     if resultado_detalhado.get('status') == 'sucesso':
                         print(f"   ✅ {len(todos_alunos)} alunos enviados com sucesso")
-                
+        
         tempo_total = time.time() - tempo_inicio
         print(f"\n⏱️ Tempo do módulo: {tempo_total/60:.2f} minutos")
         
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        # Backup local
-        timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
-        with open(f'backup_matriculas_{timestamp}.json', 'w', encoding='utf-8') as f:
-            json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
+        print(f"💾 Dados salvos no backup: {backup_file}")
+
 def coletar_dados_turma(session, turma_id):
     """Coleta todos os dados de uma turma"""
     try:
@@ -1071,8 +1074,8 @@ def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
         print(f"   ❌ Erro ao acessar planilha: {e}")
         return []
         
-def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
-    """Executa coleta de dados de turmas e retorna ID da planilha criada + caminho do backup"""
+def executar_turmas(session, resultado_modulo1):
+    """Executa coleta de dados de turmas usando IDs coletados no Módulo 1"""
     tempo_inicio = time.time()
     timestamp_execucao = gerar_timestamp()
     
@@ -1080,11 +1083,18 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
     print("🎓 MÓDULO 2: DADOS DE TURMAS")
     print("=" * 80)
     
-    ids_turmas = buscar_ids_da_planilha_aulas(planilha_aulas_id, backup_aulas_file)
+    # EXTRAI IDs DE TURMA DIRETO DOS DADOS JÁ COLETADOS
+    ids_turmas = set()
+    for linha in resultado_modulo1:
+        id_turma = str(linha[1]).strip()  # Coluna 1 = ID_Turma
+        if id_turma and id_turma.isdigit():
+            ids_turmas.add(int(id_turma))
+    
+    ids_turmas = sorted(list(ids_turmas))
     
     if not ids_turmas:
-        print("❌ Nenhum ID encontrado. Abortando módulo.")
-        return None, None
+        print("❌ Nenhum ID de turma encontrado. Abortando módulo.")
+        return None, []
     
     print(f"\n📊 Total de turmas a processar: {len(ids_turmas)}")
     
@@ -1141,7 +1151,6 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
         time.sleep(0.1)
     
     tempo_total = time.time() - tempo_inicio
-    
     print(f"\n✅ Coleta finalizada: {sucesso} turmas coletadas")
     
     # Enviar para Google Sheets
@@ -1185,245 +1194,14 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
                 print(f"   Nome: {planilha_info.get('nome')}")
                 print(f"   ID: {planilha_id}")
                 print(f"   URL: {planilha_info.get('url')}")
-                
-                return planilha_id, backup_file
-        
-        print("⚠️ Não foi possível obter ID da planilha")
-        return None, backup_file
-        
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        return None, backup_file
+    
+    # RETORNA OS DADOS COLETADOS (não depende de planilha)
+    return resultado, ids_turmas
         
 # ==================== MÓDULO 3: MATRICULADOS ====================
 
-def buscar_ids_da_planilha_turmas(planilha_id, backup_file=None):
-    """Busca IDs de turmas (prioriza backup local)"""
-    print(f"\n📂 Buscando IDs de turmas...")
-    
-    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
-    if backup_file and os.path.exists(backup_file):
-        try:
-            print(f"   📄 Lendo backup local: {backup_file}")
-            with open(backup_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            ids_turmas = []
-            for linha in data.get('dados', []):
-                if len(linha) >= 1:  # ID_Turma está na posição 0
-                    id_turma = str(linha[0]).strip()
-                    if id_turma and id_turma.isdigit():
-                        ids_turmas.append(int(id_turma))
-            
-            if ids_turmas:
-                print(f"   ✅ {len(ids_turmas)} IDs encontrados no backup")
-                return ids_turmas
-        except Exception as e:
-            print(f"   ⚠️ Erro ao ler backup: {e}")
-    
-    # MÉTODO 2: Tentar acessar planilha Google (fallback)
-    try:
-        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
-        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
-        response = requests.get(url, timeout=30)
-        response.encoding = 'utf-8'
-        
-        if response.status_code == 200:
-            linhas = response.text.strip().split('\n')
-            cabecalho = [col.strip('"') for col in linhas[0].split(',')]
-            
-            if 'ID_Turma' not in cabecalho:
-                print("   ❌ Coluna 'ID_Turma' não encontrada!")
-                return []
-            
-            idx_id_turma = cabecalho.index('ID_Turma')
-            
-            ids_turmas = []
-            for i, linha in enumerate(linhas[1:], start=2):
-                try:
-                    colunas = linha.split(',')
-                    if len(colunas) > idx_id_turma:
-                        id_turma = colunas[idx_id_turma].strip('"').strip()
-                        if id_turma and id_turma.isdigit():
-                            ids_turmas.append(int(id_turma))
-                except:
-                    continue
-            
-            print(f"   ✅ {len(ids_turmas)} IDs encontrados na planilha")
-            return ids_turmas
-        else:
-            print(f"   ❌ Erro HTTP {response.status_code}")
-            return []
-            
-    except Exception as e:
-        print(f"   ❌ Erro ao acessar planilha: {e}")
-        return []
-
-def extrair_dados_alunos(session, turma_id):
-    """Extrai dados detalhados de todos os alunos matriculados"""
-    try:
-        headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
-        resp = session.get(url, headers=headers, timeout=15)
-        
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            tbody = soup.find('tbody')
-            if not tbody:
-                return []
-            
-            alunos = []
-            rows = tbody.find_all('tr')
-            
-            for row in rows:
-                tds = row.find_all('td')
-                
-                if len(tds) >= 4:
-                    primeiro_td = tds[0].get_text(strip=True)
-                    
-                    if not primeiro_td or 'Nenhum registro' in primeiro_td:
-                        continue
-                    
-                    nome = tds[0].get_text(strip=True)
-                    comum = tds[1].get_text(strip=True)
-                    instrumento = tds[2].get_text(strip=True)
-                    status = tds[3].get_text(strip=True)
-                    
-                    aluno = {
-                        'ID_Turma': turma_id,
-                        'Nome': nome,
-                        'Comum': comum,
-                        'Instrumento': instrumento,
-                        'Status': status
-                    }
-                    
-                    alunos.append(aluno)
-            
-            return alunos
-        
-        else:
-            return None
-        
-    except Exception as e:
-        return None
-
-def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
-    """Executa coleta de matrículas"""
-    tempo_inicio = time.time()
-    
-    print("\n" + "=" * 80)
-    print("👥 MÓDULO 3: ALUNOS MATRICULADOS")
-    print("=" * 80)
-    
-    if not planilha_turmas_id:
-        print("❌ ID da planilha de turmas não fornecido. Abortando módulo.")
-        return
-    
-    IDS_TURMAS = buscar_ids_da_planilha_turmas(planilha_turmas_id, backup_turmas_file)
-    
-    if not IDS_TURMAS:
-        print("❌ Nenhum ID encontrado. Abortando módulo.")
-        return
-    
-    print(f"\n🎯 Total de turmas a processar: {len(IDS_TURMAS)}")
-    
-    resultados_resumo = []
-    todos_alunos = []
-    total = len(IDS_TURMAS)
-    
-    print(f"\n{'=' * 80}")
-    print("🚀 Processando turmas...")
-    print(f"{'=' * 80}\n")
-    
-    for idx, turma_id in enumerate(IDS_TURMAS, 1):
-        print(f"[{idx}/{total}] Turma {turma_id}...", end=" ")
-        
-        alunos = extrair_dados_alunos(session, turma_id)
-        
-        if alunos is not None:
-            quantidade = len(alunos)
-            print(f"✅ {quantidade} alunos")
-            status = "Sucesso"
-            todos_alunos.extend(alunos)
-        else:
-            print(f"⚠️ Erro")
-            quantidade = 0
-            status = "Erro"
-        
-        resultados_resumo.append([turma_id, quantidade, status])
-        time.sleep(0.3)
-    
-    print(f"\n✅ Coleta finalizada: {len(todos_alunos)} alunos coletados")
-    
-    # Preparar dados
-    data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    
-    dados_resumo_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados_resumo
-    
-    dados_alunos_para_envio = [["ID_Turma", "Nome", "Comum", "Instrumento", "Status"]]
-    for aluno in todos_alunos:
-        dados_alunos_para_envio.append([
-            aluno['ID_Turma'],
-            aluno['Nome'],
-            aluno['Comum'],
-            aluno['Instrumento'],
-            aluno['Status']
-        ])
-    
-    # Enviar resumo
-    body_resumo = {
-        "tipo": "contagem_matriculas",
-        "dados": dados_resumo_com_cabecalho,
-        "data_coleta": data_coleta
-    }
-    
-    try:
-        print("\n📤 Enviando dados para Google Sheets...")
-        resposta_resumo = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_resumo, timeout=60)
-        
-        if resposta_resumo.status_code == 200:
-            resultado_resumo = resposta_resumo.json()
-            
-            if resultado_resumo.get('status') == 'sucesso':
-                detalhes = resultado_resumo.get('detalhes', {})
-                planilha_id = detalhes.get('planilha_id')
-                
-                print(f"\n✅ PLANILHA DE MATRÍCULAS CRIADA!")
-                print(f"   Nome: {detalhes.get('nome_planilha')}")
-                print(f"   ID: {planilha_id}")
-                print(f"   URL: {detalhes.get('url')}")
-                
-                # Enviar dados detalhados
-                body_detalhado = {
-                    "tipo": "alunos_detalhados",
-                    "dados": dados_alunos_para_envio,
-                    "data_coleta": data_coleta,
-                    "planilha_id": planilha_id
-                }
-                
-                print("\n📋 Enviando dados detalhados...")
-                resposta_detalhado = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_detalhado, timeout=60)
-                
-                if resposta_detalhado.status_code == 200:
-                    resultado_detalhado = resposta_detalhado.json()
-                    if resultado_detalhado.get('status') == 'sucesso':
-                        print(f"   ✅ {len(todos_alunos)} alunos enviados com sucesso")
-                
-        tempo_total = time.time() - tempo_inicio
-        print(f"\n⏱️ Tempo do módulo: {tempo_total/60:.2f} minutos")
-        
-    except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
-        # Backup local
-        timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
-        with open(f'backup_matriculas_{timestamp}.json', 'w', encoding='utf-8') as f:
-            json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
 
 # ==================== MAIN - ORQUESTRADOR ====================
 def main():
@@ -1445,22 +1223,22 @@ def main():
         print("\n❌ Falha no login. Encerrando processo.")
         return
     
-    # PASSO 2: Executar Histórico de Aulas
-    planilha_aulas_id, backup_aulas_file = executar_historico_aulas(session)
+    # PASSO 2: Executar Histórico de Aulas - RETORNA OS DADOS COLETADOS
+    resultado_aulas = executar_historico_aulas(session)
     
-    if not planilha_aulas_id and not backup_aulas_file:
-        print("\n⚠️ Módulo 1 falhou completamente. Interrompendo processo.")
+    if not resultado_aulas:
+        print("\n⚠️ Módulo 1 falhou. Interrompendo processo.")
         return
     
-    # PASSO 3: Executar Turmas (passa o backup como fallback)
-    planilha_turmas_id, backup_turmas_file = executar_turmas(session, planilha_aulas_id, backup_aulas_file)
+    # PASSO 3: Executar Turmas - USA OS DADOS DO MÓDULO 1
+    resultado_turmas, ids_turmas = executar_turmas(session, resultado_aulas)
     
-    if not planilha_turmas_id and not backup_turmas_file:
-        print("\n⚠️ Módulo 2 falhou completamente. Interrompendo processo.")
+    if not ids_turmas:
+        print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
         return
     
-    # PASSO 4: Executar Matriculados (passa o backup como fallback)
-    executar_matriculados(session, planilha_turmas_id, backup_turmas_file)
+    # PASSO 4: Executar Matriculados - USA OS IDs DO MÓDULO 2
+    executar_matriculados(session, ids_turmas)
     
     # RESUMO FINAL
     tempo_total = time.time() - tempo_inicio_total
@@ -1469,7 +1247,7 @@ def main():
     print("🎉 PROCESSO COMPLETO FINALIZADO!")
     print("=" * 80)
     print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
-    print(f"📊 3 planilhas criadas com sucesso")
+    print(f"📊 Dados coletados e enviados")
     print(f"💾 Backups salvos localmente")
     print("=" * 80 + "\n")
     
