@@ -7,13 +7,20 @@ import requests
 import time
 from bs4 import BeautifulSoup
 import json
+from datetime import datetime
 
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 
-# URL do seu Apps Script (será preenchida após deploy)
+# URL do seu Apps Script
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbyw2E0QH0ucHRdCMNOY_La7r4ElK6xcf0OWlnQGa9w7yCcg82mG_bJV_5fxbhuhbfuY/exec'
+
+def gerar_timestamp():
+    """
+    Gera timestamp no formato DD_MM_YYYY-HH:MM
+    """
+    return datetime.now().strftime('%d_%m_%Y-%H:%M')
 
 def carregar_ids_do_apps_script():
     """
@@ -22,7 +29,6 @@ def carregar_ids_do_apps_script():
     print("\n📂 Buscando IDs únicos via Apps Script...")
     
     try:
-        # Fazer requisição GET para o Apps Script
         url = f"{URL_APPS_SCRIPT}?acao=obter_ids"
         response = requests.get(url, timeout=30)
         
@@ -30,7 +36,6 @@ def carregar_ids_do_apps_script():
             print(f"❌ Erro HTTP {response.status_code}")
             return []
         
-        # Parse do JSON
         dados = response.json()
         
         if dados['status'] != 'sucesso':
@@ -71,19 +76,16 @@ def coletar_dados_turma(session, turma_id, pagina_playwright=None):
     try:
         url = f"https://musical.congregacao.org.br/turmas/editar/{turma_id}"
         
-        # Se temos Playwright, usamos para aguardar carregamento do Select2
         if pagina_playwright:
             pagina_playwright.goto(url, wait_until='networkidle')
             
-            # Aguardar Select2 carregar (máximo 5 segundos)
             try:
                 pagina_playwright.wait_for_selector('#id_responsavel option[selected]', timeout=5000)
             except:
-                pass  # Continua mesmo se não carregar
+                pass
             
             html_content = pagina_playwright.content()
         else:
-            # Fallback para Requests (mais rápido, mas pode perder dados do Select2)
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -96,7 +98,6 @@ def coletar_dados_turma(session, turma_id, pagina_playwright=None):
         
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Verificar se a turma existe (procura pelo form)
         form = soup.find('form', id='turmas')
         if not form:
             return None
@@ -121,66 +122,64 @@ def coletar_dados_turma(session, turma_id, pagina_playwright=None):
             'atualizado_por': ''
         }
         
-        # 1. Curso (select com option selected)
+        # Curso
         curso_select = soup.find('select', {'name': 'id_curso'})
         if curso_select:
             curso_option = curso_select.find('option', selected=True)
             if curso_option:
                 dados['curso'] = curso_option.get_text(strip=True)
         
-        # 2. Descrição
+        # Descrição
         descricao_input = soup.find('input', {'name': 'descricao'})
         if descricao_input:
             dados['descricao'] = descricao_input.get('value', '').strip()
         
-        # 3. Comum (select com option selected)
+        # Comum
         comum_select = soup.find('select', {'name': 'id_igreja'})
         if comum_select:
             comum_option = comum_select.find('option', selected=True)
             if comum_option:
-                # Pega só a primeira parte (antes do |)
                 texto_completo = comum_option.get_text(strip=True)
                 dados['comum'] = texto_completo.split('|')[0].strip()
         
-        # 4. Dia da Semana
+        # Dia da Semana
         dia_select = soup.find('select', {'name': 'dia_semana'})
         if dia_select:
             dia_option = dia_select.find('option', selected=True)
             if dia_option:
                 dados['dia_semana'] = dia_option.get_text(strip=True)
         
-        # 5. Data de Início
+        # Data de Início
         dt_inicio_input = soup.find('input', {'name': 'dt_inicio'})
         if dt_inicio_input:
             dados['data_inicio'] = dt_inicio_input.get('value', '').strip()
         
-        # 6. Data de Encerramento
+        # Data de Encerramento
         dt_fim_input = soup.find('input', {'name': 'dt_fim'})
         if dt_fim_input:
             dados['data_encerramento'] = dt_fim_input.get('value', '').strip()
         
-        # 7. Hora de Início (pegar só HH:MM)
+        # Hora de Início
         hr_inicio_input = soup.find('input', {'name': 'hr_inicio'})
         if hr_inicio_input:
             hora_completa = hr_inicio_input.get('value', '').strip()
             dados['hora_inicio'] = hora_completa[:5] if hora_completa else ''
         
-        # 8. Hora de Término (pegar só HH:MM)
+        # Hora de Término
         hr_fim_input = soup.find('input', {'name': 'hr_fim'})
         if hr_fim_input:
             hora_completa = hr_fim_input.get('value', '').strip()
             dados['hora_termino'] = hora_completa[:5] if hora_completa else ''
         
-        # 9. Responsável 1 (option selected no select2)
+        # Responsável 1
         resp1_select = soup.find('select', {'id': 'id_responsavel'})
         if resp1_select:
             resp1_option = resp1_select.find('option', selected=True)
             if resp1_option:
                 texto_completo = resp1_option.get_text(strip=True)
-                # Formato: "NOME - Comum"
                 dados['responsavel_1'] = texto_completo.split(' - ')[0].strip()
         
-        # 10. Responsável 2 (option selected no select2)
+        # Responsável 2
         resp2_select = soup.find('select', {'id': 'id_responsavel2'})
         if resp2_select:
             resp2_option = resp2_select.find('option', selected=True)
@@ -188,19 +187,19 @@ def coletar_dados_turma(session, turma_id, pagina_playwright=None):
                 texto_completo = resp2_option.get_text(strip=True)
                 dados['responsavel_2'] = texto_completo.split(' - ')[0].strip()
         
-        # 11. Destinado ao
+        # Destinado ao
         genero_select = soup.find('select', {'name': 'id_turma_genero'})
         if genero_select:
             genero_option = genero_select.find('option', selected=True)
             if genero_option:
                 dados['destinado_ao'] = genero_option.get_text(strip=True)
         
-        # 12. Ativo (checkbox)
+        # Ativo
         status_checkbox = soup.find('input', {'name': 'status'})
         if status_checkbox and status_checkbox.has_attr('checked'):
             dados['ativo'] = 'Sim'
         
-        # 13-16. Histórico (dentro do painel collapse)
+        # Histórico
         historico_div = soup.find('div', id='collapseOne')
         if historico_div:
             paragrafos = historico_div.find_all('p')
@@ -227,9 +226,11 @@ def coletar_dados_turma(session, turma_id, pagina_playwright=None):
 
 def main():
     tempo_inicio = time.time()
+    timestamp_execucao = gerar_timestamp()
     
     print("=" * 80)
     print("COLETOR DE DADOS DE TURMAS - SISTEMA MUSICAL")
+    print(f"Execução: {timestamp_execucao}")
     print("=" * 80)
     
     # Carregar IDs únicos via Apps Script
@@ -237,9 +238,9 @@ def main():
     
     if not ids_turmas:
         print("\nNenhum ID para processar. Verifique:")
-        print("1. URL do Apps Script esta correta")
+        print("1. URL do Apps Script está correta")
         print("2. Deploy foi feito como Web App")
-        print("3. Permissoes: 'Executar como: Eu' e 'Acesso: Qualquer pessoa'")
+        print("3. Permissões: 'Executar como: Eu' e 'Acesso: Qualquer pessoa'")
         return
     
     print(f"\nTotal de turmas a processar: {len(ids_turmas)}")
@@ -328,9 +329,9 @@ def main():
                 erros += 1
                 resultado.append([
                     turma_id, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-                    'Erro/Nao encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
+                    'Erro/Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
                 ])
-                print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: Nao encontrado ou erro")
+                print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: Não encontrado ou erro")
             
             # Progresso a cada 50
             if processadas % 50 == 0:
@@ -355,12 +356,13 @@ def main():
     print(f"Sucesso: {sucesso}")
     print(f"Erros: {erros}")
     print(f"Tempo total: {tempo_total/60:.2f} minutos")
-    print(f"Velocidade media: {processadas/(tempo_total/60):.1f} turmas/min")
+    print(f"Velocidade média: {processadas/(tempo_total/60):.1f} turmas/min")
     print(f"{'=' * 80}\n")
     
-    # Preparar envio
+    # Preparar envio com timestamp
     body = {
         "tipo": "dados_turmas",
+        "timestamp": timestamp_execucao,  # IMPORTANTE: Envia timestamp para o Apps Script
         "dados": resultado,
         "headers": [
             "ID_Turma", "Curso", "Descricao", "Comum", "Dia_Semana",
@@ -378,21 +380,51 @@ def main():
         }
     }
     
-    # Salvar backup local
-    backup_file = f"backup_turmas_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    # Salvar backup local com timestamp no nome
+    backup_file = f"backup_turmas_{timestamp_execucao.replace(':', '-')}.json"
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
-    print(f"Backup salvo em: {backup_file}")
+    print(f"💾 Backup salvo em: {backup_file}")
     
     # Enviar para Apps Script
-    print("\nEnviando dados para Google Sheets...")
+    print("\n📤 Enviando dados para Google Sheets...")
+    print(f"📊 Nova planilha será criada: Turmas_{timestamp_execucao}")
+    
     try:
         resposta_post = requests.post(URL_APPS_SCRIPT, json=body, timeout=120)
-        print(f"Dados enviados! Status: {resposta_post.status_code}")
-        print(f"Resposta: {resposta_post.text[:200]}")
+        
+        if resposta_post.status_code == 200:
+            resposta_json = resposta_post.json()
+            
+            if resposta_json.get('status') == 'sucesso':
+                print(f"\n✅ SUCESSO! Planilha criada com sucesso!")
+                print(f"📝 Nome: {resposta_json['planilha']['nome']}")
+                print(f"🔗 URL: {resposta_json['planilha']['url']}")
+                print(f"🆔 ID: {resposta_json['planilha']['id']}")
+                
+                # Salvar URL da planilha em arquivo
+                with open(f"planilha_url_{timestamp_execucao.replace(':', '-')}.txt", 'w') as f:
+                    f.write(f"Planilha criada em: {timestamp_execucao}\n")
+                    f.write(f"Nome: {resposta_json['planilha']['nome']}\n")
+                    f.write(f"URL: {resposta_json['planilha']['url']}\n")
+                    f.write(f"ID: {resposta_json['planilha']['id']}\n")
+            else:
+                print(f"\n❌ Erro na resposta: {resposta_json.get('mensagem', 'Erro desconhecido')}")
+        else:
+            print(f"\n❌ Erro HTTP {resposta_post.status_code}")
+            print(f"Resposta: {resposta_post.text[:300]}")
+            
+    except requests.exceptions.Timeout:
+        print(f"\n⏱️ Timeout ao enviar dados (120s)")
+        print(f"💡 Os dados foram salvos localmente em: {backup_file}")
+        print(f"💡 Tente aumentar o timeout ou enviar manualmente")
     except Exception as e:
-        print(f"Erro ao enviar para Sheets: {e}")
-        print(f"Dados salvos localmente em: {backup_file}")
+        print(f"\n❌ Erro ao enviar para Sheets: {e}")
+        print(f"💾 Dados salvos localmente em: {backup_file}")
+    
+    print(f"\n{'=' * 80}")
+    print("PROCESSO CONCLUÍDO!")
+    print(f"{'=' * 80}")
 
 if __name__ == "__main__":
     main()
