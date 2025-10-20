@@ -16,8 +16,8 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxnp24RMIG4zQEsot0KAT
 PLANILHA_ORIGEM_ID = "1DHvQewO7luUqDrO3IVzdlaNuN2Fsl5Dm_bXI_O2RF8g"
 URL_LEITURA_IDS = f"https://docs.google.com/spreadsheets/d/{PLANILHA_ORIGEM_ID}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
 
-# ID da planilha de destino (onde serão escritos os resultados)
-PLANILHA_DESTINO_ID = "1ADdprL1glmSTCH3PPJ5hnNAEhYK-OXXWKUURrA98ZDs"
+# Nota: Não precisamos mais do ID da planilha de destino
+# pois uma nova será criada a cada execução
 
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
@@ -196,6 +196,7 @@ def main():
     tempo_inicio = time.time()
     
     print("🚀 Iniciando processo de coleta de matrículas...")
+    print("📋 MODO: Criar nova planilha para cada execução")
     
     # Buscar IDs da planilha
     IDS_TURMAS = buscar_ids_planilha()
@@ -269,6 +270,7 @@ def main():
         
         # Preparar dados para envio ao Google Sheets
         print("\n📤 Enviando dados para Google Sheets...")
+        print("🆕 Uma NOVA PLANILHA será criada com timestamp")
         
         from datetime import datetime
         data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -287,46 +289,85 @@ def main():
                 aluno['Status']
             ])
         
-        # Enviar dados de resumo
+        # Enviar dados de resumo (isso criará a nova planilha)
         body_resumo = {
             "tipo": "contagem_matriculas",
             "dados": dados_resumo_com_cabecalho,
             "data_coleta": data_coleta
         }
         
-        # Enviar dados detalhados
-        body_detalhado = {
-            "tipo": "alunos_detalhados",
-            "dados": dados_alunos_para_envio,
-            "data_coleta": data_coleta
-        }
-        
         try:
-            # Enviar resumo
-            print("📊 Enviando resumo de contagem...")
+            # Enviar resumo (cria a planilha)
+            print("📊 Criando nova planilha e enviando resumo...")
             resposta_resumo = requests.post(URL_APPS_SCRIPT, json=body_resumo, timeout=60)
-            print(f"   ✅ Resumo enviado - Status: {resposta_resumo.status_code}")
+            print(f"   Status HTTP: {resposta_resumo.status_code}")
             
-            # Enviar dados detalhados
-            print("📋 Enviando dados detalhados dos alunos...")
-            resposta_detalhado = requests.post(URL_APPS_SCRIPT, json=body_detalhado, timeout=60)
-            print(f"   ✅ Detalhes enviados - Status: {resposta_detalhado.status_code}")
-            print(f"   Total de alunos enviados: {len(todos_alunos)}")
+            # Processar resposta
+            if resposta_resumo.status_code == 200:
+                try:
+                    resultado_resumo = resposta_resumo.json()
+                    
+                    if resultado_resumo.get('status') == 'sucesso':
+                        print(f"   ✅ {resultado_resumo.get('mensagem')}")
+                        
+                        detalhes = resultado_resumo.get('detalhes', {})
+                        planilha_url = detalhes.get('url')
+                        planilha_id = detalhes.get('planilha_id')
+                        nome_planilha = detalhes.get('nome_planilha')
+                        
+                        print(f"   📄 Nome: {nome_planilha}")
+                        print(f"   🔗 URL: {planilha_url}")
+                        
+                        # Agora enviar dados detalhados na MESMA planilha
+                        body_detalhado = {
+                            "tipo": "alunos_detalhados",
+                            "dados": dados_alunos_para_envio,
+                            "data_coleta": data_coleta,
+                            "planilha_id": planilha_id  # Passar o ID da planilha já criada
+                        }
+                        
+                        print("\n📋 Enviando dados detalhados dos alunos...")
+                        resposta_detalhado = requests.post(URL_APPS_SCRIPT, json=body_detalhado, timeout=60)
+                        print(f"   Status HTTP: {resposta_detalhado.status_code}")
+                        
+                        if resposta_detalhado.status_code == 200:
+                            resultado_detalhado = resposta_detalhado.json()
+                            
+                            if resultado_detalhado.get('status') == 'sucesso':
+                                print(f"   ✅ {resultado_detalhado.get('mensagem')}")
+                                print(f"   👥 Total de alunos enviados: {len(todos_alunos)}")
+                            else:
+                                print(f"   ⚠️ Aviso: {resultado_detalhado.get('mensagem')}")
+                        else:
+                            print(f"   ❌ Erro HTTP ao enviar detalhes: {resposta_detalhado.status_code}")
+                    else:
+                        print(f"   ❌ Erro: {resultado_resumo.get('mensagem')}")
+                        
+                except Exception as e:
+                    print(f"   ⚠️ Erro ao processar resposta JSON: {e}")
+                    print(f"   Resposta bruta: {resposta_resumo.text[:200]}")
+            else:
+                print(f"   ❌ Erro HTTP: {resposta_resumo.status_code}")
+                print(f"   Resposta: {resposta_resumo.text[:200]}")
             
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
             # Salvar backup local em caso de falha
             import json
-            with open('backup_resumo.json', 'w', encoding='utf-8') as f:
+            
+            nome_backup = f"backup_{datetime.now().strftime('%d_%m_%Y-%H_%M')}"
+            
+            with open(f'{nome_backup}_resumo.json', 'w', encoding='utf-8') as f:
                 json.dump(resultados_resumo, f, indent=2, ensure_ascii=False)
-            with open('backup_alunos.json', 'w', encoding='utf-8') as f:
+            with open(f'{nome_backup}_alunos.json', 'w', encoding='utf-8') as f:
                 json.dump(todos_alunos, f, indent=2, ensure_ascii=False)
-            print("💾 Backups salvos em 'backup_resumo.json' e 'backup_alunos.json'")
+            print(f"💾 Backups salvos: '{nome_backup}_resumo.json' e '{nome_backup}_alunos.json'")
         
         tempo_total = time.time() - tempo_inicio
         print(f"\n⏱️ Tempo total de execução: {tempo_total:.2f} segundos")
         print(f"📊 Resumo: {len([r for r in resultados_resumo if r[2] == 'Sucesso'])} turmas processadas com sucesso")
         print(f"👥 Total de alunos coletados: {len(todos_alunos)}")
+        print(f"📁 Planilha criada com nome: Membros_{datetime.now().strftime('%d_%m_%Y-%H:%M')}")
 
 if __name__ == "__main__":
     main()
