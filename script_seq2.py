@@ -639,8 +639,10 @@ def executar_historico_aulas(session):
 
 # ==================== MÓDULO 2: TURMAS ====================
 
-def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
-    """Busca IDs únicos da coluna ID_Turma (prioriza backup local)"""
+# ==================== MÓDULO 3: MATRICULADOS ====================
+
+def buscar_ids_da_planilha_turmas(planilha_id, backup_file=None):
+    """Busca IDs de turmas (prioriza backup local)"""
     print(f"\n📂 Buscando IDs de turmas...")
     
     # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
@@ -650,24 +652,23 @@ def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
             with open(backup_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            ids_turmas = set()
+            ids_turmas = []
             for linha in data.get('dados', []):
-                if len(linha) >= 2:  # ID_Turma está na posição 1
-                    id_turma = str(linha[1]).strip()
+                if len(linha) >= 1:  # ID_Turma está na posição 0
+                    id_turma = str(linha[0]).strip()
                     if id_turma and id_turma.isdigit():
-                        ids_turmas.add(int(id_turma))
+                        ids_turmas.append(int(id_turma))
             
             if ids_turmas:
-                ids_lista = sorted(list(ids_turmas))
-                print(f"   ✅ {len(ids_lista)} IDs únicos encontrados no backup")
-                return ids_lista
+                print(f"   ✅ {len(ids_turmas)} IDs encontrados no backup")
+                return ids_turmas
         except Exception as e:
             print(f"   ⚠️ Erro ao ler backup: {e}")
     
     # MÉTODO 2: Tentar acessar planilha Google (fallback)
     try:
         print(f"   🌐 Tentando acessar planilha {planilha_id}...")
-        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados"
+        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
         response = requests.get(url, timeout=30)
         response.encoding = 'utf-8'
         
@@ -681,20 +682,19 @@ def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
             
             idx_id_turma = cabecalho.index('ID_Turma')
             
-            ids_turmas = set()
-            for linha in linhas[1:]:
+            ids_turmas = []
+            for i, linha in enumerate(linhas[1:], start=2):
                 try:
                     colunas = linha.split(',')
                     if len(colunas) > idx_id_turma:
                         id_turma = colunas[idx_id_turma].strip('"').strip()
                         if id_turma and id_turma.isdigit():
-                            ids_turmas.add(int(id_turma))
+                            ids_turmas.append(int(id_turma))
                 except:
                     continue
             
-            ids_lista = sorted(list(ids_turmas))
-            print(f"   ✅ {len(ids_lista)} IDs únicos encontrados na planilha")
-            return ids_lista
+            print(f"   ✅ {len(ids_turmas)} IDs encontrados na planilha")
+            return ids_turmas
         else:
             print(f"   ❌ Erro HTTP {response.status_code}")
             return []
@@ -703,6 +703,167 @@ def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
         print(f"   ❌ Erro ao acessar planilha: {e}")
         return []
 
+def extrair_dados_alunos(session, turma_id):
+    """Extrai dados detalhados de todos os alunos matriculados"""
+    try:
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
+        resp = session.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            tbody = soup.find('tbody')
+            if not tbody:
+                return []
+            
+            alunos = []
+            rows = tbody.find_all('tr')
+            
+            for row in rows:
+                tds = row.find_all('td')
+                
+                if len(tds) >= 4:
+                    primeiro_td = tds[0].get_text(strip=True)
+                    
+                    if not primeiro_td or 'Nenhum registro' in primeiro_td:
+                        continue
+                    
+                    nome = tds[0].get_text(strip=True)
+                    comum = tds[1].get_text(strip=True)
+                    instrumento = tds[2].get_text(strip=True)
+                    status = tds[3].get_text(strip=True)
+                    
+                    aluno = {
+                        'ID_Turma': turma_id,
+                        'Nome': nome,
+                        'Comum': comum,
+                        'Instrumento': instrumento,
+                        'Status': status
+                    }
+                    
+                    alunos.append(aluno)
+            
+            return alunos
+        
+        else:
+            return None
+        
+    except Exception as e:
+        return None
+
+def executar_matriculados(session, planilha_turmas_id, backup_turmas_file=None):
+    """Executa coleta de matrículas"""
+    tempo_inicio = time.time()
+    
+    print("\n" + "=" * 80)
+    print("👥 MÓDULO 3: ALUNOS MATRICULADOS")
+    print("=" * 80)
+    
+    IDS_TURMAS = buscar_ids_da_planilha_turmas(planilha_turmas_id, backup_turmas_file)
+    
+    if not IDS_TURMAS:
+        print("❌ Nenhum ID encontrado. Abortando módulo.")
+        return
+    
+    print(f"\n🎯 Total de turmas a processar: {len(IDS_TURMAS)}")
+    
+    resultados_resumo = []
+    todos_alunos = []
+    total = len(IDS_TURMAS)
+    
+    print(f"\n{'=' * 80}")
+    print("🚀 Processando turmas...")
+    print(f"{'=' * 80}\n")
+    
+    for idx, turma_id in enumerate(IDS_TURMAS, 1):
+        print(f"[{idx}/{total}] Turma {turma_id}...", end=" ")
+        
+        alunos = extrair_dados_alunos(session, turma_id)
+        
+        if alunos is not None:
+            quantidade = len(alunos)
+            print(f"✅ {quantidade} alunos")
+            status = "Sucesso"
+            todos_alunos.extend(alunos)
+        else:
+            print(f"⚠️ Erro")
+            quantidade = 0
+            status = "Erro"
+        
+        resultados_resumo.append([turma_id, quantidade, status])
+        time.sleep(0.3)
+    
+    print(f"\n✅ Coleta finalizada: {len(todos_alunos)} alunos coletados")
+    
+    # Preparar dados
+    data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
+    dados_resumo_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados_resumo
+    
+    dados_alunos_para_envio = [["ID_Turma", "Nome", "Comum", "Instrumento", "Status"]]
+    for aluno in todos_alunos:
+        dados_alunos_para_envio.append([
+            aluno['ID_Turma'],
+            aluno['Nome'],
+            aluno['Comum'],
+            aluno['Instrumento'],
+            aluno['Status']
+        ])
+    
+    # Enviar resumo
+    body_resumo = {
+        "tipo": "contagem_matriculas",
+        "dados": dados_resumo_com_cabecalho,
+        "data_coleta": data_coleta
+    }
+    
+    try:
+        print("\n📤 Enviando dados para Google Sheets...")
+        resposta_resumo = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_resumo, timeout=60)
+        
+        if resposta_resumo.status_code == 200:
+            resultado_resumo = resposta_resumo.json()
+            
+            if resultado_resumo.get('status') == 'sucesso':
+                detalhes = resultado_resumo.get('detalhes', {})
+                planilha_id = detalhes.get('planilha_id')
+                
+                print(f"\n✅ PLANILHA DE MATRÍCULAS CRIADA!")
+                print(f"   Nome: {detalhes.get('nome_planilha')}")
+                print(f"   ID: {planilha_id}")
+                print(f"   URL: {detalhes.get('url')}")
+                
+                # Enviar dados detalhados
+                body_detalhado = {
+                    "tipo": "alunos_detalhados",
+                    "dados": dados_alunos_para_envio,
+                    "data_coleta": data_coleta,
+                    "planilha_id": planilha_id
+                }
+                
+                print("\n📋 Enviando dados detalhados...")
+                resposta_detalhado = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_detalhado, timeout=60)
+                
+                if resposta_detalhado.status_code == 200:
+                    resultado_detalhado = resposta_detalhado.json()
+                    if resultado_detalhado.get('status') == 'sucesso':
+                        print(f"   ✅ {len(todos_alunos)} alunos enviados com sucesso")
+                
+        tempo_total = time.time() - tempo_inicio
+        print(f"\n⏱️ Tempo do módulo: {tempo_total/60:.2f} minutos")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar: {e}")
+        # Backup local
+        timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
+        with open(f'backup_matriculas_{timestamp}.json', 'w', encoding='utf-8') as f:
+            json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
 def coletar_dados_turma(session, turma_id):
     """Coleta todos os dados de uma turma"""
     try:
@@ -843,7 +1004,7 @@ def coletar_dados_turma(session, turma_id):
         return None
 
 def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
-    """Executa coleta de dados de turmas e retorna ID da planilha criada"""
+    """Executa coleta de dados de turmas e retorna ID da planilha criada + caminho do backup"""
     tempo_inicio = time.time()
     timestamp_execucao = gerar_timestamp()
     
@@ -855,7 +1016,7 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
     
     if not ids_turmas:
         print("❌ Nenhum ID encontrado. Abortando módulo.")
-        return None
+        return None, None
     
     print(f"\n📊 Total de turmas a processar: {len(ids_turmas)}")
     
@@ -957,15 +1118,15 @@ def executar_turmas(session, planilha_aulas_id, backup_aulas_file=None):
                 print(f"   ID: {planilha_id}")
                 print(f"   URL: {planilha_info.get('url')}")
                 
-                return planilha_id
+                return planilha_id, backup_file
         
         print("⚠️ Não foi possível obter ID da planilha")
-        return None
+        return None, backup_file
         
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
-        return None
-
+        return None, backup_file
+        
 # ==================== MÓDULO 3: MATRICULADOS ====================
 
 def buscar_ids_da_planilha_turmas(planilha_id):
@@ -1175,7 +1336,6 @@ def executar_matriculados(session, planilha_turmas_id):
             json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
 
 # ==================== MAIN - ORQUESTRADOR ====================
-
 def main():
     tempo_inicio_total = time.time()
     
@@ -1203,14 +1363,14 @@ def main():
         return
     
     # PASSO 3: Executar Turmas (passa o backup como fallback)
-    planilha_turmas_id = executar_turmas(session, planilha_aulas_id, backup_aulas_file)
+    planilha_turmas_id, backup_turmas_file = executar_turmas(session, planilha_aulas_id, backup_aulas_file)
     
-    if not planilha_turmas_id:
-        print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
+    if not planilha_turmas_id and not backup_turmas_file:
+        print("\n⚠️ Módulo 2 falhou completamente. Interrompendo processo.")
         return
     
-    # PASSO 4: Executar Matriculados
-    executar_matriculados(session, planilha_turmas_id)
+    # PASSO 4: Executar Matriculados (passa o backup como fallback)
+    executar_matriculados(session, planilha_turmas_id, backup_turmas_file)
     
     # RESUMO FINAL
     tempo_total = time.time() - tempo_inicio_total
@@ -1222,6 +1382,6 @@ def main():
     print(f"📊 3 planilhas criadas com sucesso")
     print(f"💾 Backups salvos localmente")
     print("=" * 80 + "\n")
-
+    
 if __name__ == "__main__":
     main()
