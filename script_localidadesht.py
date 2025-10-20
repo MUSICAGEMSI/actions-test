@@ -299,6 +299,7 @@ def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_
         print("\n⚠ Nenhuma localidade para enviar")
         return
 
+    # 🆕 NOVO FORMATO: Localidades_DD_MM_YY-HH:MM
     nome_planilha = timestamp_execucao.strftime("Localidades_%d_%m_%y-%H:%M")
     
     print(f"\n📤 Criando nova planilha: {nome_planilha}")
@@ -316,7 +317,7 @@ def enviar_para_planilha(localidades: List[Dict], tempo_total: float, timestamp_
     ]
     
     payload = {
-        "tipo": "nova_planilha_localidades",
+        "tipo": "nova_planilha_localidades",  # 🆕 Tipo específico para nova planilha
         "nome_planilha": nome_planilha,
         "headers": ["ID_Igreja", "Nome_Localidade", "Setor", "Cidade", "Texto_Completo"],
         "dados": dados_formatados,
