@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
 from playwright.sync_api import sync_playwright
-import os, sys, requests, time, json
+import os, requests, time, json
 from datetime import datetime
 import concurrent.futures
 from typing import List, Set, Dict, Optional
@@ -22,6 +22,12 @@ if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
     exit(1)
 
+def gerar_timestamp():
+    """
+    Gera timestamp no formato DD_MM_YYYY-HH:MM
+    """
+    return datetime.now().strftime('%d_%m_%Y-%H:%M')
+
 def buscar_ids_igrejas_hortolandia() -> Set[int]:
     """Busca os IDs das igrejas de Hortolândia do Google Sheets"""
     print("📥 Buscando IDs das igrejas de Hortolândia do Google Sheets...")
@@ -32,6 +38,11 @@ def buscar_ids_igrejas_hortolandia() -> Set[int]:
         
         if response.status_code == 200:
             data = response.json()
+            
+            if data.get('status') != 'sucesso':
+                print(f"⚠️ Erro: {data.get('mensagem', 'Erro desconhecido')}")
+                return set()
+            
             ids = set(data.get('ids', []))
             print(f"✅ {len(ids)} IDs de igrejas carregados: {sorted(list(ids))}")
             return ids
@@ -231,16 +242,16 @@ def extrair_cookies_playwright(pagina):
     cookies = pagina.context.cookies()
     return {cookie['name']: cookie['value'] for cookie in cookies}
 
-def salvar_membros_em_arquivo(membros: List[Dict], timestamp_execucao: datetime):
+def salvar_membros_em_arquivo(membros: List[Dict], timestamp: str):
     """Salva os dados completos dos membros em arquivo JSON"""
-    nome_arquivo = timestamp_execucao.strftime("membros_%d_%m_%y-%H_%M.json")
+    nome_arquivo = f"membros_{timestamp.replace(':', '-')}.json"
     
     try:
         with open(nome_arquivo, 'w', encoding='utf-8') as f:
             json.dump({
                 "membros": membros,
                 "total": len(membros),
-                "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": timestamp,
                 "campos_coletados": list(membros[0].keys()) if membros else []
             }, f, indent=2, ensure_ascii=False)
         
@@ -248,16 +259,13 @@ def salvar_membros_em_arquivo(membros: List[Dict], timestamp_execucao: datetime)
     except Exception as e:
         print(f"❌ Erro ao salvar arquivo: {e}")
 
-def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_igrejas: Set[int], timestamp_execucao: datetime):
+def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_igrejas: Set[int], timestamp: str):
     """Envia os dados completos dos membros para nova planilha no Google Sheets"""
     if not membros:
         print("⚠️ Nenhum membro para enviar")
         return False
     
-    # 🆕 Formato: Membros_DD_MM_YY-HH:MM
-    nome_planilha = timestamp_execucao.strftime("Membros_%d_%m_%y-%H:%M")
-    
-    print(f"\n📤 Criando nova planilha: {nome_planilha}")
+    print(f"\n📤 Criando nova planilha: Membros_{timestamp}")
     print(f"📊 Enviando {len(membros)} membros...")
     
     headers = [
@@ -299,8 +307,8 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         relatorio.append(linha)
     
     payload = {
-        "tipo": "nova_planilha_membros_completo",  # 🆕 Tipo para criar nova planilha
-        "nome_planilha": nome_planilha,
+        "tipo": "nova_planilha_membros_completo",
+        "timestamp": timestamp,  # IMPORTANTE: Timestamp no formato DD_MM_YYYY-HH:MM
         "relatorio_formatado": relatorio,
         "metadata": {
             "total_membros": len(membros),
@@ -309,10 +317,8 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
             "range_fim": RANGE_FIM,
             "tempo_execucao_min": round(tempo_execucao/60, 2),
             "threads_utilizadas": NUM_THREADS,
-            "timestamp": timestamp_execucao.strftime("%Y-%m-%d %H:%M:%S"),
-            "timestamp_unix": int(timestamp_execucao.timestamp()),
-            "ids_igrejas": sorted(list(ids_igrejas)),
-            "campos_coletados": headers
+            "timestamp": timestamp,
+            "ids_igrejas": sorted(list(ids_igrejas))
         }
     }
     
@@ -321,13 +327,24 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         
         if response.status_code == 200:
             resultado = response.json()
-            print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
             
-            if 'planilha' in resultado and 'url' in resultado['planilha']:
-                print(f"🔗 URL da planilha: {resultado['planilha']['url']}")
-            
-            print(f"📄 Resposta: {response.text[:150]}")
-            return True
+            if resultado.get('status') == 'sucesso':
+                print(f"\n✅ SUCESSO! Planilha criada com sucesso!")
+                print(f"📝 Nome: {resultado['planilha']['nome']}")
+                print(f"🔗 URL: {resultado['planilha']['url']}")
+                print(f"🆔 ID: {resultado['planilha']['id']}")
+                
+                # Salvar URL da planilha em arquivo
+                with open(f"planilha_url_{timestamp.replace(':', '-')}.txt", 'w') as f:
+                    f.write(f"Planilha criada em: {timestamp}\n")
+                    f.write(f"Nome: {resultado['planilha']['nome']}\n")
+                    f.write(f"URL: {resultado['planilha']['url']}\n")
+                    f.write(f"ID: {resultado['planilha']['id']}\n")
+                
+                return True
+            else:
+                print(f"\n❌ Erro na resposta: {resultado.get('mensagem', 'Erro desconhecido')}")
+                return False
         else:
             print(f"⚠️ Status HTTP: {response.status_code}")
             print(f"📄 Resposta: {response.text[:200]}")
@@ -342,15 +359,15 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
 
 def main():
     tempo_inicio = time.time()
-    timestamp_execucao = datetime.now()
+    timestamp_execucao = gerar_timestamp()
     
     print("=" * 80)
     print("🎓 COLETOR COMPLETO DE DADOS - ALUNOS DE HORTOLÂNDIA")
     print("=" * 80)
-    print(f"📅 Data/Hora: {timestamp_execucao.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"📅 Execução: {timestamp_execucao}")
     print(f"📊 Range de busca: {RANGE_INICIO:,} - {RANGE_FIM:,}")
     print(f"🧵 Threads: {NUM_THREADS}")
-    print(f"📄 Nova Planilha: {timestamp_execucao.strftime('Membros_%d_%m_%y-%H:%M')}")
+    print(f"📄 Nova Planilha: Membros_{timestamp_execucao}")
     print("=" * 80)
     
     ids_igrejas = buscar_ids_igrejas_hortolandia()
@@ -441,7 +458,7 @@ def main():
     else:
         print("⚠️ Nenhum membro de Hortolândia foi encontrado neste range")
     
-    print(f"\n📄 Planilha criada: {timestamp_execucao.strftime('Membros_%d_%m_%y-%H:%M')}")
+    print(f"\n📄 Planilha criada: Membros_{timestamp_execucao}")
     print(f"🎯 Processo finalizado!")
 
 if __name__ == "__main__":
