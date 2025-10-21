@@ -412,10 +412,7 @@ def coletar_membro(session: requests.Session, membro_id: int, ids_igrejas: Set[i
         return None
 
 def executar_alunos(session, ids_igrejas_modulo1):
-    """
-    Executa coleta de alunos usando IDs de igrejas do Módulo 1
-    RETORNA lista de alunos com seus IDs
-    """
+    """Executa coleta de alunos usando IDs de igrejas do Módulo 1"""
     tempo_inicio = time.time()
     timestamp_execucao = gerar_timestamp()
     
@@ -498,11 +495,10 @@ def executar_alunos(session, ids_igrejas_modulo1):
         ]
         relatorio.append(linha)
     
-    # ✅ CORREÇÃO: Adicionar pasta de destino
+    # ✅ Payload compatível com Apps Script
     payload = {
         "tipo": "nova_planilha_membros_completo",
         "timestamp": timestamp_execucao,
-        "pasta_id": "1cQVxXJBMxW62Hu1hq9RlpkRP2WBzM7YL",  # ✅ PASTA DE DESTINO
         "relatorio_formatado": relatorio,
         "metadata": {
             "total_membros": len(membros_hortolandia),
@@ -521,7 +517,7 @@ def executar_alunos(session, ids_igrejas_modulo1):
             if resultado.get('status') == 'sucesso':
                 print(f"✅ Planilha criada: {resultado['planilha']['url']}")
             else:
-                print(f"⚠️ Erro: {resultado.get('erro', 'Desconhecido')}")
+                print(f"⚠️ Erro: {resultado.get('mensagem', 'Desconhecido')}")
         else:
             print(f"⚠️ Erro HTTP {response.status_code}")
     except Exception as e:
@@ -539,7 +535,6 @@ def executar_alunos(session, ids_igrejas_modulo1):
     
     print(f"\n📦 Retornando {len(alunos_para_historico)} alunos para o próximo módulo")
     return alunos_para_historico
-
 
 # ==================== MÓDULO 3: HISTÓRICO INDIVIDUAL ====================
 
@@ -574,7 +569,19 @@ def validar_resposta_rigorosa(text: str, id_aluno: int) -> tuple:
 
 def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
     """
-    ✅ EXTRAÇÃO CORRIGIDA - Mantém estrutura do script antigo (9 colunas)
+    ✅ EXTRAÇÃO DEFINITIVA - Baseada em HTMLs reais completos
+    
+    Estrutura REAL confirmada:
+    - MTS Individual: 7 colunas no HTML (sem Ações) → 9 colunas total (ID + Nome + 7)
+    - MTS Grupo: 3 colunas no HTML → 5 colunas total (ID + Nome + 3)
+    - MSA Individual: 7 colunas no HTML (sem Ações) → 9 colunas total (ID + Nome + 7)
+    - MSA Grupo: 3 colunas no HTML (com formatação especial) → 9 colunas total (ID + Nome + 7)
+    - Provas: 5 colunas no HTML (sem Ações) → 7 colunas total (ID + Nome + 5)
+    - Hinário Individual: 7 colunas no HTML (sem Ações) → 9 colunas total (ID + Nome + 7)
+    - Hinário Grupo: 3 colunas no HTML → 5 colunas total (ID + Nome + 3)
+    - Métodos: 7 colunas no HTML (sem Ações) → 9 colunas total (ID + Nome + 7)
+    - Escalas Individual: 6 colunas no HTML (sem Ações) → 8 colunas total (ID + Nome + 6)
+    - Escalas Grupo: 3 colunas no HTML → 5 colunas total (ID + Nome + 3)
     """
     dados = {
         'mts_individual': [], 'mts_grupo': [],
@@ -588,7 +595,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
-        # ✅ MTS INDIVIDUAL - FORMATO CORRETO (9 colunas)
+        # ============================================================
+        # MTS INDIVIDUAL - 9 COLUNAS
+        # HTML: Módulo | Lições | Data da Lição | Autorizante | Data de Cadastro | Data de Alteração | Observações | Ações
+        # Extrair: 7 colunas (sem Ações)
+        # ============================================================
         aba_mts = soup.find('div', {'id': 'mts'})
         if aba_mts:
             tabelas = aba_mts.find_all('table', class_='table')
@@ -597,24 +608,29 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 7 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 7:
-                            # ✅ [ID_Aluno, Nome, Col1, Col2, Col3, Col4, Col5, Col6, Col7] = 9 colunas
-                            dados['mts_individual'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # Total: ID + Nome + 7 = 9 colunas ✅
+                            dados['mts_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # MTS GRUPO (5 colunas está OK)
+            # MTS GRUPO - 5 COLUNAS
+            # HTML: Páginas | Observações | Data da Lição
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['mts_grupo'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # Total: ID + Nome + 3 = 5 colunas ✅
+                            dados['mts_grupo'].append([id_aluno, nome_aluno] + campos)
         
-        # ✅ MSA INDIVIDUAL - FORMATO CORRETO (9 colunas)
+        # ============================================================
+        # MSA INDIVIDUAL - 9 COLUNAS
+        # HTML: Data da Lição | Fases | Páginas | Lições | Claves | Observações | Autorizante | Ações
+        # Extrair: 7 colunas (sem Ações)
+        # ============================================================
         aba_msa = soup.find('div', {'id': 'msa'})
         if aba_msa:
             tabelas = aba_msa.find_all('table', class_='table')
@@ -623,37 +639,79 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 7 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 7:
-                            # ✅ 9 colunas
-                            dados['msa_individual'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # Total: ID + Nome + 7 = 9 colunas ✅
+                            dados['msa_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # MSA GRUPO - Extrair corretamente (9 colunas)
+            # ============================================================
+            # MSA GRUPO - 9 COLUNAS (PROBLEMA CRÍTICO!)
+            # HTML: Páginas | Observações | Data da Lição (3 colunas)
+            # MAS Apps Script espera 9 colunas!
+            # 
+            # SOLUÇÃO: O campo "Páginas" contém texto formatado tipo:
+            # "<b>Fase(s):</b> de 1.1 até 1.1; <br><b>Página(s):</b> de 00 até 00; <br><b>Clave(s):</b> Sol"
+            # Precisamos extrair e separar em 7 campos!
+            # ============================================================
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            texto = cols[0].get_text(strip=True)
-                            fases_m = re.search(r'de\s+([\d.]+)\s+até\s+([\d.]+)', texto)
-                            pag_m = re.search(r'de\s+(\d+)\s+até\s+(\d+)', texto)
-                            clave_m = re.search(r'Clave\(s\):\s*(.+?)(?:\s*$)', texto)
+                            # Pegar o HTML completo do primeiro campo
+                            paginas_html = cols[0].decode_contents()
                             
-                            # ✅ 9 colunas
+                            # Extrair valores usando regex
+                            fases_de = ""
+                            fases_ate = ""
+                            pag_de = ""
+                            pag_ate = ""
+                            licoes = ""
+                            claves = ""
+                            
+                            # Buscar Fases: "de X até Y"
+                            fases_m = re.search(r'<b>Fase\(s\):</b>\s*de\s+([\d.]+)\s+até\s+([\d.]+)', paginas_html)
+                            if fases_m:
+                                fases_de = fases_m.group(1)
+                                fases_ate = fases_m.group(2)
+                            
+                            # Buscar Páginas: "de X até Y"
+                            pag_m = re.search(r'<b>Página\(s\):</b>\s*de\s+(\d+)\s+até\s+(\d+)', paginas_html)
+                            if pag_m:
+                                pag_de = pag_m.group(1)
+                                pag_ate = pag_m.group(2)
+                            
+                            # Buscar Lições (se existir): "de X até Y"
+                            licoes_m = re.search(r'<b>Lição\(s\):</b>\s*de\s+(\d+)\s+até\s+(\d+)', paginas_html)
+                            if licoes_m:
+                                licoes = f"{licoes_m.group(1)} - {licoes_m.group(2)}"
+                            
+                            # Buscar Claves
+                            clave_m = re.search(r'<b>Clave\(s\):</b>\s*([^<\n]+)', paginas_html)
+                            if clave_m:
+                                claves = clave_m.group(1).strip()
+                            
+                            # Observações e Data
+                            observacoes = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            data_licao = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            
+                            # Montar array com 9 colunas conforme Apps Script espera:
+                            # ['ID_ALUNO', 'NOME_ALUNO', 'FASES_DE', 'FASES_ATE', 
+                            #  'PAGINAS_DE', 'PAGINAS_ATE', 'CLAVES', 'OBSERVACOES', 'DATA_LICAO']
                             dados['msa_grupo'].append([
                                 id_aluno, nome_aluno,
-                                fases_m.group(1) if fases_m else "",
-                                fases_m.group(2) if fases_m else "",
-                                pag_m.group(1) if pag_m else "",
-                                pag_m.group(2) if pag_m else "",
-                                clave_m.group(1) if clave_m else "",
-                                cols[1].get_text(strip=True) if len(cols) > 1 else "",
-                                cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                                fases_de, fases_ate,
+                                pag_de, pag_ate,
+                                claves, observacoes, data_licao
                             ])
         
-        # ✅ PROVAS (7 colunas)
+        # ============================================================
+        # PROVAS - 7 COLUNAS
+        # HTML: Módulo | Nota | Data da Prova | Autorizante | Data de Cadastro | Ações
+        # Extrair: 5 colunas (sem Ações)
+        # ============================================================
         aba_provas = soup.find('div', {'id': 'provas'})
         if aba_provas:
             tabela = aba_provas.find('table', class_='table')
@@ -662,12 +720,17 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 5 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 5:
-                            dados['provas'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:5]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:5]]
+                            # Total: ID + Nome + 5 = 7 colunas ✅
+                            dados['provas'].append([id_aluno, nome_aluno] + campos)
         
-        # ✅ HINÁRIO INDIVIDUAL (9 colunas)
+        # ============================================================
+        # HINÁRIO INDIVIDUAL - 9 COLUNAS
+        # HTML: Hino | Voz | Data da aula | Autorizante | Data de Cadastro | Data de Alteração | Observações | Ações
+        # Extrair: 7 colunas (sem Ações)
+        # ============================================================
         aba_hin = soup.find('div', {'id': 'hinario'})
         if aba_hin:
             tabelas = aba_hin.find_all('table', class_='table')
@@ -676,23 +739,29 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 7 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 7:
-                            dados['hinario_individual'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # Total: ID + Nome + 7 = 9 colunas ✅
+                            dados['hinario_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # HINÁRIO GRUPO (5 colunas)
+            # HINÁRIO GRUPO - 5 COLUNAS
+            # HTML: Hinos | Observações | Data da Lição
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['hinario_grupo'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # Total: ID + Nome + 3 = 5 colunas ✅
+                            dados['hinario_grupo'].append([id_aluno, nome_aluno] + campos)
         
-        # ✅ MÉTODOS (9 colunas)
+        # ============================================================
+        # MÉTODOS - 9 COLUNAS
+        # HTML: Páginas | Lição | Método | Data da Lição | Autorizante | Data de Cadastro | Observações | Ações
+        # Extrair: 7 colunas (sem Ações)
+        # ============================================================
         aba_met = soup.find('div', {'id': 'metodos'})
         if aba_met:
             tabela = aba_met.find('table', class_='table')
@@ -701,12 +770,17 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 7 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 7:
-                            dados['metodos'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # Total: ID + Nome + 7 = 9 colunas ✅
+                            dados['metodos'].append([id_aluno, nome_aluno] + campos)
         
-        # ✅ ESCALAS INDIVIDUAL (8 colunas)
+        # ============================================================
+        # ESCALAS INDIVIDUAL - 8 COLUNAS
+        # HTML: Escala | Data | Autorizante | Data de Cadastro | Data de Alteração | Observações | Ações
+        # Extrair: 6 colunas (sem Ações)
+        # ============================================================
         aba_esc = soup.find('div', {'id': 'escalas'})
         if aba_esc:
             tabelas = aba_esc.find_all('table', class_='table')
@@ -715,26 +789,78 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                 if tbody:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
+                        # Pegar 6 primeiras colunas (ignorar "Ações")
                         if len(cols) >= 6:
-                            dados['escalas_individual'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:6]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:6]]
+                            # Total: ID + Nome + 6 = 8 colunas ✅
+                            dados['escalas_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # ESCALAS GRUPO (5 colunas)
+            # ESCALAS GRUPO - 5 COLUNAS
+            # HTML: Escala | Observações | Data da Lição
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['escalas_grupo'].append(
-                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
-                            )
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # Total: ID + Nome + 3 = 5 colunas ✅
+                            dados['escalas_grupo'].append([id_aluno, nome_aluno] + campos)
     
     except Exception as e:
         print(f"⚠️ Erro ao extrair dados do aluno {id_aluno}: {e}")
     
     return dados
+    
+# ==================== TESTE DE VALIDAÇÃO ====================
+
+def validar_estrutura_dados(dados: Dict) -> bool:
+    """Valida se os dados têm o número correto de colunas"""
+    print("\n🔍 Validando estrutura dos dados...")
+    
+    validacao = {
+        'mts_individual': 9,      # ID + Nome + 7 campos
+        'mts_grupo': 5,           # ID + Nome + 3 campos
+        'msa_individual': 9,      # ID + Nome + 7 campos
+        'msa_grupo': 9,           # ID + Nome + 7 campos
+        'provas': 7,              # ID + Nome + 5 campos
+        'hinario_individual': 9,  # ID + Nome + 7 campos
+        'hinario_grupo': 5,       # ID + Nome + 3 campos
+        'metodos': 9,             # ID + Nome + 7 campos
+        'escalas_individual': 8,  # ID + Nome + 6 campos
+        'escalas_grupo': 5        # ID + Nome + 3 campos
+    }
+    
+    tudo_ok = True
+    
+    for categoria, colunas_esperadas in validacao.items():
+        if dados[categoria]:
+            colunas_reais = len(dados[categoria][0])
+            status = "✅" if colunas_reais == colunas_esperadas else "❌"
+            print(f"   {status} {categoria}: {colunas_reais} colunas (esperado: {colunas_esperadas})")
+            
+            if colunas_reais != colunas_esperadas:
+                tudo_ok = False
+                print(f"      ⚠️ AMOSTRA: {dados[categoria][0][:3]}...")
+        else:
+            print(f"   ⚪ {categoria}: sem dados")
+    
+    if tudo_ok:
+        print("\n✅ Todas as estruturas estão corretas!")
+    else:
+        print("\n❌ ERRO: Estruturas incompatíveis com Apps Script!")
+    
+    return tudo_ok
+
+
+    # ✅ ADICIONAR VALIDAÇÃO ANTES DE ENVIAR
+    print("\n🔍 Validando dados antes do envio...")
+    if not validar_estrutura_dados(todos_dados):
+        print("❌ ABORTANDO envio - dados incompatíveis!")
+        return
+    
+    # Enviar para Google Sheets
+    print("\n📤 Enviando para Google Sheets...")
 
 async def coletar_aluno_async(session: aiohttp.ClientSession, aluno: Dict, semaphore: asyncio.Semaphore) -> tuple:
     """Coleta assíncrona de histórico de um aluno"""
@@ -858,9 +984,7 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
     return resumo
 
 def executar_historico(cookies_dict, alunos_modulo2):
-    """
-    Executa coleta de histórico individual usando lista de alunos do Módulo 2
-    """
+    """Executa coleta de histórico individual usando lista de alunos do Módulo 2"""
     tempo_inicio = time.time()
     historico_stats['tempo_inicio'] = tempo_inicio
     
@@ -909,6 +1033,18 @@ def executar_historico(cookies_dict, alunos_modulo2):
     print(f"   Sem dados: {historico_stats['sem_dados']}")
     print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
     
+    # ✅✅✅ VALIDAÇÃO CRÍTICA ANTES DE ENVIAR ✅✅✅
+    if not validar_estrutura_dados(todos_dados):
+        print("\n❌ ABORTANDO envio - dados incompatíveis com Apps Script!")
+        print("💾 Salvando backup local para análise...")
+        timestamp = gerar_timestamp()
+        backup_file = f'backup_historico_ERRO_{timestamp.replace(":", "-")}.json'
+        with open(backup_file, 'w', encoding='utf-8') as f:
+            json.dump({'dados': todos_dados, 'timestamp': timestamp, 'erro': 'estrutura_invalida'}, f, ensure_ascii=False, indent=2)
+        print(f"💾 Backup de erro salvo: {backup_file}")
+        print("\n🔧 Corrija a função extrair_dados_completo() e tente novamente!")
+        return
+    
     # Backup local
     timestamp = gerar_timestamp()
     backup_file = f'backup_historico_{timestamp.replace(":", "-")}.json'
@@ -949,6 +1085,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
             result = response.json()
             if result.get('sucesso'):
                 print("✅ Dados enviados com sucesso!")
+                print(f"📊 URL: {result.get('planilha', {}).get('url', 'N/A')}")
             else:
                 print(f"⚠️ Erro do servidor: {result.get('erro', 'Desconhecido')}")
         else:
