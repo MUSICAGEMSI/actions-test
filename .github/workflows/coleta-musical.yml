@@ -9,8 +9,10 @@ on:
         default: 'coletor_ultra_otimizado_15min.py'
         type: choice
         options:
-          - script_nivel.py
+          - script_seq1.py
           - script_seq2.py
+          - script_seq3.py
+          - script_nivel.py
           - script_matriculados.py
           - script_det.py
           - script_expandido.py
