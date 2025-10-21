@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - script_seq1.py
+          - script_det.py
           - script_seq2.py
           - script_seq3.py
           - script_nivel.py
