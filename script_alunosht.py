@@ -320,7 +320,12 @@ def enviar_membros_para_sheets(membros: List[Dict], tempo_execucao: float, ids_i
         response = requests.post(URL_APPS_SCRIPT, json=payload, timeout=180)
         
         if response.status_code == 200:
+            resultado = response.json()
             print(f"✅ Planilha '{nome_planilha}' criada com sucesso!")
+            
+            if 'planilha' in resultado and 'url' in resultado['planilha']:
+                print(f"🔗 URL da planilha: {resultado['planilha']['url']}")
+            
             print(f"📄 Resposta: {response.text[:150]}")
             return True
         else:
