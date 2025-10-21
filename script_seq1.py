@@ -498,9 +498,11 @@ def executar_alunos(session, ids_igrejas_modulo1):
         ]
         relatorio.append(linha)
     
+    # ✅ CORREÇÃO: Adicionar pasta de destino
     payload = {
         "tipo": "nova_planilha_membros_completo",
         "timestamp": timestamp_execucao,
+        "pasta_id": "1cQVxXJBMxW62Hu1hq9RlpkRP2WBzM7YL",  # ✅ PASTA DE DESTINO
         "relatorio_formatado": relatorio,
         "metadata": {
             "total_membros": len(membros_hortolandia),
@@ -518,10 +520,14 @@ def executar_alunos(session, ids_igrejas_modulo1):
             resultado = response.json()
             if resultado.get('status') == 'sucesso':
                 print(f"✅ Planilha criada: {resultado['planilha']['url']}")
+            else:
+                print(f"⚠️ Erro: {resultado.get('erro', 'Desconhecido')}")
+        else:
+            print(f"⚠️ Erro HTTP {response.status_code}")
     except Exception as e:
         print(f"⚠️ Erro ao enviar: {e}")
     
-    # RETORNA lista de alunos (com IDs e nomes) para o próximo módulo
+    # RETORNA lista de alunos para próximo módulo
     alunos_para_historico = [
         {
             'id_aluno': m['id_membro'],
@@ -533,6 +539,7 @@ def executar_alunos(session, ids_igrejas_modulo1):
     
     print(f"\n📦 Retornando {len(alunos_para_historico)} alunos para o próximo módulo")
     return alunos_para_historico
+
 
 # ==================== MÓDULO 3: HISTÓRICO INDIVIDUAL ====================
 
@@ -564,8 +571,11 @@ def validar_resposta_rigorosa(text: str, id_aluno: int) -> tuple:
     
     return True, tem_dados
 
+
 def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
-    """Extração completa de todos os dados de histórico"""
+    """
+    ✅ EXTRAÇÃO CORRIGIDA - Mantém estrutura do script antigo (9 colunas)
+    """
     dados = {
         'mts_individual': [], 'mts_grupo': [],
         'msa_individual': [], 'msa_grupo': [],
@@ -578,7 +588,7 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
-        # MTS Individual
+        # ✅ MTS INDIVIDUAL - FORMATO CORRETO (9 colunas)
         aba_mts = soup.find('div', {'id': 'mts'})
         if aba_mts:
             tabelas = aba_mts.find_all('table', class_='table')
@@ -588,18 +598,23 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
-                            dados['mts_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
+                            # ✅ [ID_Aluno, Nome, Col1, Col2, Col3, Col4, Col5, Col6, Col7] = 9 colunas
+                            dados['mts_individual'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
+                            )
             
-            # MTS Grupo
+            # MTS GRUPO (5 colunas está OK)
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['mts_grupo'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]])
+                            dados['mts_grupo'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
+                            )
         
-        # MSA Individual
+        # ✅ MSA INDIVIDUAL - FORMATO CORRETO (9 colunas)
         aba_msa = soup.find('div', {'id': 'msa'})
         if aba_msa:
             tabelas = aba_msa.find_all('table', class_='table')
@@ -609,18 +624,36 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
-                            dados['msa_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
+                            # ✅ 9 colunas
+                            dados['msa_individual'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
+                            )
             
-            # MSA Grupo
+            # MSA GRUPO - Extrair corretamente (9 colunas)
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['msa_grupo'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]])
+                            texto = cols[0].get_text(strip=True)
+                            fases_m = re.search(r'de\s+([\d.]+)\s+até\s+([\d.]+)', texto)
+                            pag_m = re.search(r'de\s+(\d+)\s+até\s+(\d+)', texto)
+                            clave_m = re.search(r'Clave\(s\):\s*(.+?)(?:\s*$)', texto)
+                            
+                            # ✅ 9 colunas
+                            dados['msa_grupo'].append([
+                                id_aluno, nome_aluno,
+                                fases_m.group(1) if fases_m else "",
+                                fases_m.group(2) if fases_m else "",
+                                pag_m.group(1) if pag_m else "",
+                                pag_m.group(2) if pag_m else "",
+                                clave_m.group(1) if clave_m else "",
+                                cols[1].get_text(strip=True) if len(cols) > 1 else "",
+                                cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            ])
         
-        # PROVAS
+        # ✅ PROVAS (7 colunas)
         aba_provas = soup.find('div', {'id': 'provas'})
         if aba_provas:
             tabela = aba_provas.find('table', class_='table')
@@ -630,9 +663,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 5:
-                            dados['provas'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:5]])
+                            dados['provas'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:5]]
+                            )
         
-        # HINÁRIO Individual
+        # ✅ HINÁRIO INDIVIDUAL (9 colunas)
         aba_hin = soup.find('div', {'id': 'hinario'})
         if aba_hin:
             tabelas = aba_hin.find_all('table', class_='table')
@@ -642,18 +677,22 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
-                            dados['hinario_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
+                            dados['hinario_individual'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
+                            )
             
-            # HINÁRIO Grupo
+            # HINÁRIO GRUPO (5 colunas)
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['hinario_grupo'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]])
+                            dados['hinario_grupo'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
+                            )
         
-        # MÉTODOS
+        # ✅ MÉTODOS (9 colunas)
         aba_met = soup.find('div', {'id': 'metodos'})
         if aba_met:
             tabela = aba_met.find('table', class_='table')
@@ -663,9 +702,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
-                            dados['metodos'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]])
+                            dados['metodos'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:7]]
+                            )
         
-        # ESCALAS Individual
+        # ✅ ESCALAS INDIVIDUAL (8 colunas)
         aba_esc = soup.find('div', {'id': 'escalas'})
         if aba_esc:
             tabelas = aba_esc.find_all('table', class_='table')
@@ -675,19 +716,23 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                     for linha in tbody.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 6:
-                            dados['escalas_individual'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:6]])
+                            dados['escalas_individual'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:6]]
+                            )
             
-            # ESCALAS Grupo
+            # ESCALAS GRUPO (5 colunas)
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
-                            dados['escalas_grupo'].append([id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]])
+                            dados['escalas_grupo'].append(
+                                [id_aluno, nome_aluno] + [c.get_text(strip=True) for c in cols[:3]]
+                            )
     
     except Exception as e:
-        pass
+        print(f"⚠️ Erro ao extrair dados do aluno {id_aluno}: {e}")
     
     return dados
 
