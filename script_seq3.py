@@ -1349,7 +1349,8 @@ def executar_turmas_gem(pagina, session):
         "headers": [
             "Igreja", "Curso", "Turma", "Matriculados_Badge", "Início", 
             "Término", "Dia_Hora", "Status", "Ações", "ID_Turma", 
-            "Badge_Duplicado", "Real_Matriculados", "Status_Verificação]
+            "Badge_Duplicado", "Real_Matriculados", "Status_Verificação"
+        ]
     }
 
     # Backup local
