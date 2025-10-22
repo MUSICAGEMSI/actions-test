@@ -598,10 +598,16 @@ def executar_historico_aulas(session):
             "Total_Alunos", "Presentes", "IDs_Nomes_Presentes", "IDs_Nomes_Ausentes"
         ],
         "resumo": {
+            "periodo_inicio": data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S'),
+            "periodo_fim": data_hora_fim.strftime('%d/%m/%Y %H:%M:%S'),
             "total_aulas": len(resultado),
             "aulas_processadas": aulas_processadas,
             "aulas_com_ata": aulas_com_ata,
-            "tempo_minutos": round((time.time() - tempo_inicio)/60, 2)
+            "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
+            "primeiro_id_2024": primeiro_id,
+            "ultimo_id_2024": ultimo_id,
+            "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
+            "velocidade_aulas_por_segundo": round(aulas_processadas / (time.time() - tempo_inicio), 2)
         }
     }
     
@@ -614,25 +620,49 @@ def executar_historico_aulas(session):
     try:
         resposta_post = requests.post(URL_APPS_SCRIPT_AULAS, json=body, timeout=180)
         
-        if resposta_post.status_code == 200:
-            resposta_json = resposta_post.json()
-            
-            if 'body' in resposta_json:
-                body_content = json.loads(resposta_json['body'])
-                
-                if 'detalhes' in body_content:
-                    detalhes = body_content['detalhes']
-                    planilha_id = detalhes.get('planilha_id')
-                    
-                    print(f"\n✅ PLANILHA DE AULAS CRIADA!")
-                    print(f"   Nome: {detalhes.get('nome_planilha')}")
-                    print(f"   ID: {planilha_id}")
-                    print(f"   URL: {detalhes.get('url')}")
-        else:
-            print("⚠️ Erro ao enviar para Google Sheets")
+        print(f"   Status HTTP: {resposta_post.status_code}")
         
+        if resposta_post.status_code == 200:
+            # ✅ CORREÇÃO AQUI - O Apps Script retorna ContentService.createTextOutput
+            # Primeiro, pega o texto da resposta
+            texto_resposta = resposta_post.text
+            print(f"   📥 Resposta recebida (primeiros 200 chars): {texto_resposta[:200]}")
+            
+            try:
+                # O texto é um JSON que contém statusCode, body, headers
+                resposta_outer = json.loads(texto_resposta)
+                
+                # O 'body' dentro desse JSON é outro JSON (string)
+                if 'body' in resposta_outer:
+                    resposta_inner = json.loads(resposta_outer['body'])
+                    
+                    # Agora sim temos o objeto real com 'status', 'detalhes', etc.
+                    if resposta_inner.get('status') == 'sucesso':
+                        detalhes = resposta_inner.get('detalhes', {})
+                        
+                        print(f"\n✅ PLANILHA DE AULAS CRIADA!")
+                        print(f"   Nome: {detalhes.get('nome_planilha', 'N/A')}")
+                        print(f"   ID: {detalhes.get('planilha_id', 'N/A')}")
+                        print(f"   URL: {detalhes.get('url', 'N/A')}")
+                        print(f"   Linhas gravadas: {detalhes.get('linhas_gravadas', 0)}")
+                    else:
+                        print(f"⚠️ Resposta: {resposta_inner.get('mensagem', 'Sem mensagem')}")
+                else:
+                    print("⚠️ Resposta sem campo 'body'")
+                    print(f"   Conteúdo: {resposta_outer}")
+                    
+            except json.JSONDecodeError as e:
+                print(f"❌ Erro ao decodificar JSON: {e}")
+                print(f"   Resposta bruta: {texto_resposta}")
+        else:
+            print(f"⚠️ Erro HTTP {resposta_post.status_code}")
+            print(f"   Resposta: {resposta_post.text[:500]}")
+        
+    except requests.Timeout:
+        print(f"❌ Timeout ao enviar (180s). Verifique o backup: {backup_file}")
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
+        print(f"   Tipo do erro: {type(e).__name__}")
     
     # RETORNA OS DADOS COLETADOS (independente do sucesso do envio)
     print(f"📦 Retornando {len(resultado)} linhas de dados para o próximo módulo")
