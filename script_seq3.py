@@ -505,56 +505,138 @@ def coletar_turmas_gem(pagina, session):
         # Navegar para G.E.M com múltiplas tentativas
         print("🔄 Tentando acessar menu G.E.M...")
         
-        # Aguardar carregamento completo da página
-        pagina.wait_for_load_state("networkidle", timeout=30000)
-        pagina.wait_for_timeout(3000)
-        
-        # Tentar diferentes estratégias para clicar no G.E.M
-        gem_clicado = False
-        
-        # Estratégia 1: Hover + Click
+        # ESTRATÉGIA PRIORITÁRIA: Navegação direta via URL
+        navegacao_direta_ok = False
         try:
-            gem_selector = 'span:has-text("G.E.M")'
-            pagina.wait_for_selector(gem_selector, timeout=15000)
-            gem_element = pagina.locator(gem_selector).first
-            gem_element.hover()
-            pagina.wait_for_timeout(1500)
+            print("🔄 Estratégia Prioritária: Navegação direta para G.E.M/Turmas...")
+            pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
+            pagina.wait_for_timeout(3000)
             
-            if gem_element.is_visible() and gem_element.is_enabled():
-                gem_element.click()
-                gem_clicado = True
-                print("✅ Menu G.E.M acessado (Estratégia 1)")
-        except Exception as e:
-            print(f"⚠️ Estratégia 1 falhou: {e}")
-        
-        # Estratégia 2: JavaScript click
-        if not gem_clicado:
+            # Verificar se a tabela carregou
             try:
-                pagina.evaluate("""
-                    () => {
-                        const gemElement = Array.from(document.querySelectorAll('span'))
-                            .find(el => el.textContent.includes('G.E.M'));
-                        if (gemElement) gemElement.click();
-                    }
-                """)
-                pagina.wait_for_timeout(2000)
-                gem_clicado = True
-                print("✅ Menu G.E.M acessado (Estratégia 2)")
+                pagina.wait_for_selector('table#tabela-turmas', timeout=10000)
+                print("✅ Navegação direta bem-sucedida! Tabela de turmas carregada.")
+                navegacao_direta_ok = True
+            except:
+                print("⚠️ Navegação direta não carregou a tabela esperada")
+        except Exception as e:
+            print(f"⚠️ Navegação direta falhou: {e}")
+        
+        # Se navegação direta funcionou, pular o resto
+        if not navegacao_direta_ok:
+            # Aguardar carregamento completo da página
+            pagina.wait_for_load_state("networkidle", timeout=30000)
+            pagina.wait_for_timeout(3000)
+        # Se navegação direta funcionou, pular o resto
+        if not navegacao_direta_ok:
+            # Aguardar carregamento completo da página
+            pagina.wait_for_load_state("networkidle", timeout=30000)
+            pagina.wait_for_timeout(3000)
+            
+            # Tentar diferentes estratégias para clicar no G.E.M
+            gem_clicado = False
+            
+            # Estratégia 1: Hover + Click
+            try:
+                gem_selector = 'span:has-text("G.E.M")'
+                pagina.wait_for_selector(gem_selector, timeout=15000)
+                gem_element = pagina.locator(gem_selector).first
+                gem_element.hover()
+                pagina.wait_for_timeout(1500)
+                
+                if gem_element.is_visible() and gem_element.is_enabled():
+                    gem_element.click()
+                    gem_clicado = True
+                    print("✅ Menu G.E.M acessado (Estratégia 1)")
             except Exception as e:
-                print(f"⚠️ Estratégia 2 falhou: {e}")
-        
-        if not gem_clicado:
-            print("❌ Não foi possível acessar o menu G.E.M após múltiplas tentativas")
-            return None
-        
-        # Navegar para Turmas
-        try:
-            pagina.wait_for_selector('a[href="turmas"]', timeout=15000)
-            pagina.click('a[href="turmas"]')
-            print("✅ Navegando para Turmas...")
-        except PlaywrightTimeoutError:
-            print("❌ Link 'turmas' não encontrado.")
-            return None
+                print(f"⚠️ Estratégia 1 falhou: {e}")
+            
+            # Estratégia 2: JavaScript click
+            if not gem_clicado:
+                try:
+                    pagina.evaluate("""
+                        () => {
+                            const gemElement = Array.from(document.querySelectorAll('span'))
+                                .find(el => el.textContent.includes('G.E.M'));
+                            if (gemElement) gemElement.click();
+                        }
+                    """)
+                    pagina.wait_for_timeout(2000)
+                    gem_clicado = True
+                    print("✅ Menu G.E.M acessado (Estratégia 2)")
+                except Exception as e:
+                    print(f"⚠️ Estratégia 2 falhou: {e}")
+            
+            # Estratégia 3: Navegação direta via URL (segunda tentativa)
+            if not gem_clicado:
+                try:
+                    print("🔄 Tentando navegação direta para G.E.M/Turmas (2ª tentativa)...")
+                    pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
+                    pagina.wait_for_timeout(3000)
+                    gem_clicado = True
+                    navegacao_direta_ok = True
+                    print("✅ Navegação direta para Turmas bem-sucedida (Estratégia 3)")
+                except Exception as e:
+                    print(f"⚠️ Estratégia 3 falhou: {e}")
+            
+            if not gem_clicado and not navegacao_direta_ok:
+                print("❌ Não foi possível acessar o menu G.E.M após múltiplas tentativas")
+                return None
+            
+            # Navegar para Turmas (se não usou navegação direta)
+            if not navegacao_direta_ok:
+                turmas_acessado = False
+                
+                # Verificar se já estamos na página de turmas
+                try:
+                    pagina.wait_for_selector('table#tabela-turmas', timeout=3000)
+                    print("✅ Já estamos na página de Turmas!")
+                    turmas_acessado = True
+                except:
+                    pass
+                
+                if not turmas_acessado:
+                    # Estratégia 1: Click direto no link
+                    try:
+                        pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
+                        pagina.click('a[href="turmas"]')
+                        print("✅ Navegando para Turmas (Click direto)...")
+                        turmas_acessado = True
+                    except PlaywrightTimeoutError:
+                        print("⚠️ Link 'turmas' não encontrado via seletor.")
+                
+                if not turmas_acessado:
+                    # Estratégia 2: JavaScript click em link de turmas
+                    try:
+                        print("🔄 Tentando clicar em 'Turmas' via JavaScript...")
+                        pagina.evaluate("""
+                            () => {
+                                const turmasLink = Array.from(document.querySelectorAll('a'))
+                                    .find(el => el.getAttribute('href') === 'turmas' || 
+                                               el.textContent.includes('Turmas'));
+                                if (turmasLink) turmasLink.click();
+                            }
+                        """)
+                        pagina.wait_for_timeout(3000)
+                        print("✅ Click JavaScript em 'Turmas' executado")
+                        turmas_acessado = True
+                    except Exception as e:
+                        print(f"⚠️ Click JavaScript em Turmas falhou: {e}")
+                
+                if not turmas_acessado:
+                    # Estratégia 3: Navegação direta via URL
+                    try:
+                        print("🔄 Tentando navegação direta para página de Turmas...")
+                        pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
+                        pagina.wait_for_timeout(3000)
+                        print("✅ Navegação direta para Turmas bem-sucedida")
+                        turmas_acessado = True
+                    except Exception as e:
+                        print(f"⚠️ Navegação direta para Turmas falhou: {e}")
+                
+                if not turmas_acessado:
+                    print("❌ Não foi possível acessar a página de Turmas após múltiplas tentativas")
+                    return None
         
         # Aguardar tabela
         try:
@@ -954,6 +1036,13 @@ def main():
         
         dados_turmas_modulo2 = None
         try:
+            # Garantir que estamos na página inicial do painel
+            print("🔄 Navegando para o painel antes do Módulo 2...")
+            pagina.goto("https://musical.congregacao.org.br/painel", timeout=30000)
+            pagina.wait_for_load_state("networkidle", timeout=30000)
+            pagina.wait_for_timeout(2000)
+            print("✅ Página do painel carregada")
+            
             # Atualizar cookies antes do módulo 2
             cookies_dict = extrair_cookies_playwright(pagina)
             session.cookies.update(cookies_dict)
