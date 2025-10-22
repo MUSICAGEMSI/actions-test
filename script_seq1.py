@@ -412,6 +412,7 @@ def coletar_membro(session: requests.Session, membro_id: int, ids_igrejas: Set[i
         return None
 
 
+
 def executar_alunos(session, ids_igrejas_modulo1):
     """Executa coleta de alunos usando IDs de igrejas do Módulo 1"""
     tempo_inicio = time.time()
@@ -540,6 +541,7 @@ def executar_alunos(session, ids_igrejas_modulo1):
     
     print(f"\n📦 Retornando {len(alunos_para_historico)} alunos para o próximo módulo")
     return alunos_para_historico
+
 
 # ==================== MÓDULO 3: HISTÓRICO INDIVIDUAL ====================
 
@@ -958,14 +960,30 @@ def mesclar_dados(dados1: Dict, dados2: Dict) -> Dict:
         resultado[key] = dados1[key] + dados2[key]
     return resultado
 
+
 def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
-    """Gera resumo de registros por aluno"""
+    """
+    ✅ CRÍTICO: Gera resumo com EXATAMENTE 14 colunas conforme Apps Script espera
+    
+    Apps Script espera (getCabecalhoResumo):
+    ['ID_ALUNO', 'NOME_ALUNO', 'ID_IGREJA',
+     'TOTAL_MTS_IND', 'TOTAL_MTS_GRUPO',
+     'TOTAL_MSA_IND', 'TOTAL_MSA_GRUPO',
+     'TOTAL_PROVAS', 'MEDIA_PROVAS',
+     'TOTAL_HINOS_IND', 'TOTAL_HINOS_GRUPO',
+     'TOTAL_METODOS',
+     'TOTAL_ESCALAS_IND', 'TOTAL_ESCALAS_GRUPO']
+    
+    NÃO INCLUIR: 'ULTIMA_ATIVIDADE', 'DATA_COLETA' (removidos do Apps Script)
+    """
     resumo = []
+    
     for aluno in alunos:
         id_aluno = aluno['id_aluno']
         nome = aluno['nome']
         id_igreja = aluno['id_igreja']
         
+        # Contar registros por categoria
         t_mts_i = sum(1 for x in todos_dados['mts_individual'] if x[0] == id_aluno)
         t_mts_g = sum(1 for x in todos_dados['mts_grupo'] if x[0] == id_aluno)
         t_msa_i = sum(1 for x in todos_dados['msa_individual'] if x[0] == id_aluno)
@@ -977,19 +995,126 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
         t_esc_i = sum(1 for x in todos_dados['escalas_individual'] if x[0] == id_aluno)
         t_esc_g = sum(1 for x in todos_dados['escalas_grupo'] if x[0] == id_aluno)
         
-        total_registros = t_mts_i + t_mts_g + t_msa_i + t_msa_g + t_prov + t_hin_i + t_hin_g + t_met + t_esc_i + t_esc_g
+        # Calcular média de provas
+        provas_aluno = [x for x in todos_dados['provas'] if x[0] == id_aluno]
+        if provas_aluno:
+            try:
+                # Nota está na coluna 3 (índice 3 após ID_ALUNO, NOME_ALUNO, MODULO_FASES)
+                notas = []
+                for prova in provas_aluno:
+                    if len(prova) > 3:
+                        nota_str = str(prova[3]).replace(',', '.')
+                        try:
+                            nota = float(nota_str)
+                            notas.append(nota)
+                        except:
+                            pass
+                media = sum(notas) / len(notas) if notas else 0
+            except:
+                media = 0
+        else:
+            media = 0
         
+        # ✅ Array com EXATAMENTE 14 colunas
         resumo.append([
-            id_aluno, nome, id_igreja,
-            t_mts_i, t_mts_g, t_msa_i, t_msa_g,
-            t_prov, t_hin_i, t_hin_g, t_met,
-            t_esc_i, t_esc_g, total_registros
+            id_aluno,           # 1
+            nome,               # 2
+            id_igreja,          # 3
+            t_mts_i,            # 4
+            t_mts_g,            # 5
+            t_msa_i,            # 6
+            t_msa_g,            # 7
+            t_prov,             # 8
+            round(media, 2),    # 9 - MEDIA_PROVAS
+            t_hin_i,            # 10
+            t_hin_g,            # 11
+            t_met,              # 12
+            t_esc_i,            # 13
+            t_esc_g             # 14
+            # ❌ NÃO incluir ULTIMA_ATIVIDADE e DATA_COLETA
         ])
     
     return resumo
 
+def filtrar_dados_vazios(dados: Dict) -> Dict:
+    """
+    ✅ CRÍTICO: Filtra arrays vazios antes de enviar para Apps Script
+    Previne erro: "The rowContents passed to appendRow() must be nonempty"
+    """
+    dados_filtrados = {}
+    
+    for categoria, valores in dados.items():
+        if valores and len(valores) > 0:
+            # Verificar se não são apenas arrays vazios
+            valores_validos = [v for v in valores if v and len(v) > 0]
+            dados_filtrados[categoria] = valores_validos
+        else:
+            dados_filtrados[categoria] = []
+    
+    return dados_filtrados
+
+def validar_dados_antes_envio(todos_dados: Dict, resumo: List) -> bool:
+    """
+    ✅ Validação final antes de enviar para Apps Script
+    Retorna True se dados são válidos, False caso contrário
+    """
+    print("\n🔍 Validando dados antes do envio...")
+    
+    # 1. Validar estrutura do resumo
+    if not resumo or len(resumo) == 0:
+        print("   ⚠️ Resumo vazio!")
+        return False
+    
+    # Verificar número de colunas do resumo (deve ser 14)
+    colunas_resumo = len(resumo[0]) if resumo else 0
+    if colunas_resumo != 14:
+        print(f"   ❌ Resumo com {colunas_resumo} colunas (esperado: 14)")
+        print(f"   Amostra: {resumo[0][:5]}...")
+        return False
+    else:
+        print(f"   ✅ Resumo: {colunas_resumo} colunas (correto)")
+    
+    # 2. Validar estruturas de cada categoria
+    estruturas_esperadas = {
+        'mts_individual': 9,
+        'mts_grupo': 5,
+        'msa_individual': 9,
+        'msa_grupo': 9,
+        'provas': 7,
+        'hinario_individual': 9,
+        'hinario_grupo': 5,
+        'metodos': 9,
+        'escalas_individual': 8,
+        'escalas_grupo': 5
+    }
+    
+    tudo_ok = True
+    for categoria, colunas_esperadas in estruturas_esperadas.items():
+        dados_cat = todos_dados.get(categoria, [])
+        
+        if dados_cat and len(dados_cat) > 0:
+            colunas_reais = len(dados_cat[0])
+            if colunas_reais == colunas_esperadas:
+                print(f"   ✅ {categoria}: {len(dados_cat)} registros, {colunas_reais} colunas")
+            else:
+                print(f"   ❌ {categoria}: {colunas_reais} colunas (esperado: {colunas_esperadas})")
+                print(f"      Amostra: {dados_cat[0][:3]}...")
+                tudo_ok = False
+        else:
+            print(f"   ⚪ {categoria}: sem dados")
+    
+    if not tudo_ok:
+        print("\n❌ Validação falhou! Corrija a estrutura dos dados.")
+        return False
+    
+    print("\n✅ Todos os dados validados com sucesso!")
+    return True
+
+
 def executar_historico(cookies_dict, alunos_modulo2):
-    """Executa coleta de histórico individual usando lista de alunos do Módulo 2"""
+    """
+    ✅ VERSÃO CORRIGIDA - Executa coleta de histórico individual
+    """
     tempo_inicio = time.time()
     historico_stats['tempo_inicio'] = tempo_inicio
     
@@ -1038,29 +1163,45 @@ def executar_historico(cookies_dict, alunos_modulo2):
     print(f"   Sem dados: {historico_stats['sem_dados']}")
     print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
     
-    # ✅✅✅ VALIDAÇÃO CRÍTICA ANTES DE ENVIAR ✅✅✅
-    if not validar_estrutura_dados(todos_dados):
+    # ✅ FILTRAR DADOS VAZIOS
+    print("\n🔧 Filtrando dados vazios...")
+    todos_dados = filtrar_dados_vazios(todos_dados)
+    
+    # ✅ GERAR RESUMO COM 14 COLUNAS
+    print("📊 Gerando resumo dos alunos...")
+    resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
+    
+    # ✅ VALIDAR ANTES DE ENVIAR
+    if not validar_dados_antes_envio(todos_dados, resumo_alunos):
         print("\n❌ ABORTANDO envio - dados incompatíveis com Apps Script!")
-        print("💾 Salvando backup local para análise...")
+        
+        # Salvar backup para análise
         timestamp = gerar_timestamp()
         backup_file = f'backup_historico_ERRO_{timestamp.replace(":", "-")}.json'
         with open(backup_file, 'w', encoding='utf-8') as f:
-            json.dump({'dados': todos_dados, 'timestamp': timestamp, 'erro': 'estrutura_invalida'}, f, ensure_ascii=False, indent=2)
+            json.dump({
+                'dados': todos_dados,
+                'resumo': resumo_alunos,
+                'timestamp': timestamp,
+                'erro': 'validacao_falhou'
+            }, f, ensure_ascii=False, indent=2)
         print(f"💾 Backup de erro salvo: {backup_file}")
-        print("\n🔧 Corrija a função extrair_dados_completo() e tente novamente!")
+        print("\n🔧 Analise o backup e corrija a função extrair_dados_completo()")
         return
     
     # Backup local
     timestamp = gerar_timestamp()
     backup_file = f'backup_historico_{timestamp.replace(":", "-")}.json'
     with open(backup_file, 'w', encoding='utf-8') as f:
-        json.dump({'dados': todos_dados, 'timestamp': timestamp}, f, ensure_ascii=False, indent=2)
+        json.dump({
+            'dados': todos_dados,
+            'resumo': resumo_alunos,
+            'timestamp': timestamp
+        }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    # Enviar para Google Sheets
+    # ✅ ENVIAR PARA GOOGLE SHEETS
     print("\n📤 Enviando para Google Sheets...")
-    
-    resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
     
     payload = {
         'tipo': 'licoes_alunos',
@@ -1074,7 +1215,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
         'metodos': todos_dados['metodos'],
         'escalas_individual': todos_dados['escalas_individual'],
         'escalas_grupo': todos_dados['escalas_grupo'],
-        'resumo': resumo_alunos,
+        'resumo': resumo_alunos,  # ✅ 14 colunas
         'metadata': {
             'total_alunos_processados': len(alunos_modulo2),
             'alunos_com_dados': historico_stats['com_dados'],
@@ -1095,8 +1236,10 @@ def executar_historico(cookies_dict, alunos_modulo2):
                 print(f"⚠️ Erro do servidor: {result.get('erro', 'Desconhecido')}")
         else:
             print(f"⚠️ Erro HTTP {response.status_code}")
+            print(f"   Resposta: {response.text[:200]}")
     except Exception as e:
         print(f"⚠️ Erro ao enviar: {e}")
+
 
 # ==================== MAIN - ORQUESTRADOR ====================
 
