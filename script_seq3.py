@@ -493,8 +493,9 @@ def executar_modulo_nivel(session, pagina):
 
 # ==================== MÓDULO 2: TURMAS G.E.M ====================
 
+
 def coletar_turmas_gem(pagina, session):
-    """Coleta dados das turmas G.E.M com verificação de matriculados"""
+    """Coleta dados das turmas G.E.M com navegação robusta"""
     tempo_inicio = time.time()
     
     print("\n" + "=" * 80)
@@ -502,194 +503,133 @@ def coletar_turmas_gem(pagina, session):
     print("=" * 80)
     
     try:
-        # Navegar para G.E.M com múltiplas tentativas
-        print("🔄 Tentando acessar menu G.E.M...")
+        # ESTRATÉGIA ÚNICA E ROBUSTA: Navegação direta
+        max_tentativas = 3
+        tabela_carregada = False
         
-        # ESTRATÉGIA PRIORITÁRIA: Navegação direta via URL
-        navegacao_direta_ok = False
-        try:
-            print("🔄 Estratégia Prioritária: Navegação direta para G.E.M/Turmas...")
-            pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
-            pagina.wait_for_timeout(3000)
-            
-            # Verificar se a tabela carregou
+        for tentativa in range(1, max_tentativas + 1):
             try:
-                pagina.wait_for_selector('table#tabela-turmas', timeout=10000)
-                print("✅ Navegação direta bem-sucedida! Tabela de turmas carregada.")
-                navegacao_direta_ok = True
-            except:
-                print("⚠️ Navegação direta não carregou a tabela esperada")
-        except Exception as e:
-            print(f"⚠️ Navegação direta falhou: {e}")
-        
-        # Se navegação direta funcionou, pular o resto
-        if not navegacao_direta_ok:
-            # Aguardar carregamento completo da página
-            pagina.wait_for_load_state("networkidle", timeout=30000)
-            pagina.wait_for_timeout(3000)
-        # Se navegação direta funcionou, pular o resto
-        if not navegacao_direta_ok:
-            # Aguardar carregamento completo da página
-            pagina.wait_for_load_state("networkidle", timeout=30000)
-            pagina.wait_for_timeout(3000)
-            
-            # Tentar diferentes estratégias para clicar no G.E.M
-            gem_clicado = False
-            
-            # Estratégia 1: Hover + Click
-            try:
-                gem_selector = 'span:has-text("G.E.M")'
-                pagina.wait_for_selector(gem_selector, timeout=15000)
-                gem_element = pagina.locator(gem_selector).first
-                gem_element.hover()
-                pagina.wait_for_timeout(1500)
+                print(f"\n🔄 Tentativa {tentativa}/{max_tentativas}: Navegação direta para G.E.M/Turmas...")
                 
-                if gem_element.is_visible() and gem_element.is_enabled():
-                    gem_element.click()
-                    gem_clicado = True
-                    print("✅ Menu G.E.M acessado (Estratégia 1)")
-            except Exception as e:
-                print(f"⚠️ Estratégia 1 falhou: {e}")
-            
-            # Estratégia 2: JavaScript click
-            if not gem_clicado:
-                try:
-                    pagina.evaluate("""
-                        () => {
-                            const gemElement = Array.from(document.querySelectorAll('span'))
-                                .find(el => el.textContent.includes('G.E.M'));
-                            if (gemElement) gemElement.click();
-                        }
-                    """)
-                    pagina.wait_for_timeout(2000)
-                    gem_clicado = True
-                    print("✅ Menu G.E.M acessado (Estratégia 2)")
-                except Exception as e:
-                    print(f"⚠️ Estratégia 2 falhou: {e}")
-            
-            # Estratégia 3: Navegação direta via URL (segunda tentativa)
-            if not gem_clicado:
-                try:
-                    print("🔄 Tentando navegação direta para G.E.M/Turmas (2ª tentativa)...")
-                    pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
-                    pagina.wait_for_timeout(3000)
-                    gem_clicado = True
-                    navegacao_direta_ok = True
-                    print("✅ Navegação direta para Turmas bem-sucedida (Estratégia 3)")
-                except Exception as e:
-                    print(f"⚠️ Estratégia 3 falhou: {e}")
-            
-            if not gem_clicado and not navegacao_direta_ok:
-                print("❌ Não foi possível acessar o menu G.E.M após múltiplas tentativas")
-                return None
-            
-            # Navegar para Turmas (se não usou navegação direta)
-            if not navegacao_direta_ok:
-                turmas_acessado = False
+                # Navegar diretamente para a URL de turmas
+                pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=45000)
                 
-                # Verificar se já estamos na página de turmas
-                try:
-                    pagina.wait_for_selector('table#tabela-turmas', timeout=3000)
-                    print("✅ Já estamos na página de Turmas!")
-                    turmas_acessado = True
-                except:
-                    pass
+                # Aguardar carregamento completo da página
+                print("⏳ Aguardando carregamento completo da página...")
+                pagina.wait_for_load_state("domcontentloaded", timeout=30000)
+                pagina.wait_for_timeout(3000)
                 
-                if not turmas_acessado:
-                    # Estratégia 1: Click direto no link
+                # Verificar se a tabela existe
+                print("🔍 Verificando presença da tabela...")
+                tabela_existe = pagina.query_selector('table#tabela-turmas')
+                
+                if tabela_existe:
+                    print("✅ Tabela encontrada! Aguardando linhas...")
+                    
+                    # Aguardar que as linhas carreguem
                     try:
-                        pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
-                        pagina.click('a[href="turmas"]')
-                        print("✅ Navegando para Turmas (Click direto)...")
-                        turmas_acessado = True
-                    except PlaywrightTimeoutError:
-                        print("⚠️ Link 'turmas' não encontrado via seletor.")
-                
-                if not turmas_acessado:
-                    # Estratégia 2: JavaScript click em link de turmas
-                    try:
-                        print("🔄 Tentando clicar em 'Turmas' via JavaScript...")
-                        pagina.evaluate("""
+                        pagina.wait_for_function(
+                            """
                             () => {
-                                const turmasLink = Array.from(document.querySelectorAll('a'))
-                                    .find(el => el.getAttribute('href') === 'turmas' || 
-                                               el.textContent.includes('Turmas'));
-                                if (turmasLink) turmasLink.click();
+                                const tbody = document.querySelector('table#tabela-turmas tbody');
+                                const rows = tbody ? tbody.querySelectorAll('tr') : [];
+                                console.log('Linhas encontradas:', rows.length);
+                                return rows.length > 0;
                             }
-                        """)
-                        pagina.wait_for_timeout(3000)
-                        print("✅ Click JavaScript em 'Turmas' executado")
-                        turmas_acessado = True
-                    except Exception as e:
-                        print(f"⚠️ Click JavaScript em Turmas falhou: {e}")
+                            """, 
+                            timeout=30000
+                        )
+                        
+                        # Aguardar um pouco mais para garantir carregamento completo
+                        pagina.wait_for_timeout(2000)
+                        
+                        # Verificar novamente
+                        linhas_teste = pagina.query_selector_all('table#tabela-turmas tbody tr')
+                        if len(linhas_teste) > 0:
+                            print(f"✅ Tabela carregada com {len(linhas_teste)} linhas!")
+                            tabela_carregada = True
+                            break
+                        else:
+                            print("⚠️ Tabela encontrada mas sem linhas visíveis")
+                            
+                    except PlaywrightTimeoutError:
+                        print("⚠️ Timeout ao aguardar linhas da tabela")
+                else:
+                    print("⚠️ Tabela não encontrada na página")
                 
-                if not turmas_acessado:
-                    # Estratégia 3: Navegação direta via URL
-                    try:
-                        print("🔄 Tentando navegação direta para página de Turmas...")
-                        pagina.goto("https://musical.congregacao.org.br/gem/turmas", timeout=30000)
-                        pagina.wait_for_timeout(3000)
-                        print("✅ Navegação direta para Turmas bem-sucedida")
-                        turmas_acessado = True
-                    except Exception as e:
-                        print(f"⚠️ Navegação direta para Turmas falhou: {e}")
-                
-                if not turmas_acessado:
-                    print("❌ Não foi possível acessar a página de Turmas após múltiplas tentativas")
-                    return None
+                if not tabela_carregada and tentativa < max_tentativas:
+                    print(f"🔄 Aguardando 5 segundos antes da próxima tentativa...")
+                    time.sleep(5)
+                    
+            except Exception as e:
+                print(f"⚠️ Erro na tentativa {tentativa}: {e}")
+                if tentativa < max_tentativas:
+                    print(f"🔄 Aguardando 5 segundos antes da próxima tentativa...")
+                    time.sleep(5)
         
-        # Aguardar tabela
-        try:
-            pagina.wait_for_selector('table#tabela-turmas', timeout=20000)
-            print("✅ Tabela de turmas carregada.")
-            
-            pagina.wait_for_function(
-                """
-                () => {
-                    const tbody = document.querySelector('table#tabela-turmas tbody');
-                    return tbody && tbody.querySelectorAll('tr').length > 0;
-                }
-                """, timeout=20000
-            )
-            print("✅ Linhas da tabela de turmas carregadas.")
-        except PlaywrightTimeoutError:
-            print("❌ A tabela de turmas não carregou a tempo.")
+        if not tabela_carregada:
+            print("\n❌ Não foi possível carregar a tabela de turmas após todas as tentativas")
+            print("💡 Possíveis causas:")
+            print("   - Página pode estar em manutenção")
+            print("   - Problemas de rede/timeout")
+            print("   - Estrutura da página pode ter mudado")
             return None
         
-        # Configurar exibição
+        # Configurar exibição para mostrar mais itens
+        print("\n⚙️ Configurando visualização da tabela...")
         try:
             select_length = pagina.query_selector('select[name="tabela-turmas_length"]')
             if select_length:
                 pagina.select_option('select[name="tabela-turmas_length"]', '100')
-                pagina.wait_for_timeout(2000)
-                print("✅ Configurado para mostrar 100 itens por página.")
-        except Exception:
-            print("ℹ️ Seletor de quantidade não encontrado, continuando...")
+                pagina.wait_for_timeout(3000)  # Aguardar reload
+                print("✅ Configurado para mostrar 100 itens por página")
+            else:
+                print("ℹ️ Seletor de quantidade não encontrado")
+        except Exception as e:
+            print(f"⚠️ Erro ao configurar visualização: {e}")
         
+        # Atualizar cookies
+        cookies_dict = extrair_cookies_playwright(pagina)
+        session.cookies.update(cookies_dict)
+        
+        # Iniciar coleta de dados
+        print("\n📊 Iniciando coleta de dados das turmas...")
         resultado = []
         parar = False
         pagina_atual = 1
         
         while not parar:
             if time.time() - tempo_inicio > TIMEOUT_MODULO:
-                print("⏹️ Tempo limite atingido.")
+                print("⏹️ Tempo limite do módulo atingido")
                 break
             
-            print(f"📄 Processando página {pagina_atual}...")
-            linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
+            print(f"\n📄 Processando página {pagina_atual}...")
             
-            for i, linha in enumerate(linhas):
+            # Aguardar estabilização da página
+            pagina.wait_for_timeout(1000)
+            
+            linhas = pagina.query_selector_all('table#tabela-turmas tbody tr')
+            print(f"   📋 Encontradas {len(linhas)} linhas nesta página")
+            
+            if len(linhas) == 0:
+                print("⚠️ Nenhuma linha encontrada nesta página")
+                break
+            
+            for i, linha in enumerate(linhas, 1):
                 if time.time() - tempo_inicio > TIMEOUT_MODULO:
-                    print("⏹️ Tempo limite atingido durante a iteração.")
+                    print("⏹️ Tempo limite atingido durante processamento")
                     parar = True
                     break
                 
                 try:
                     colunas_td = linha.query_selector_all('td')
                     
+                    if len(colunas_td) < 2:
+                        continue
+                    
                     dados_linha = []
                     for j, td in enumerate(colunas_td[1:], 1):
-                        if j == len(colunas_td) - 1:
+                        if j == len(colunas_td) - 1:  # Pular última coluna (Ações)
                             continue
                         
                         badge = td.query_selector('span.badge')
@@ -700,6 +640,7 @@ def coletar_turmas_gem(pagina, session):
                             texto = re.sub(r'\s+', ' ', texto).strip()
                             dados_linha.append(texto)
                     
+                    # Obter ID da turma
                     radio_input = linha.query_selector('input[type="radio"][name="item[]"]')
                     if not radio_input:
                         continue
@@ -710,10 +651,12 @@ def coletar_turmas_gem(pagina, session):
                     
                     matriculados_badge = dados_linha[3] if len(dados_linha) > 3 else "0"
                     
-                    print(f"🔍 Verificando turma {turma_id} - Badge: {matriculados_badge}")
+                    print(f"   🔍 [{i}/{len(linhas)}] Turma {turma_id} - Badge: {matriculados_badge}")
                     
+                    # Obter número real de matriculados
                     matriculados_reais = obter_matriculados_reais(session, turma_id)
                     
+                    # Determinar status
                     if matriculados_reais >= 0:
                         if matriculados_reais == int(matriculados_badge):
                             status_verificacao = "✅ OK"
@@ -722,40 +665,48 @@ def coletar_turmas_gem(pagina, session):
                     else:
                         status_verificacao = "❌ Erro ao verificar"
                     
+                    # Montar linha completa
                     linha_completa = [
-                        dados_linha[0] if len(dados_linha) > 0 else "",
-                        dados_linha[1] if len(dados_linha) > 1 else "",
-                        dados_linha[2] if len(dados_linha) > 2 else "",
-                        matriculados_badge,
-                        dados_linha[4] if len(dados_linha) > 4 else "",
-                        dados_linha[5] if len(dados_linha) > 5 else "",
-                        dados_linha[6] if len(dados_linha) > 6 else "",
-                        dados_linha[7] if len(dados_linha) > 7 else "",
-                        "Ações",
-                        turma_id,
-                        matriculados_badge,
-                        str(matriculados_reais) if matriculados_reais >= 0 else "Erro",
-                        status_verificacao
+                        dados_linha[0] if len(dados_linha) > 0 else "",  # Igreja
+                        dados_linha[1] if len(dados_linha) > 1 else "",  # Curso
+                        dados_linha[2] if len(dados_linha) > 2 else "",  # Turma
+                        matriculados_badge,                               # Matriculados_Badge
+                        dados_linha[4] if len(dados_linha) > 4 else "",  # Início
+                        dados_linha[5] if len(dados_linha) > 5 else "",  # Término
+                        dados_linha[6] if len(dados_linha) > 6 else "",  # Dia_Hora
+                        dados_linha[7] if len(dados_linha) > 7 else "",  # Status
+                        "Ações",                                          # Ações
+                        turma_id,                                         # ID_Turma
+                        matriculados_badge,                               # Badge_Duplicado
+                        str(matriculados_reais) if matriculados_reais >= 0 else "Erro",  # Real_Matriculados
+                        status_verificacao                                # Status_Verificação
                     ]
                     
                     resultado.append(linha_completa)
-                    print(f"   📊 {linha_completa[0]} | {linha_completa[1]} | {linha_completa[2][:50]}... | Badge: {matriculados_badge}, Real: {matriculados_reais}")
                     
-                    time.sleep(0.5)
+                    # Pausa entre requisições
+                    time.sleep(0.3)
                     
                 except Exception as e:
-                    print(f"⚠️ Erro ao processar linha {i}: {e}")
+                    print(f"   ⚠️ Erro ao processar linha {i}: {e}")
                     continue
             
             if parar:
                 break
             
+            # Verificar se há próxima página
             try:
                 btn_next = pagina.query_selector('a.paginate_button.next:not(.disabled)')
+                
                 if btn_next and btn_next.is_enabled():
-                    print(f"➡️ Avançando para página {pagina_atual + 1}...")
+                    print(f"\n➡️ Avançando para página {pagina_atual + 1}...")
                     btn_next.click()
                     
+                    # Aguardar carregamento da próxima página
+                    pagina.wait_for_load_state("domcontentloaded", timeout=20000)
+                    pagina.wait_for_timeout(3000)
+                    
+                    # Verificar se as linhas carregaram
                     pagina.wait_for_function(
                         """
                         () => {
@@ -763,19 +714,31 @@ def coletar_turmas_gem(pagina, session):
                             return tbody && tbody.querySelectorAll('tr').length > 0;
                         }
                         """,
-                        timeout=15000
+                        timeout=20000
                     )
-                    pagina.wait_for_timeout(3000)
+                    
                     pagina_atual += 1
                 else:
-                    print("📄 Última página alcançada.")
+                    print("\n📄 Última página alcançada")
                     break
                     
             except Exception as e:
-                print(f"⚠️ Erro na paginação: {e}")
+                print(f"\n⚠️ Erro na paginação: {e}")
                 break
         
-        print(f"📊 Total de turmas processadas: {len(resultado)}")
+        print(f"\n📊 Total de turmas coletadas: {len(resultado)}")
+        
+        if len(resultado) == 0:
+            print("❌ Nenhuma turma foi coletada")
+            return None
+        
+        # Preparar resumo
+        resumo = {
+            "total_turmas": len(resultado),
+            "turmas_com_diferenca": len([r for r in resultado if "Diferença" in r[-1]]),
+            "turmas_ok": len([r for r in resultado if "✅ OK" in r[-1]]),
+            "turmas_erro": len([r for r in resultado if "❌ Erro" in r[-1]])
+        }
         
         # Preparar dados para envio
         body = {
@@ -786,37 +749,33 @@ def coletar_turmas_gem(pagina, session):
                 "Término", "Dia_Hora", "Status", "Ações", "ID_Turma", 
                 "Badge_Duplicado", "Real_Matriculados", "Status_Verificação"
             ],
-            "resumo": {
-                "total_turmas": len(resultado),
-                "turmas_com_diferenca": len([r for r in resultado if "Diferença" in r[-1]]),
-                "turmas_ok": len([r for r in resultado if "✅ OK" in r[-1]]),
-                "turmas_erro": len([r for r in resultado if "❌ Erro" in r[-1]])
-            }
+            "resumo": resumo
         }
         
         # Enviar dados para Apps Script
+        print("\n📤 Enviando dados para Google Sheets...")
         try:
             resposta_post = requests.post(URL_APPS_SCRIPT_EXPANDIDO, json=body, timeout=60)
-            print("✅ Dados enviados!")
-            print("Status code:", resposta_post.status_code)
-            print("Resposta do Apps Script:", resposta_post.text)
+            print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
+            print(f"📋 Resposta: {resposta_post.text[:200]}")
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
         
+        # Exibir resumo
         print("\n📈 RESUMO DA COLETA:")
-        print(f"   🎯 Total de turmas: {len(resultado)}")
-        print(f"   ✅ Turmas OK: {len([r for r in resultado if '✅ OK' in r[-1]])}")
-        print(f"   ⚠️ Com diferenças: {len([r for r in resultado if 'Diferença' in r[-1]])}")
-        print(f"   ❌ Com erro: {len([r for r in resultado if '❌ Erro' in r[-1]])}")
+        print(f"   🎯 Total de turmas: {resumo['total_turmas']}")
+        print(f"   ✅ Turmas OK: {resumo['turmas_ok']}")
+        print(f"   ⚠️ Com diferenças: {resumo['turmas_com_diferenca']}")
+        print(f"   ❌ Com erro: {resumo['turmas_erro']}")
         
         tempo_total = time.time() - tempo_inicio
-        print(f"✅ Módulo 2 Concluído!")
+        print(f"\n✅ Módulo 2 Concluído!")
         print(f"⏱️ Tempo do módulo: {tempo_total:.1f} segundos")
         
         return resultado
         
     except Exception as e:
-        print(f"\n❌ ERRO NO MÓDULO 2: {e}")
+        print(f"\n❌ ERRO CRÍTICO NO MÓDULO 2: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -918,9 +877,8 @@ def gerar_relatorio_formatado(localidades):
         relatorio.append(linha)
     
     return relatorio
-
 def executar_relatorio_localidades(dados_turmas_modulo2, session):
-    """Executa o módulo de relatório por localidades"""
+    """Executa o módulo de relatório por localidades - VERSÃO CORRIGIDA"""
     tempo_inicio = time.time()
     
     print("\n" + "=" * 80)
@@ -928,39 +886,70 @@ def executar_relatorio_localidades(dados_turmas_modulo2, session):
     print("=" * 80)
     
     try:
-        if not dados_turmas_modulo2:
+        if not dados_turmas_modulo2 or len(dados_turmas_modulo2) == 0:
             print("❌ Nenhum dado recebido do Módulo 2. Abortando.")
             return False
         
+        print(f"📊 Processando {len(dados_turmas_modulo2)} turmas...")
+        
+        # Processar dados por localidade
         localidades = processar_relatorio_por_localidade(dados_turmas_modulo2, session)
+        
+        print(f"🏢 Total de localidades identificadas: {len(localidades)}")
+        
+        # Gerar relatório formatado
         relatorio_formatado = gerar_relatorio_formatado(localidades)
         
+        print(f"📋 Relatório formatado com {len(relatorio_formatado)} linhas (incluindo cabeçalho)")
+        
+        # Calcular resumo
+        todos_alunos_unicos = set()
+        for loc_dados in localidades.values():
+            todos_alunos_unicos.update(loc_dados['alunos_unicos'])
+        
+        resumo = {
+            "total_localidades": len(localidades),
+            "total_turmas": sum(len(loc['turmas']) for loc in localidades.values()),
+            "total_matriculados": sum(loc['total_matriculados'] for loc in localidades.values()),
+            "total_alunos_unicos": len(todos_alunos_unicos)
+        }
+        
+        print("\n📊 RESUMO DO RELATÓRIO:")
+        print(f"   🏢 Total de localidades: {resumo['total_localidades']}")
+        print(f"   📚 Total de turmas: {resumo['total_turmas']}")
+        print(f"   👥 Total de matriculados: {resumo['total_matriculados']}")
+        print(f"   🎓 Alunos únicos: {resumo['total_alunos_unicos']}")
+        
+        # Preparar dados para envio
         body = {
             "tipo": "relatorio_localidades",
             "relatorio_formatado": relatorio_formatado,
-            "dados_brutos": dados_turmas_modulo2
+            "dados_brutos": dados_turmas_modulo2,
+            "resumo": resumo  # ✅ ADICIONANDO O RESUMO QUE ESTAVA FALTANDO!
         }
         
+        # Enviar dados para Apps Script
+        print("\n📤 Enviando relatório para Google Sheets...")
         try:
             resposta_post = requests.post(URL_APPS_SCRIPT_TURMA, json=body, timeout=60)
-            print("✅ Dados enviados!")
-            print("Status code:", resposta_post.status_code)
-            print("Resposta do Apps Script:", resposta_post.text)
+            print(f"✅ Dados enviados! Status: {resposta_post.status_code}")
+            print(f"📋 Resposta: {resposta_post.text[:200]}")
         except Exception as e:
             print(f"❌ Erro ao enviar para Apps Script: {e}")
+            return False
         
         tempo_total = time.time() - tempo_inicio
-        print(f"✅ Módulo 3 Concluído!")
+        print(f"\n✅ Módulo 3 Concluído!")
         print(f"⏱️ Tempo do módulo: {tempo_total:.1f} segundos")
         
         return True
         
     except Exception as e:
-        print(f"\n❌ ERRO NO MÓDULO 3: {e}")
+        print(f"\n❌ ERRO CRÍTICO NO MÓDULO 3: {e}")
         import traceback
         traceback.print_exc()
         return False
-
+        
 # ==================== EXECUÇÃO PRINCIPAL ====================
 
 def main():
