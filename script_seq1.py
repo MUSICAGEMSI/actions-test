@@ -411,6 +411,7 @@ def coletar_membro(session: requests.Session, membro_id: int, ids_igrejas: Set[i
     except:
         return None
 
+
 def executar_alunos(session, ids_igrejas_modulo1):
     """Executa coleta de alunos usando IDs de igrejas do Módulo 1"""
     tempo_inicio = time.time()
@@ -464,9 +465,10 @@ def executar_alunos(session, ids_igrejas_modulo1):
         json.dump({'membros': membros_hortolandia, 'timestamp': timestamp_execucao}, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    # Enviar para Google Sheets
+    # ✅ CORREÇÃO: Formatar dados exatamente como Apps Script espera
     print("\n📤 Enviando para Google Sheets...")
     
+    # Criar cabeçalho
     headers = [
         "ID_MEMBRO", "NOME", "ID_IGREJA", 
         "ID_CARGO", "CARGO_NOME", 
@@ -476,7 +478,10 @@ def executar_alunos(session, ids_igrejas_modulo1):
         "FL_TIPO", "STATUS"
     ]
     
-    relatorio = [headers]
+    # ✅ CRÍTICO: Criar array no formato EXATO que Apps Script espera
+    # Primeira linha = cabeçalho, demais linhas = dados
+    relatorio_formatado = [headers]  # Começa com cabeçalho
+    
     for membro in membros_hortolandia:
         linha = [
             str(membro.get('id_membro', '')),
@@ -493,13 +498,13 @@ def executar_alunos(session, ids_igrejas_modulo1):
             str(membro.get('fl_tipo', '')),
             str(membro.get('status', ''))
         ]
-        relatorio.append(linha)
+        relatorio_formatado.append(linha)
     
-    # ✅ Payload compatível com Apps Script
+    # ✅ Payload EXATAMENTE como Apps Script espera
     payload = {
-        "tipo": "nova_planilha_membros_completo",
+        "tipo": "nova_planilha_membros_completo",  # ✅ Tipo correto
         "timestamp": timestamp_execucao,
-        "relatorio_formatado": relatorio,
+        "relatorio_formatado": relatorio_formatado,  # ✅ Nome correto da chave
         "metadata": {
             "total_membros": len(membros_hortolandia),
             "total_igrejas_monitoradas": len(ids_igrejas),
@@ -519,7 +524,7 @@ def executar_alunos(session, ids_igrejas_modulo1):
             else:
                 print(f"⚠️ Erro: {resultado.get('mensagem', 'Desconhecido')}")
         else:
-            print(f"⚠️ Erro HTTP {response.status_code}")
+            print(f"⚠️ Erro HTTP {response.status_code}: {response.text}")
     except Exception as e:
         print(f"⚠️ Erro ao enviar: {e}")
     
