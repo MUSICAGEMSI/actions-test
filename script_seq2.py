@@ -13,13 +13,15 @@ from urllib3.util.retry import Retry
 from datetime import datetime
 import json
 import unicodedata
+from collections import defaultdict
+import random
 
 # ==================== CONFIGURAÇÕES GLOBAIS ====================
 EMAIL = os.environ.get("LOGIN_MUSICAL")
 SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 
-# URLs dos Apps Scripts (um para cada tipo de dados)
+# URLs dos Apps Scripts
 URL_APPS_SCRIPT_AULAS = 'https://script.google.com/macros/s/AKfycbyvEGIUPIvgbSuT_yikqg03nEjqXryd6RfI121A3pRt75v9oJoFNLTdvo3-onNdEsJd/exec'
 URL_APPS_SCRIPT_TURMAS = 'https://script.google.com/macros/s/AKfycbyw2E0QH0ucHRdCMNOY_La7r4ElK6xcf0OWlnQGa9w7yCcg82mG_bJV_5fxbhuhbfuY/exec'
 URL_APPS_SCRIPT_MATRICULAS = 'https://script.google.com/macros/s/AKfycbxnp24RMIG4zQEsot0KATnFjdeoEHP7nyrr4WXnp-LLLptQTT-Vc_UPYoy__VWipill/exec'
@@ -27,6 +29,33 @@ URL_APPS_SCRIPT_MATRICULAS = 'https://script.google.com/macros/s/AKfycbxnp24RMIG
 # Cache de instrutores de Hortolândia
 INSTRUTORES_HORTOLANDIA = {}
 NOMES_COMPLETOS_NORMALIZADOS = set()
+
+# ==================== CLASSES DE OTIMIZAÇÃO ====================
+
+class DensityCache:
+    """Cache para rastrear densidade de aulas por região"""
+    def __init__(self, block_size=1000):
+        self.block_size = block_size
+        self.density = defaultdict(int)
+        self.total_checks = defaultdict(int)
+    
+    def get_block(self, aula_id):
+        return aula_id // self.block_size
+    
+    def register_hit(self, aula_id):
+        block = self.get_block(aula_id)
+        self.density[block] += 1
+        self.total_checks[block] += 1
+    
+    def register_miss(self, aula_id):
+        block = self.get_block(aula_id)
+        self.total_checks[block] += 1
+    
+    def get_density(self, aula_id):
+        block = self.get_block(aula_id)
+        if self.total_checks[block] == 0:
+            return 0.5
+        return self.density[block] / self.total_checks[block]
 
 # ==================== FUNÇÕES AUXILIARES ====================
 
@@ -72,9 +101,7 @@ def gerar_timestamp():
 # ==================== LOGIN ÚNICO ====================
 
 def fazer_login_unico():
-    """
-    Realiza login único via Playwright e retorna sessão requests configurada
-    """
+    """Realiza login único via Playwright"""
     print("\n" + "=" * 80)
     print("🔐 REALIZANDO LOGIN ÚNICO")
     print("=" * 80)
@@ -111,7 +138,7 @@ def fazer_login_unico():
     print("   ✅ Sessão configurada e pronta para uso\n")
     return session, cookies_dict
 
-# ==================== MÓDULO 1: HISTÓRICO DE AULAS ====================
+# ==================== MÓDULO 1: HISTÓRICO DE AULAS (OTIMIZADO) ====================
 
 def carregar_instrutores_hortolandia(session, max_tentativas=5):
     """Carrega lista completa de instrutores de Hortolândia"""
@@ -301,6 +328,101 @@ def buscar_ultimo_id_ate(session, data_hora_limite, id_min=1, id_max=1000000):
         print(f"   Data: {ultima_data.strftime('%d/%m/%Y %H:%M:%S')}")
     
     return ultimo_valido
+
+def descobrir_regioes_densas(session, primeiro_id, ultimo_id, num_amostras=300):
+    """Fase 1: Amostragem para identificar regiões com aulas"""
+    print("\n" + "=" * 80)
+    print("🔍 FASE 1: DESCOBERTA DE REGIÕES DENSAS")
+    print("=" * 80)
+    
+    range_total = ultimo_id - primeiro_id
+    passo_amostra = max(1, range_total // num_amostras)
+    
+    regioes_densas = []
+    
+    print(f"📊 Amostrando {num_amostras} pontos com passo de {passo_amostra:,}")
+    print(f"   Verificando IDs: {primeiro_id:,} até {ultimo_id:,}")
+    
+    for i in range(num_amostras):
+        id_teste = primeiro_id + (i * passo_amostra)
+        if id_teste > ultimo_id:
+            break
+        
+        data_hora = extrair_data_hora_abertura_rapido(session, id_teste)
+        
+        if data_hora is not None:
+            regioes_densas.append(id_teste)
+            
+            if len(regioes_densas) % 10 == 0:
+                print(f"   ✓ {len(regioes_densas)} regiões encontradas...")
+    
+    print(f"\n✅ {len(regioes_densas)} regiões densas identificadas")
+    
+    return regioes_densas
+
+def buscar_vizinhos(session, id_central, raio=200):
+    """Busca IDs próximos ao ID central (aulas tendem a estar agrupadas)"""
+    ids_validos = [id_central]
+    
+    # Busca para trás
+    for offset in range(1, raio + 1):
+        id_teste = id_central - offset
+        if id_teste < 1:
+            break
+        
+        data_hora = extrair_data_hora_abertura_rapido(session, id_teste)
+        if data_hora is None:
+            # Tolera até 5 vazios consecutivos
+            if offset > 5:
+                vazios_consecutivos = 0
+                for check in range(1, 6):
+                    if extrair_data_hora_abertura_rapido(session, id_teste - check) is None:
+                        vazios_consecutivos += 1
+                if vazios_consecutivos >= 5:
+                    break
+        else:
+            ids_validos.append(id_teste)
+    
+    # Busca para frente
+    for offset in range(1, raio + 1):
+        id_teste = id_central + offset
+        data_hora = extrair_data_hora_abertura_rapido(session, id_teste)
+        if data_hora is None:
+            if offset > 5:
+                vazios_consecutivos = 0
+                for check in range(1, 6):
+                    if extrair_data_hora_abertura_rapido(session, id_teste + check) is None:
+                        vazios_consecutivos += 1
+                if vazios_consecutivos >= 5:
+                    break
+        else:
+            ids_validos.append(id_teste)
+    
+    return ids_validos
+
+def expandir_regioes(session, regioes_densas, raio=200):
+    """Fase 2: Expande cada região densa encontrada"""
+    print("\n" + "=" * 80)
+    print("🎯 FASE 2: EXPANSÃO DE REGIÕES DENSAS")
+    print("=" * 80)
+    
+    todos_ids = set()
+    
+    for i, id_central in enumerate(regioes_densas, 1):
+        print(f"[{i}/{len(regioes_densas)}] Expandindo região {id_central:,}...", end=" ")
+        
+        vizinhos = buscar_vizinhos(session, id_central, raio)
+        todos_ids.update(vizinhos)
+        
+        print(f"{len(vizinhos)} IDs encontrados")
+        
+        # Pequeno delay para não sobrecarregar
+        if i % 10 == 0:
+            time.sleep(0.5)
+    
+    print(f"\n✅ Total de IDs candidatos: {len(todos_ids):,}")
+    
+    return sorted(list(todos_ids))
 
 def coletar_tudo_de_uma_vez(session, aula_id):
     """Coleta todos os dados de uma aula (filtro: Hortolândia)"""
@@ -492,14 +614,53 @@ def coletar_tudo_de_uma_vez(session, aula_id):
     except:
         return None
 
+def validar_completude(session, ids_coletados, primeiro_id, ultimo_id, num_validacoes=500):
+    """Valida que não perdemos aulas importantes"""
+    print("\n" + "=" * 80)
+    print("🔍 VALIDAÇÃO DE COMPLETUDE")
+    print("=" * 80)
+    
+    ids_coletados_set = set(ids_coletados)
+    falsos_negativos = []
+    
+    print(f"📊 Verificando {num_validacoes} amostras aleatórias...")
+    
+    for i in range(num_validacoes):
+        id_aleatorio = random.randint(primeiro_id, ultimo_id)
+        
+        if id_aleatorio in ids_coletados_set:
+            continue
+        
+        data_hora = extrair_data_hora_abertura_rapido(session, id_aleatorio)
+        if data_hora is not None:
+            falsos_negativos.append(id_aleatorio)
+        
+        if (i + 1) % 100 == 0:
+            print(f"   {i+1}/{num_validacoes} verificadas...")
+    
+    taxa_erro = len(falsos_negativos) / num_validacoes
+    
+    print(f"\n📈 Resultado da validação:")
+    print(f"   Amostras verificadas: {num_validacoes}")
+    print(f"   IDs não capturados: {len(falsos_negativos)}")
+    print(f"   Taxa de erro estimada: {taxa_erro * 100:.2f}%")
+    
+    if taxa_erro > 0.02:
+        print(f"\n⚠️ ATENÇÃO: Taxa de erro acima de 2%")
+        print(f"   Sugerimos executar coleta complementar nos IDs: {falsos_negativos[:10]}...")
+        return False, falsos_negativos
+    
+    print(f"✅ Validação aprovada! Taxa de erro aceitável.")
+    return True, []
+
 def executar_historico_aulas(session):
-    """Executa coleta de histórico de aulas e RETORNA OS DADOS COLETADOS"""
+    """Executa coleta de histórico de aulas OTIMIZADA"""
     global INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS
     
     tempo_inicio = time.time()
     
     print("\n" + "=" * 80)
-    print("📚 MÓDULO 1: HISTÓRICO DE AULAS")
+    print("📚 MÓDULO 1: HISTÓRICO DE AULAS (OTIMIZADO)")
     print("=" * 80)
     
     INSTRUTORES_HORTOLANDIA, NOMES_COMPLETOS_NORMALIZADOS = carregar_instrutores_hortolandia(session)
@@ -513,6 +674,7 @@ def executar_historico_aulas(session):
     
     print(f"\n📅 Período: {data_hora_inicio.strftime('%d/%m/%Y')} até {data_hora_fim.strftime('%d/%m/%Y')}")
     
+    # Busca binária para limites
     primeiro_id = buscar_primeiro_id_a_partir_de(session, data_hora_alvo=data_hora_inicio, id_min=1, id_max=1000000)
     
     if primeiro_id is None:
@@ -525,27 +687,51 @@ def executar_historico_aulas(session):
         print("⚠️ Não foi possível encontrar último ID. Usando estimativa.")
         ultimo_id = primeiro_id + 50000
     
+    range_total = ultimo_id - primeiro_id
+    print(f"\n📊 Range total: {range_total:,} IDs ({primeiro_id:,} até {ultimo_id:,})")
+    
+    # ================== ESTRATÉGIA OTIMIZADA ==================
+    
+    # FASE 1: Descobrir regiões densas (amostragem)
+    regioes_densas = descobrir_regioes_densas(session, primeiro_id, ultimo_id, num_amostras=300)
+    
+    if not regioes_densas:
+        print("⚠️ Nenhuma região densa encontrada. Usando método tradicional...")
+        # Fallback para método tradicional se amostragem falhar
+        ids_candidatos = list(range(primeiro_id, ultimo_id + 1))
+    else:
+        # FASE 2: Expandir regiões densas
+        ids_candidatos = expandir_regioes(session, regioes_densas, raio=200)
+    
+    reducao_percentual = ((range_total - len(ids_candidatos)) / range_total * 100) if range_total > 0 else 0
+    
+    print(f"\n{'=' * 80}")
+    print(f"🚀 FASE 3: COLETA DETALHADA")
+    print(f"{'=' * 80}")
+    print(f"📊 IDs originais: {range_total:,}")
+    print(f"📊 IDs a verificar: {len(ids_candidatos):,}")
+    print(f"⚡ Redução: {reducao_percentual:.1f}%")
+    print(f"⏱️ Tempo estimado: {len(ids_candidatos) / 200:.1f} minutos")
+    
+    # FASE 3: Coleta paralela dos candidatos
     resultado = []
     aulas_processadas = 0
     aulas_hortolandia = 0
     aulas_com_ata = 0
     
-    ID_INICIAL = primeiro_id
-    ID_FINAL = ultimo_id
-    LOTE_SIZE = 200
-    MAX_WORKERS = 15
+    LOTE_SIZE = 500
+    MAX_WORKERS = 20
     
-    print(f"\n{'=' * 80}")
-    print(f"🚀 Processando IDs {ID_INICIAL:,} até {ID_FINAL:,} ({ID_FINAL - ID_INICIAL + 1:,} IDs)")
-    print(f"{'=' * 80}\n")
+    print(f"\n🔄 Iniciando coleta paralela...")
     
-    for lote_inicio in range(ID_INICIAL, ID_FINAL + 1, LOTE_SIZE):
-        lote_fim = min(lote_inicio + LOTE_SIZE - 1, ID_FINAL)
+    for lote_inicio in range(0, len(ids_candidatos), LOTE_SIZE):
+        lote_fim = min(lote_inicio + LOTE_SIZE, len(ids_candidatos))
+        lote_ids = ids_candidatos[lote_inicio:lote_fim]
         
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(coletar_tudo_de_uma_vez, session, aula_id): aula_id 
-                for aula_id in range(lote_inicio, lote_fim + 1)
+                for aula_id in lote_ids
             }
             
             for future in as_completed(futures):
@@ -577,20 +763,55 @@ def executar_historico_aulas(session):
                     if dados_completos['tem_ata'] == "Sim":
                         aulas_com_ata += 1
                 
-                if aulas_processadas % 200 == 0:
-                    print(f"   [{aulas_processadas:5d}] processadas | {aulas_hortolandia} HTL | {aulas_com_ata} ATA")
+                if aulas_processadas % 500 == 0:
+                    percentual = (aulas_processadas / len(ids_candidatos)) * 100
+                    tempo_decorrido = time.time() - tempo_inicio
+                    velocidade = aulas_processadas / tempo_decorrido if tempo_decorrido > 0 else 0
+                    tempo_restante = (len(ids_candidatos) - aulas_processadas) / velocidade if velocidade > 0 else 0
+                    
+                    print(f"   [{percentual:5.1f}%] {aulas_processadas:5d}/{len(ids_candidatos)} | "
+                          f"{aulas_hortolandia} HTL | {aulas_com_ata} ATA | "
+                          f"⏱️ Restam ~{tempo_restante/60:.1f}min")
         
-        time.sleep(0.5)
+        time.sleep(0.2)
     
-    print(f"\n✅ Coleta finalizada: {aulas_hortolandia:,} aulas de Hortolândia")
+    tempo_total = time.time() - tempo_inicio
     
-    # Backup local ANTES de enviar
+    print(f"\n{'=' * 80}")
+    print(f"✅ COLETA FINALIZADA")
+    print(f"{'=' * 80}")
+    print(f"📊 Aulas de Hortolândia: {aulas_hortolandia:,}")
+    print(f"📋 Aulas com ATA: {aulas_com_ata}")
+    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"⚡ Velocidade: {aulas_processadas/tempo_total:.1f} verificações/segundo")
+    
+    # VALIDAÇÃO DE COMPLETUDE
+    if len(ids_candidatos) < range_total:
+        ids_coletados_completos = [linha[0] for linha in resultado]
+        validou, ids_faltantes = validar_completude(session, ids_candidatos, primeiro_id, ultimo_id, num_validacoes=500)
+        
+        if not validou and ids_faltantes:
+            print(f"\n🔄 Coletando IDs faltantes identificados na validação...")
+            for id_faltante in ids_faltantes[:20]:  # Limita a 20 para não demorar muito
+                dados = coletar_tudo_de_uma_vez(session, id_faltante)
+                if dados:
+                    resultado.append([
+                        dados['id_aula'], dados['id_turma'], dados['descricao'],
+                        dados['comum'], dados['dia_semana'], dados['hora_inicio'],
+                        dados['hora_termino'], dados['data_aula'], dados['data_hora_abertura'],
+                        dados['tem_ata'], dados['texto_ata'], dados['instrutor'],
+                        dados['total_alunos'], dados['presentes'], 
+                        dados['lista_presentes'], dados['lista_ausentes']
+                    ])
+                    aulas_hortolandia += 1
+            
+            print(f"✅ Coleta complementar finalizada. Total: {aulas_hortolandia} aulas")
+    
+    # Backup local
     timestamp_backup = time.strftime("%Y%m%d_%H%M%S")
     backup_file = f'backup_aulas_{timestamp_backup}.json'
     
-    # CALCULAR VELOCIDADE
-    tempo_total_seg = time.time() - tempo_inicio
-    velocidade = round(aulas_processadas / tempo_total_seg, 2) if tempo_total_seg > 0 else 0
+    velocidade = round(aulas_processadas / tempo_total, 2) if tempo_total > 0 else 0
     
     body = {
         "tipo": "historico_aulas_hortolandia",
@@ -610,8 +831,14 @@ def executar_historico_aulas(session):
             "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
             "primeiro_id_2024": primeiro_id,
             "ultimo_id_2024": ultimo_id,
-            "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
-            "velocidade_aulas_por_segundo": velocidade
+            "tempo_minutos": round(tempo_total/60, 2),
+            "velocidade_aulas_por_segundo": velocidade,
+            "otimizacao": {
+                "ids_range_total": range_total,
+                "ids_candidatos": len(ids_candidatos),
+                "reducao_percentual": round(reducao_percentual, 1),
+                "metodo": "amostragem_adaptativa_v2"
+            }
         }
     }
     
@@ -619,13 +846,13 @@ def executar_historico_aulas(session):
         json.dump(body, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
+    # Envio para Google Sheets
     print("\n" + "=" * 80)
     print("📤 ENVIANDO PARA GOOGLE SHEETS")
     print("=" * 80)
     
     print(f"🌐 URL: {URL_APPS_SCRIPT_AULAS}")
     print(f"📊 Total de linhas: {len(resultado)}")
-    print(f"⏱️ Timeout: 300 segundos")
     
     try:
         print("\n🔄 Fazendo requisição POST...")
@@ -639,33 +866,16 @@ def executar_historico_aulas(session):
             }
         )
         
-        print(f"\n📡 Status HTTP: {resposta_post.status_code}")
-        print(f"📏 Tamanho da resposta: {len(resposta_post.text)} bytes")
-        
-        # Mostrar primeiros 1000 caracteres da resposta bruta
-        print(f"\n📄 Resposta bruta (primeiros 1000 chars):")
-        print("-" * 80)
-        print(resposta_post.text[:1000])
-        print("-" * 80)
+        print(f"📡 Status HTTP: {resposta_post.status_code}")
         
         if resposta_post.status_code == 200:
             try:
-                print("\n🔍 Tentando decodificar JSON...")
                 resposta_json = resposta_post.json()
                 
-                print(f"✅ JSON decodificado com sucesso")
-                print(f"📋 Estrutura da resposta:")
-                print(json.dumps(resposta_json, indent=2, ensure_ascii=False)[:500])
-                
-                # Tentar extrair body se existir
                 if 'body' in resposta_json:
-                    print("\n📦 Campo 'body' encontrado, decodificando...")
                     body_content = json.loads(resposta_json['body'])
                 else:
-                    print("\n📦 Usando resposta direta (sem campo 'body')")
                     body_content = resposta_json
-                
-                print(f"\n📊 Status da resposta: {body_content.get('status')}")
                 
                 if body_content.get('status') == 'sucesso':
                     detalhes = body_content.get('detalhes', {})
@@ -677,287 +887,33 @@ def executar_historico_aulas(session):
                     print(f"🆔 ID: {detalhes.get('planilha_id')}")
                     print(f"🔗 URL: {detalhes.get('url')}")
                     print(f"📊 Linhas gravadas: {detalhes.get('linhas_gravadas')}")
-                    print(f"📋 Aulas com ATA: {detalhes.get('aulas_com_ata')}")
                     print("=" * 80)
-                    
                 else:
-                    print(f"\n⚠️ Status diferente de 'sucesso': {body_content.get('status')}")
+                    print(f"\n⚠️ Status: {body_content.get('status')}")
                     print(f"📝 Mensagem: {body_content.get('mensagem')}")
-                    
-                    # Se houver erro, mostrar detalhes completos
-                    if body_content.get('status') == 'erro':
-                        print(f"\n❌ ERRO RETORNADO PELO APPS SCRIPT:")
-                        print(f"   Mensagem: {body_content.get('mensagem')}")
-                        if 'stack' in body_content:
-                            print(f"   Stack trace:")
-                            print(body_content.get('stack'))
-                        if 'detalhes' in body_content:
-                            print(f"   Detalhes: {body_content.get('detalhes')}")
+                    if body_content.get('status') == 'erro' and 'stack' in body_content:
+                        print(f"Stack: {body_content.get('stack')}")
             
             except json.JSONDecodeError as e:
-                print(f"\n❌ ERRO ao decodificar JSON da resposta:")
-                print(f"   {e}")
-                print(f"\n📄 Resposta completa:")
-                print(resposta_post.text)
-        
+                print(f"\n❌ Erro ao decodificar resposta: {e}")
+                print(f"Resposta: {resposta_post.text[:500]}")
         else:
             print(f"\n❌ Erro HTTP {resposta_post.status_code}")
-            print(f"📄 Resposta completa:")
-            print(resposta_post.text[:1000])
+            print(f"Resposta: {resposta_post.text[:500]}")
     
-    except requests.Timeout:
-        print("\n❌ TIMEOUT: A requisição demorou mais de 300 segundos")
-        
-    except requests.ConnectionError as e:
-        print(f"\n❌ ERRO DE CONEXÃO: {e}")
-        
     except Exception as e:
-        print(f"\n❌ ERRO INESPERADO: {e}")
-        print(f"📝 Tipo do erro: {type(e).__name__}")
-        import traceback
-        print("\n📋 Stack trace completo:")
-        traceback.print_exc()
+        print(f"\n❌ Erro ao enviar: {e}")
     
-    # SEMPRE retorna os dados (independente do sucesso do envio)
-    print(f"\n📦 Retornando {len(resultado)} linhas de dados para o próximo módulo")
+    print(f"\n📦 Retornando {len(resultado)} linhas para o próximo módulo")
     return resultado
 
 # ==================== MÓDULO 2: TURMAS ====================
-
-def buscar_ids_da_planilha_turmas(planilha_id, backup_file=None):
-    """Busca IDs de turmas (prioriza backup local)"""
-    print(f"\n📂 Buscando IDs de turmas...")
-    
-    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
-    if backup_file and os.path.exists(backup_file):
-        try:
-            print(f"   📄 Lendo backup local: {backup_file}")
-            with open(backup_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            ids_turmas = []
-            for linha in data.get('dados', []):
-                if len(linha) >= 1:  # ID_Turma está na posição 0
-                    id_turma = str(linha[0]).strip()
-                    if id_turma and id_turma.isdigit():
-                        ids_turmas.append(int(id_turma))
-            
-            if ids_turmas:
-                print(f"   ✅ {len(ids_turmas)} IDs encontrados no backup")
-                return ids_turmas
-        except Exception as e:
-            print(f"   ⚠️ Erro ao ler backup: {e}")
-    
-    # MÉTODO 2: Tentar acessar planilha Google (fallback)
-    try:
-        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
-        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Dados das Turmas"
-        response = requests.get(url, timeout=30)
-        response.encoding = 'utf-8'
-        
-        if response.status_code == 200:
-            linhas = response.text.strip().split('\n')
-            cabecalho = [col.strip('"') for col in linhas[0].split(',')]
-            
-            if 'ID_Turma' not in cabecalho:
-                print("   ❌ Coluna 'ID_Turma' não encontrada!")
-                return []
-            
-            idx_id_turma = cabecalho.index('ID_Turma')
-            
-            ids_turmas = []
-            for i, linha in enumerate(linhas[1:], start=2):
-                try:
-                    colunas = linha.split(',')
-                    if len(colunas) > idx_id_turma:
-                        id_turma = colunas[idx_id_turma].strip('"').strip()
-                        if id_turma and id_turma.isdigit():
-                            ids_turmas.append(int(id_turma))
-                except:
-                    continue
-            
-            print(f"   ✅ {len(ids_turmas)} IDs encontrados na planilha")
-            return ids_turmas
-        else:
-            print(f"   ❌ Erro HTTP {response.status_code}")
-            return []
-            
-    except Exception as e:
-        print(f"   ❌ Erro ao acessar planilha: {e}")
-        return []
-
-def extrair_dados_alunos(session, turma_id):
-    """Extrai dados detalhados de todos os alunos matriculados"""
-    try:
-        headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Referer': 'https://musical.congregacao.org.br/painel',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
-        resp = session.get(url, headers=headers, timeout=15)
-        
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            tbody = soup.find('tbody')
-            if not tbody:
-                return []
-            
-            alunos = []
-            rows = tbody.find_all('tr')
-            
-            for row in rows:
-                tds = row.find_all('td')
-                
-                if len(tds) >= 4:
-                    primeiro_td = tds[0].get_text(strip=True)
-                    
-                    if not primeiro_td or 'Nenhum registro' in primeiro_td:
-                        continue
-                    
-                    nome = tds[0].get_text(strip=True)
-                    comum = tds[1].get_text(strip=True)
-                    instrumento = tds[2].get_text(strip=True)
-                    status = tds[3].get_text(strip=True)
-                    
-                    aluno = {
-                        'ID_Turma': turma_id,
-                        'Nome': nome,
-                        'Comum': comum,
-                        'Instrumento': instrumento,
-                        'Status': status
-                    }
-                    
-                    alunos.append(aluno)
-            
-            return alunos
-        
-        else:
-            return None
-        
-    except Exception as e:
-        return None
-
-def executar_matriculados(session, ids_turmas_modulo2):
-    """Executa coleta de matrículas usando IDs diretos do Módulo 2"""
-    tempo_inicio = time.time()
-    
-    print("\n" + "=" * 80)
-    print("👥 MÓDULO 3: ALUNOS MATRICULADOS")
-    print("=" * 80)
-    
-    # Recebe IDs direto da memória (do Módulo 2)
-    if not ids_turmas_modulo2:
-        print("❌ Nenhum ID de turma recebido do Módulo 2. Abortando módulo.")
-        return
-    
-    print(f"\n🎯 Total de turmas a processar: {len(ids_turmas_modulo2)}")
-    
-    resultados_resumo = []
-    todos_alunos = []
-    total = len(ids_turmas_modulo2)
-    
-    print(f"\n{'=' * 80}")
-    print("🚀 Processando turmas...")
-    print(f"{'=' * 80}\n")
-    
-    for idx, turma_id in enumerate(ids_turmas_modulo2, 1):
-        print(f"[{idx}/{total}] Turma {turma_id}...", end=" ")
-        
-        alunos = extrair_dados_alunos(session, turma_id)
-        
-        if alunos is not None:
-            quantidade = len(alunos)
-            print(f"✅ {quantidade} alunos")
-            status = "Sucesso"
-            todos_alunos.extend(alunos)
-        else:
-            print(f"⚠️ Erro")
-            quantidade = 0
-            status = "Erro"
-        
-        resultados_resumo.append([turma_id, quantidade, status])
-        time.sleep(0.3)
-    
-    print(f"\n✅ Coleta finalizada: {len(todos_alunos)} alunos coletados")
-    
-    # Preparar dados
-    data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    
-    dados_resumo_com_cabecalho = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados_resumo
-    
-    dados_alunos_para_envio = [["ID_Turma", "Nome", "Comum", "Instrumento", "Status"]]
-    for aluno in todos_alunos:
-        dados_alunos_para_envio.append([
-            aluno['ID_Turma'],
-            aluno['Nome'],
-            aluno['Comum'],
-            aluno['Instrumento'],
-            aluno['Status']
-        ])
-    
-    # Backup local ANTES de enviar
-    timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
-    backup_file = f'backup_matriculas_{timestamp}.json'
-    with open(backup_file, 'w', encoding='utf-8') as f:
-        json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
-    print(f"💾 Backup salvo: {backup_file}")
-    
-    # Enviar resumo
-    body_resumo = {
-        "tipo": "contagem_matriculas",
-        "dados": dados_resumo_com_cabecalho,
-        "data_coleta": data_coleta
-    }
-    
-    try:
-        print("\n📤 Enviando dados para Google Sheets...")
-        resposta_resumo = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_resumo, timeout=60)
-        
-        if resposta_resumo.status_code == 200:
-            resultado_resumo = resposta_resumo.json()
-            
-            if resultado_resumo.get('status') == 'sucesso':
-                detalhes = resultado_resumo.get('detalhes', {})
-                planilha_id = detalhes.get('planilha_id')
-                
-                print(f"\n✅ PLANILHA DE MATRÍCULAS CRIADA!")
-                print(f"   Nome: {detalhes.get('nome_planilha')}")
-                print(f"   ID: {planilha_id}")
-                print(f"   URL: {detalhes.get('url')}")
-                
-                # Enviar dados detalhados
-                body_detalhado = {
-                    "tipo": "alunos_detalhados",
-                    "dados": dados_alunos_para_envio,
-                    "data_coleta": data_coleta,
-                    "planilha_id": planilha_id
-                }
-                
-                print("\n📋 Enviando dados detalhados...")
-                resposta_detalhado = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_detalhado, timeout=60)
-                
-                if resposta_detalhado.status_code == 200:
-                    resultado_detalhado = resposta_detalhado.json()
-                    if resultado_detalhado.get('status') == 'sucesso':
-                        print(f"   ✅ {len(todos_alunos)} alunos enviados com sucesso")
-        
-        tempo_total = time.time() - tempo_inicio
-        print(f"\n⏱️ Tempo do módulo: {tempo_total/60:.2f} minutos")
-        
-    except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
-        print(f"💾 Dados salvos no backup: {backup_file}")
 
 def coletar_dados_turma(session, turma_id):
     """Coleta todos os dados de uma turma"""
     try:
         url = f"https://musical.congregacao.org.br/turmas/editar/{turma_id}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         resp = session.get(url, headers=headers, timeout=10)
         
         if resp.status_code != 200:
@@ -969,38 +925,24 @@ def coletar_dados_turma(session, turma_id):
             return None
         
         dados = {
-            'id_turma': turma_id,
-            'curso': '',
-            'descricao': '',
-            'comum': '',
-            'dia_semana': '',
-            'data_inicio': '',
-            'data_encerramento': '',
-            'hora_inicio': '',
-            'hora_termino': '',
-            'responsavel_1': '',
-            'responsavel_2': '',
-            'destinado_ao': '',
-            'ativo': 'Não',
-            'cadastrado_em': '',
-            'cadastrado_por': '',
-            'atualizado_em': '',
-            'atualizado_por': ''
+            'id_turma': turma_id, 'curso': '', 'descricao': '', 'comum': '',
+            'dia_semana': '', 'data_inicio': '', 'data_encerramento': '',
+            'hora_inicio': '', 'hora_termino': '', 'responsavel_1': '',
+            'responsavel_2': '', 'destinado_ao': '', 'ativo': 'Não',
+            'cadastrado_em': '', 'cadastrado_por': '',
+            'atualizado_em': '', 'atualizado_por': ''
         }
         
-        # Curso
         curso_select = soup.find('select', {'name': 'id_curso'})
         if curso_select:
             curso_option = curso_select.find('option', selected=True)
             if curso_option:
                 dados['curso'] = curso_option.get_text(strip=True)
         
-        # Descrição
         descricao_input = soup.find('input', {'name': 'descricao'})
         if descricao_input:
             dados['descricao'] = descricao_input.get('value', '').strip()
         
-        # Comum
         comum_select = soup.find('select', {'name': 'id_igreja'})
         if comum_select:
             comum_option = comum_select.find('option', selected=True)
@@ -1008,36 +950,30 @@ def coletar_dados_turma(session, turma_id):
                 texto_completo = comum_option.get_text(strip=True)
                 dados['comum'] = texto_completo.split('|')[0].strip()
         
-        # Dia da Semana
         dia_select = soup.find('select', {'name': 'dia_semana'})
         if dia_select:
             dia_option = dia_select.find('option', selected=True)
             if dia_option:
                 dados['dia_semana'] = dia_option.get_text(strip=True)
         
-        # Data de Início
         dt_inicio_input = soup.find('input', {'name': 'dt_inicio'})
         if dt_inicio_input:
             dados['data_inicio'] = dt_inicio_input.get('value', '').strip()
         
-        # Data de Encerramento
         dt_fim_input = soup.find('input', {'name': 'dt_fim'})
         if dt_fim_input:
             dados['data_encerramento'] = dt_fim_input.get('value', '').strip()
         
-        # Hora de Início
         hr_inicio_input = soup.find('input', {'name': 'hr_inicio'})
         if hr_inicio_input:
             hora_completa = hr_inicio_input.get('value', '').strip()
             dados['hora_inicio'] = hora_completa[:5] if hora_completa else ''
         
-        # Hora de Término
         hr_fim_input = soup.find('input', {'name': 'hr_fim'})
         if hr_fim_input:
             hora_completa = hr_fim_input.get('value', '').strip()
             dados['hora_termino'] = hora_completa[:5] if hora_completa else ''
         
-        # Responsável 1
         resp1_select = soup.find('select', {'id': 'id_responsavel'})
         if resp1_select:
             resp1_option = resp1_select.find('option', selected=True)
@@ -1045,7 +981,6 @@ def coletar_dados_turma(session, turma_id):
                 texto_completo = resp1_option.get_text(strip=True)
                 dados['responsavel_1'] = texto_completo.split(' - ')[0].strip()
         
-        # Responsável 2
         resp2_select = soup.find('select', {'id': 'id_responsavel2'})
         if resp2_select:
             resp2_option = resp2_select.find('option', selected=True)
@@ -1053,19 +988,16 @@ def coletar_dados_turma(session, turma_id):
                 texto_completo = resp2_option.get_text(strip=True)
                 dados['responsavel_2'] = texto_completo.split(' - ')[0].strip()
         
-        # Destinado ao
         genero_select = soup.find('select', {'name': 'id_turma_genero'})
         if genero_select:
             genero_option = genero_select.find('option', selected=True)
             if genero_option:
                 dados['destinado_ao'] = genero_option.get_text(strip=True)
         
-        # Ativo
         status_checkbox = soup.find('input', {'name': 'status'})
         if status_checkbox and status_checkbox.has_attr('checked'):
             dados['ativo'] = 'Sim'
         
-        # Histórico
         historico_div = soup.find('div', id='collapseOne')
         if historico_div:
             paragrafos = historico_div.find_all('p')
@@ -1087,79 +1019,11 @@ def coletar_dados_turma(session, turma_id):
         
         return dados
         
-    except Exception as e:
+    except:
         return None
 
-def buscar_ids_da_planilha_aulas(planilha_id, backup_file=None):
-    """Busca IDs de turmas da planilha de aulas (prioriza backup local)"""
-    print(f"\n📂 Buscando IDs de turmas...")
-    
-    # MÉTODO 1: Tentar ler do backup JSON local (mais confiável)
-    if backup_file and os.path.exists(backup_file):
-        try:
-            print(f"   📄 Lendo backup local: {backup_file}")
-            with open(backup_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            ids_turmas = []
-            for linha in data.get('dados', []):
-                if len(linha) >= 2:  # ID_Turma está na posição 1 (segunda coluna)
-                    id_turma = str(linha[1]).strip()
-                    if id_turma and id_turma.isdigit():
-                        ids_turmas.append(int(id_turma))
-            
-            # Remover duplicatas
-            ids_turmas = sorted(list(set(ids_turmas)))
-            
-            if ids_turmas:
-                print(f"   ✅ {len(ids_turmas)} IDs únicos encontrados no backup")
-                return ids_turmas
-        except Exception as e:
-            print(f"   ⚠️ Erro ao ler backup: {e}")
-    
-    # MÉTODO 2: Tentar acessar planilha Google (fallback)
-    try:
-        print(f"   🌐 Tentando acessar planilha {planilha_id}...")
-        url = f"https://docs.google.com/spreadsheets/d/{planilha_id}/gviz/tq?tqx=out:csv&sheet=Histórico de Aulas"
-        response = requests.get(url, timeout=30)
-        response.encoding = 'utf-8'
-        
-        if response.status_code == 200:
-            linhas = response.text.strip().split('\n')
-            cabecalho = [col.strip('"') for col in linhas[0].split(',')]
-            
-            if 'ID_Turma' not in cabecalho:
-                print("   ❌ Coluna 'ID_Turma' não encontrada!")
-                return []
-            
-            idx_id_turma = cabecalho.index('ID_Turma')
-            
-            ids_turmas = []
-            for i, linha in enumerate(linhas[1:], start=2):
-                try:
-                    colunas = linha.split(',')
-                    if len(colunas) > idx_id_turma:
-                        id_turma = colunas[idx_id_turma].strip('"').strip()
-                        if id_turma and id_turma.isdigit():
-                            ids_turmas.append(int(id_turma))
-                except:
-                    continue
-            
-            # Remover duplicatas
-            ids_turmas = sorted(list(set(ids_turmas)))
-            
-            print(f"   ✅ {len(ids_turmas)} IDs únicos encontrados na planilha")
-            return ids_turmas
-        else:
-            print(f"   ❌ Erro HTTP {response.status_code}")
-            return []
-            
-    except Exception as e:
-        print(f"   ❌ Erro ao acessar planilha: {e}")
-        return []
-        
 def executar_turmas(session, resultado_modulo1):
-    """Executa coleta de dados de turmas usando IDs coletados no Módulo 1"""
+    """Executa coleta de dados de turmas"""
     tempo_inicio = time.time()
     timestamp_execucao = gerar_timestamp()
     
@@ -1167,10 +1031,9 @@ def executar_turmas(session, resultado_modulo1):
     print("🎓 MÓDULO 2: DADOS DE TURMAS")
     print("=" * 80)
     
-    # EXTRAI IDs DE TURMA DIRETO DOS DADOS JÁ COLETADOS
     ids_turmas = set()
     for linha in resultado_modulo1:
-        id_turma = str(linha[1]).strip()  # Coluna 1 = ID_Turma
+        id_turma = str(linha[1]).strip()
         if id_turma and id_turma.isdigit():
             ids_turmas.add(int(id_turma))
     
@@ -1187,57 +1050,37 @@ def executar_turmas(session, resultado_modulo1):
     sucesso = 0
     erros = 0
     
-    print(f"\n{'=' * 80}")
-    print("🚀 Iniciando coleta de dados...")
-    print(f"{'=' * 80}\n")
+    print(f"\n🚀 Iniciando coleta de dados...\n")
     
     for i, turma_id in enumerate(ids_turmas, 1):
         processadas += 1
-        
         dados = coletar_dados_turma(session, turma_id)
         
         if dados:
             sucesso += 1
             resultado.append([
-                dados['id_turma'],
-                dados['curso'],
-                dados['descricao'],
-                dados['comum'],
-                dados['dia_semana'],
-                dados['data_inicio'],
-                dados['data_encerramento'],
-                dados['hora_inicio'],
-                dados['hora_termino'],
-                dados['responsavel_1'],
-                dados['responsavel_2'],
-                dados['destinado_ao'],
-                dados['ativo'],
-                dados['cadastrado_em'],
-                dados['cadastrado_por'],
-                dados['atualizado_em'],
-                dados['atualizado_por'],
-                'Coletado',
-                time.strftime('%d/%m/%Y %H:%M:%S')
+                dados['id_turma'], dados['curso'], dados['descricao'],
+                dados['comum'], dados['dia_semana'], dados['data_inicio'],
+                dados['data_encerramento'], dados['hora_inicio'], dados['hora_termino'],
+                dados['responsavel_1'], dados['responsavel_2'], dados['destinado_ao'],
+                dados['ativo'], dados['cadastrado_em'], dados['cadastrado_por'],
+                dados['atualizado_em'], dados['atualizado_por'],
+                'Coletado', time.strftime('%d/%m/%Y %H:%M:%S')
             ])
-            
-            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: {dados['curso']} | {dados['descricao']}")
+            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: ✅ {dados['curso']}")
         else:
             erros += 1
             resultado.append([
                 turma_id, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
                 'Erro/Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
             ])
-            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: Não encontrado")
-        
-        if processadas % 50 == 0:
-            print(f"\n   Progresso: {processadas}/{len(ids_turmas)} | Sucesso: {sucesso} | Erros: {erros}\n")
+            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: ❌ Não encontrado")
         
         time.sleep(0.1)
     
     tempo_total = time.time() - tempo_inicio
-    print(f"\n✅ Coleta finalizada: {sucesso} turmas coletadas")
+    print(f"\n✅ Coleta finalizada: {sucesso} turmas coletadas em {tempo_total/60:.2f} min")
     
-    # Enviar para Google Sheets
     body = {
         "tipo": "dados_turmas",
         "timestamp": timestamp_execucao,
@@ -1272,68 +1115,193 @@ def executar_turmas(session, resultado_modulo1):
             
             if resposta_json.get('status') == 'sucesso':
                 planilha_info = resposta_json.get('planilha', {})
-                planilha_id = planilha_info.get('id')
                 
                 print(f"\n✅ PLANILHA DE TURMAS CRIADA!")
                 print(f"   Nome: {planilha_info.get('nome')}")
-                print(f"   ID: {planilha_id}")
                 print(f"   URL: {planilha_info.get('url')}")
     except Exception as e:
         print(f"❌ Erro ao enviar: {e}")
     
-    # RETORNA OS DADOS COLETADOS (não depende de planilha)
     return resultado, ids_turmas
-        
+
 # ==================== MÓDULO 3: MATRICULADOS ====================
 
+def extrair_dados_alunos(session, turma_id):
+    """Extrai dados de alunos matriculados"""
+    try:
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://musical.congregacao.org.br/painel',
+            'User-Agent': 'Mozilla/5.0'
+        }
+        
+        url = f"https://musical.congregacao.org.br/matriculas/lista_alunos_matriculados_turma/{turma_id}"
+        resp = session.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            tbody = soup.find('tbody')
+            if not tbody:
+                return []
+            
+            alunos = []
+            rows = tbody.find_all('tr')
+            
+            for row in rows:
+                tds = row.find_all('td')
+                
+                if len(tds) >= 4:
+                    primeiro_td = tds[0].get_text(strip=True)
+                    
+                    if not primeiro_td or 'Nenhum registro' in primeiro_td:
+                        continue
+                    
+                    alunos.append({
+                        'ID_Turma': turma_id,
+                        'Nome': tds[0].get_text(strip=True),
+                        'Comum': tds[1].get_text(strip=True),
+                        'Instrumento': tds[2].get_text(strip=True),
+                        'Status': tds[3].get_text(strip=True)
+                    })
+            
+            return alunos
+        else:
+            return None
+        
+    except:
+        return None
 
-# ==================== MAIN - ORQUESTRADOR ====================
+def executar_matriculados(session, ids_turmas_modulo2):
+    """Executa coleta de matrículas"""
+    tempo_inicio = time.time()
+    
+    print("\n" + "=" * 80)
+    print("👥 MÓDULO 3: ALUNOS MATRICULADOS")
+    print("=" * 80)
+    
+    if not ids_turmas_modulo2:
+        print("❌ Nenhum ID de turma recebido. Abortando módulo.")
+        return
+    
+    print(f"\n🎯 Total de turmas: {len(ids_turmas_modulo2)}")
+    
+    resultados_resumo = []
+    todos_alunos = []
+    
+    print(f"\n🚀 Processando turmas...\n")
+    
+    for idx, turma_id in enumerate(ids_turmas_modulo2, 1):
+        print(f"[{idx}/{len(ids_turmas_modulo2)}] Turma {turma_id}...", end=" ")
+        
+        alunos = extrair_dados_alunos(session, turma_id)
+        
+        if alunos is not None:
+            print(f"✅ {len(alunos)} alunos")
+            todos_alunos.extend(alunos)
+            resultados_resumo.append([turma_id, len(alunos), "Sucesso"])
+        else:
+            print(f"⚠️ Erro")
+            resultados_resumo.append([turma_id, 0, "Erro"])
+        
+        time.sleep(0.3)
+    
+    print(f"\n✅ Coleta finalizada: {len(todos_alunos)} alunos")
+    
+    data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
+    dados_resumo = [["ID_Turma", "Quantidade_Matriculados", "Status_Coleta"]] + resultados_resumo
+    dados_alunos = [["ID_Turma", "Nome", "Comum", "Instrumento", "Status"]]
+    for aluno in todos_alunos:
+        dados_alunos.append([
+            aluno['ID_Turma'], aluno['Nome'], aluno['Comum'],
+            aluno['Instrumento'], aluno['Status']
+        ])
+    
+    timestamp = datetime.now().strftime('%d_%m_%Y-%H_%M')
+    backup_file = f'backup_matriculas_{timestamp}.json'
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump({"resumo": resultados_resumo, "alunos": todos_alunos}, f, indent=2, ensure_ascii=False)
+    print(f"💾 Backup salvo: {backup_file}")
+    
+    print("\n📤 Enviando para Google Sheets...")
+    
+    try:
+        body_resumo = {
+            "tipo": "contagem_matriculas",
+            "dados": dados_resumo,
+            "data_coleta": data_coleta
+        }
+        
+        resposta = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_resumo, timeout=60)
+        
+        if resposta.status_code == 200:
+            resultado = resposta.json()
+            
+            if resultado.get('status') == 'sucesso':
+                detalhes = resultado.get('detalhes', {})
+                planilha_id = detalhes.get('planilha_id')
+                
+                print(f"\n✅ PLANILHA DE MATRÍCULAS CRIADA!")
+                print(f"   URL: {detalhes.get('url')}")
+                
+                body_detalhado = {
+                    "tipo": "alunos_detalhados",
+                    "dados": dados_alunos,
+                    "data_coleta": data_coleta,
+                    "planilha_id": planilha_id
+                }
+                
+                resposta2 = requests.post(URL_APPS_SCRIPT_MATRICULAS, json=body_detalhado, timeout=60)
+                
+                if resposta2.status_code == 200:
+                    print(f"   ✅ {len(todos_alunos)} alunos enviados")
+        
+        print(f"\n⏱️ Tempo do módulo: {(time.time() - tempo_inicio)/60:.2f} minutos")
+        
+    except Exception as e:
+        print(f"❌ Erro: {e}")
+
+# ==================== MAIN ====================
+
 def main():
     tempo_inicio_total = time.time()
     
     print("\n" + "=" * 80)
-    print("🎼 SISTEMA MUSICAL - COLETOR UNIFICADO")
+    print("🎼 SISTEMA MUSICAL - COLETOR OTIMIZADO")
     print("=" * 80)
-    print("📋 Ordem de execução:")
-    print("   1️⃣ Histórico de Aulas (Hortolândia)")
+    print("📋 Módulos:")
+    print("   1️⃣ Histórico de Aulas (Hortolândia) - OTIMIZADO")
     print("   2️⃣ Dados de Turmas")
     print("   3️⃣ Alunos Matriculados")
     print("=" * 80)
     
-    # PASSO 1: Login único
     session, cookies = fazer_login_unico()
     
     if not session:
-        print("\n❌ Falha no login. Encerrando processo.")
+        print("\n❌ Falha no login. Encerrando.")
         return
     
-    # PASSO 2: Executar Histórico de Aulas - RETORNA OS DADOS COLETADOS
     resultado_aulas = executar_historico_aulas(session)
     
     if not resultado_aulas:
-        print("\n⚠️ Módulo 1 falhou. Interrompendo processo.")
+        print("\n⚠️ Módulo 1 falhou. Interrompendo.")
         return
     
-    # PASSO 3: Executar Turmas - USA OS DADOS DO MÓDULO 1
     resultado_turmas, ids_turmas = executar_turmas(session, resultado_aulas)
     
     if not ids_turmas:
-        print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
+        print("\n⚠️ Módulo 2 falhou. Interrompendo.")
         return
     
-    # PASSO 4: Executar Matriculados - USA OS IDs DO MÓDULO 2
     executar_matriculados(session, ids_turmas)
     
-    # RESUMO FINAL
     tempo_total = time.time() - tempo_inicio_total
     
     print("\n" + "=" * 80)
     print("🎉 PROCESSO COMPLETO FINALIZADO!")
     print("=" * 80)
     print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
-    print(f"📊 Dados coletados e enviados")
-    print(f"💾 Backups salvos localmente")
-    print("=" * 80 + "\n")
-    
+    print("=" * 80)
+
 if __name__ == "__main__":
     main()
