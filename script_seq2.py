@@ -588,6 +588,10 @@ def executar_historico_aulas(session):
     timestamp_backup = time.strftime("%Y%m%d_%H%M%S")
     backup_file = f'backup_aulas_{timestamp_backup}.json'
     
+    # CALCULAR VELOCIDADE
+    tempo_total_seg = time.time() - tempo_inicio
+    velocidade = round(aulas_processadas / tempo_total_seg, 2) if tempo_total_seg > 0 else 0
+    
     body = {
         "tipo": "historico_aulas_hortolandia",
         "dados": resultado,
@@ -598,10 +602,16 @@ def executar_historico_aulas(session):
             "Total_Alunos", "Presentes", "IDs_Nomes_Presentes", "IDs_Nomes_Ausentes"
         ],
         "resumo": {
+            "periodo_inicio": data_hora_inicio.strftime('%d/%m/%Y %H:%M:%S'),
+            "periodo_fim": data_hora_fim.strftime('%d/%m/%Y %H:%M:%S'),
             "total_aulas": len(resultado),
             "aulas_processadas": aulas_processadas,
             "aulas_com_ata": aulas_com_ata,
-            "tempo_minutos": round((time.time() - tempo_inicio)/60, 2)
+            "total_instrutores_htl": len(INSTRUTORES_HORTOLANDIA),
+            "primeiro_id_2024": primeiro_id,
+            "ultimo_id_2024": ultimo_id,
+            "tempo_minutos": round((time.time() - tempo_inicio)/60, 2),
+            "velocidade_aulas_por_segundo": velocidade
         }
     }
     
@@ -609,33 +619,107 @@ def executar_historico_aulas(session):
         json.dump(body, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    print("\n📤 Enviando para Google Sheets...")
+    print("\n" + "=" * 80)
+    print("📤 ENVIANDO PARA GOOGLE SHEETS")
+    print("=" * 80)
+    
+    print(f"🌐 URL: {URL_APPS_SCRIPT_AULAS}")
+    print(f"📊 Total de linhas: {len(resultado)}")
+    print(f"⏱️ Timeout: 300 segundos")
     
     try:
-        resposta_post = requests.post(URL_APPS_SCRIPT_AULAS, json=body, timeout=180)
+        print("\n🔄 Fazendo requisição POST...")
+        resposta_post = requests.post(
+            URL_APPS_SCRIPT_AULAS, 
+            json=body, 
+            timeout=300,
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+        )
+        
+        print(f"\n📡 Status HTTP: {resposta_post.status_code}")
+        print(f"📏 Tamanho da resposta: {len(resposta_post.text)} bytes")
+        
+        # Mostrar primeiros 1000 caracteres da resposta bruta
+        print(f"\n📄 Resposta bruta (primeiros 1000 chars):")
+        print("-" * 80)
+        print(resposta_post.text[:1000])
+        print("-" * 80)
         
         if resposta_post.status_code == 200:
-            resposta_json = resposta_post.json()
-            
-            if 'body' in resposta_json:
-                body_content = json.loads(resposta_json['body'])
+            try:
+                print("\n🔍 Tentando decodificar JSON...")
+                resposta_json = resposta_post.json()
                 
-                if 'detalhes' in body_content:
-                    detalhes = body_content['detalhes']
-                    planilha_id = detalhes.get('planilha_id')
+                print(f"✅ JSON decodificado com sucesso")
+                print(f"📋 Estrutura da resposta:")
+                print(json.dumps(resposta_json, indent=2, ensure_ascii=False)[:500])
+                
+                # Tentar extrair body se existir
+                if 'body' in resposta_json:
+                    print("\n📦 Campo 'body' encontrado, decodificando...")
+                    body_content = json.loads(resposta_json['body'])
+                else:
+                    print("\n📦 Usando resposta direta (sem campo 'body')")
+                    body_content = resposta_json
+                
+                print(f"\n📊 Status da resposta: {body_content.get('status')}")
+                
+                if body_content.get('status') == 'sucesso':
+                    detalhes = body_content.get('detalhes', {})
                     
-                    print(f"\n✅ PLANILHA DE AULAS CRIADA!")
-                    print(f"   Nome: {detalhes.get('nome_planilha')}")
-                    print(f"   ID: {planilha_id}")
-                    print(f"   URL: {detalhes.get('url')}")
+                    print(f"\n" + "=" * 80)
+                    print("✅ PLANILHA DE AULAS CRIADA COM SUCESSO!")
+                    print("=" * 80)
+                    print(f"📛 Nome: {detalhes.get('nome_planilha')}")
+                    print(f"🆔 ID: {detalhes.get('planilha_id')}")
+                    print(f"🔗 URL: {detalhes.get('url')}")
+                    print(f"📊 Linhas gravadas: {detalhes.get('linhas_gravadas')}")
+                    print(f"📋 Aulas com ATA: {detalhes.get('aulas_com_ata')}")
+                    print("=" * 80)
+                    
+                else:
+                    print(f"\n⚠️ Status diferente de 'sucesso': {body_content.get('status')}")
+                    print(f"📝 Mensagem: {body_content.get('mensagem')}")
+                    
+                    # Se houver erro, mostrar detalhes completos
+                    if body_content.get('status') == 'erro':
+                        print(f"\n❌ ERRO RETORNADO PELO APPS SCRIPT:")
+                        print(f"   Mensagem: {body_content.get('mensagem')}")
+                        if 'stack' in body_content:
+                            print(f"   Stack trace:")
+                            print(body_content.get('stack'))
+                        if 'detalhes' in body_content:
+                            print(f"   Detalhes: {body_content.get('detalhes')}")
+            
+            except json.JSONDecodeError as e:
+                print(f"\n❌ ERRO ao decodificar JSON da resposta:")
+                print(f"   {e}")
+                print(f"\n📄 Resposta completa:")
+                print(resposta_post.text)
+        
         else:
-            print("⚠️ Erro ao enviar para Google Sheets")
+            print(f"\n❌ Erro HTTP {resposta_post.status_code}")
+            print(f"📄 Resposta completa:")
+            print(resposta_post.text[:1000])
+    
+    except requests.Timeout:
+        print("\n❌ TIMEOUT: A requisição demorou mais de 300 segundos")
+        
+    except requests.ConnectionError as e:
+        print(f"\n❌ ERRO DE CONEXÃO: {e}")
         
     except Exception as e:
-        print(f"❌ Erro ao enviar: {e}")
+        print(f"\n❌ ERRO INESPERADO: {e}")
+        print(f"📝 Tipo do erro: {type(e).__name__}")
+        import traceback
+        print("\n📋 Stack trace completo:")
+        traceback.print_exc()
     
-    # RETORNA OS DADOS COLETADOS (independente do sucesso do envio)
-    print(f"📦 Retornando {len(resultado)} linhas de dados para o próximo módulo")
+    # SEMPRE retorna os dados (independente do sucesso do envio)
+    print(f"\n📦 Retornando {len(resultado)} linhas de dados para o próximo módulo")
     return resultado
 
 # ==================== MÓDULO 2: TURMAS ====================
