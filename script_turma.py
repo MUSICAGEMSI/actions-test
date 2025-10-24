@@ -16,6 +16,7 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxNpziYUDS2IL2L9bpfbtci8Mq1gDNWKL2XUhImPtgevyW_y7nVfRvFJjpHrozh9SiC/exec'
 
+
 if not EMAIL or not SENHA:
     print("❌ Erro: LOGIN_MUSICAL ou SENHA_MUSICAL não definidos.")
     exit(1)
@@ -305,11 +306,14 @@ def main():
             pagina.wait_for_selector(gem_selector, timeout=15000)
             gem_element = pagina.locator(gem_selector).first
 
+            print("✅ Menu G.E.M encontrado")
             gem_element.hover()
-            pagina.wait_for_timeout(1000)
+            pagina.wait_for_timeout(1500)
 
             if gem_element.is_visible() and gem_element.is_enabled():
                 gem_element.click()
+                print("✅ G.E.M clicado")
+                pagina.wait_for_timeout(2000)
             else:
                 print("❌ Elemento G.E.M não estava clicável.")
                 navegador.close()
@@ -321,11 +325,51 @@ def main():
 
         # Navegar para Turmas
         try:
-            pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
-            pagina.click('a[href="turmas"]')
+            print("🔍 Procurando link para 'Turmas'...")
+            
+            # Estratégia 1: Aguardar e clicar no link
+            link_turmas = pagina.wait_for_selector('a[href="turmas"]', timeout=10000)
+            
+            if link_turmas and link_turmas.is_visible():
+                print("✅ Link 'Turmas' encontrado")
+                
+                # Clicar e aguardar navegação
+                link_turmas.click()
+                
+                # Aguardar navegação para a página de listagem
+                try:
+                    pagina.wait_for_url("**/turmas/listagem", timeout=15000)
+                    print("✅ Navegação para /turmas/listagem concluída")
+                except PlaywrightTimeoutError:
+                    # Se não navegou para /listagem, tentar URL alternativa
+                    print("⚠️ URL /turmas/listagem não carregou, verificando URL atual...")
+                    url_atual = pagina.url
+                    print(f"📍 URL atual: {url_atual}")
+                    
+                    # Se não estiver na página correta, navegar diretamente
+                    if "turmas" not in url_atual:
+                        print("🔄 Navegando diretamente para /turmas/listagem")
+                        pagina.goto("https://musical.congregacao.org.br/turmas/listagem")
+                        pagina.wait_for_timeout(3000)
+            else:
+                print("⚠️ Link não visível, tentando navegação direta...")
+                pagina.goto("https://musical.congregacao.org.br/turmas/listagem")
+                pagina.wait_for_timeout(3000)
+            
             print("✅ Navegando para Turmas...")
+            
         except PlaywrightTimeoutError:
-            print("❌ Link 'turmas' não encontrado.")
+            print("⚠️ Link 'turmas' não encontrado, tentando navegação direta...")
+            try:
+                pagina.goto("https://musical.congregacao.org.br/turmas/listagem")
+                pagina.wait_for_timeout(3000)
+                print("✅ Navegação direta para /turmas/listagem realizada")
+            except Exception as e:
+                print(f"❌ Falha na navegação direta: {e}")
+                navegador.close()
+                return
+        except Exception as e:
+            print(f"❌ Erro ao navegar para turmas: {e}")
             navegador.close()
             return
 
@@ -363,7 +407,7 @@ def main():
         session = requests.Session()
         session.cookies.update(cookies_dict)
 
-        # Coletar dados das turmas (mesmo processo do código original)
+        # Coletar dados das turmas
         resultado = []
         parar = False
         pagina_atual = 1
@@ -421,7 +465,7 @@ def main():
                         "Ações",
                         turma_id,
                         matriculados_badge,
-                        "0",  # Será calculado depois
+                        "0",
                         "Pendente"
                     ]
 
@@ -469,11 +513,25 @@ def main():
         # Gerar relatório formatado
         relatorio_formatado = gerar_relatorio_formatado(localidades)
         
+        # Calcular resumo
+        total_localidades = len(localidades)
+        total_turmas = sum(len(dados['turmas']) for dados in localidades.values())
+        total_matriculados = sum(dados['total_matriculados'] for dados in localidades.values())
+        total_alunos_unicos = sum(len(dados['alunos_unicos']) for dados in localidades.values())
+        
+        resumo = {
+            'total_localidades': total_localidades,
+            'total_turmas': total_turmas,
+            'total_matriculados': total_matriculados,
+            'total_alunos_unicos': total_alunos_unicos
+        }
+        
         # Preparar dados para envio
         body = {
             "tipo": "relatorio_localidades",
             "relatorio_formatado": relatorio_formatado,
-            "dados_brutos": resultado
+            "dados_brutos": resultado,
+            "resumo": resumo
         }
 
         # Enviar dados para Apps Script
