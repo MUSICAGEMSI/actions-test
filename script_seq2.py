@@ -287,6 +287,11 @@ def varredura_completa_paralela(session, primeiro_id, ultimo_id):
     
     todos_ids = list(range(primeiro_id, ultimo_id + 1))
     
+    # Log de início
+    print(f"{'─' * 80}")
+    print(f"🔄 VARREDURA EM TEMPO REAL")
+    print(f"{'─' * 80}\n")
+    
     for chunk_start in range(0, len(todos_ids), CHUNK_SIZE):
         chunk_end = min(chunk_start + CHUNK_SIZE, len(todos_ids))
         chunk_ids = todos_ids[chunk_start:chunk_end]
@@ -308,17 +313,22 @@ def varredura_completa_paralela(session, primeiro_id, ultimo_id):
                 except:
                     pass  # Em caso de erro, tentar novamente na fase 2
                 
-                # Progress a cada 500 IDs
+                # ✅ LOGS DETALHADOS A CADA 500 IDs (mais frequente)
                 if ids_processados % 500 == 0:
                     percentual = (ids_processados / range_total) * 100
                     tempo_decorrido = time.time() - tempo_inicio
                     velocidade = ids_processados / tempo_decorrido if tempo_decorrido > 0 else 0
                     tempo_restante = (range_total - ids_processados) / velocidade if velocidade > 0 else 0
                     
-                    print(f"   [{percentual:5.1f}%] {ids_processados:6d}/{range_total:,} | "
-                          f"Encontradas: {len(ids_existentes):4d} | "
-                          f"Velocidade: {velocidade:6.1f}/s | "
-                          f"⏱️ Restam: {tempo_restante/60:.1f}min")
+                    # Estimativa de aulas baseada na taxa atual
+                    taxa_aulas = len(ids_existentes) / ids_processados if ids_processados > 0 else 0
+                    aulas_estimadas = int(range_total * taxa_aulas)
+                    
+                    print(f"   [{percentual:6.2f}%] {ids_processados:6d}/{range_total:,} | "
+                          f"🎯 Encontradas: {len(ids_existentes):5d} | "
+                          f"📊 Est.: ~{aulas_estimadas:,} total | "
+                          f"⚡ {velocidade:6.0f}/s | "
+                          f"⏱️  Restam: {tempo_restante/60:4.1f}min")
     
     tempo_total = time.time() - tempo_inicio
     
@@ -561,6 +571,11 @@ def coleta_massiva_paralela(session, ids_existentes):
     LOTE_SIZE = 500
     MAX_WORKERS = 30  # 30 threads para GET completo
     
+    # Log de início
+    print(f"{'─' * 80}")
+    print(f"🔄 PROCESSAMENTO EM TEMPO REAL")
+    print(f"{'─' * 80}\n")
+    
     for lote_inicio in range(0, len(ids_existentes), LOTE_SIZE):
         lote_fim = min(lote_inicio + LOTE_SIZE, len(ids_existentes))
         lote_ids = ids_existentes[lote_inicio:lote_fim]
@@ -590,17 +605,18 @@ def coleta_massiva_paralela(session, ids_existentes):
                     if dados['tem_ata'] == "Sim":
                         aulas_com_ata += 1
                 
-                # Progress a cada 100 aulas
-                if aulas_processadas % 100 == 0:
+                # ✅ LOGS DETALHADOS A CADA 50 AULAS (mais frequente)
+                if aulas_processadas % 50 == 0:
                     percentual = (aulas_processadas / len(ids_existentes)) * 100
                     tempo_decorrido = time.time() - tempo_inicio
                     velocidade = aulas_processadas / tempo_decorrido if tempo_decorrido > 0 else 0
                     tempo_restante = (len(ids_existentes) - aulas_processadas) / velocidade if velocidade > 0 else 0
                     
-                    print(f"   [{percentual:5.1f}%] {aulas_processadas:5d}/{len(ids_existentes)} | "
-                          f"{aulas_hortolandia} HTL | {aulas_com_ata} ATA | "
-                          f"Velocidade: {velocidade:.1f}/s | "
-                          f"⏱️ Restam: {tempo_restante/60:.1f}min")
+                    print(f"   [{percentual:6.2f}%] {aulas_processadas:5d}/{len(ids_existentes):,} | "
+                          f"🏫 HTL: {aulas_hortolandia:4d} | "
+                          f"📋 ATA: {aulas_com_ata:3d} | "
+                          f"⚡ {velocidade:5.1f}/s | "
+                          f"⏱️  Restam: {tempo_restante/60:4.1f}min")
         
         time.sleep(0.1)  # Pequeno delay entre lotes
     
@@ -1031,7 +1047,10 @@ def executar_turmas(session, resultado_modulo1):
     resultado = []
     sucesso = 0
     
-    print(f"\n🚀 Coletando dados...\n")
+    # Log de início
+    print(f"\n{'─' * 80}")
+    print(f"🔄 COLETA DE TURMAS EM TEMPO REAL")
+    print(f"{'─' * 80}\n")
     
     for i, turma_id in enumerate(ids_turmas, 1):
         dados = coletar_dados_turma(session, turma_id)
@@ -1047,13 +1066,26 @@ def executar_turmas(session, resultado_modulo1):
                 dados['atualizado_em'], dados['atualizado_por'],
                 'Coletado', time.strftime('%d/%m/%Y %H:%M:%S')
             ])
-            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: ✅ {dados['curso']}")
+            
+            # ✅ LOG DETALHADO COM ÍCONES
+            percentual = (i / len(ids_turmas)) * 100
+            tempo_decorrido = time.time() - tempo_inicio
+            velocidade = i / tempo_decorrido if tempo_decorrido > 0 else 0
+            tempo_restante = (len(ids_turmas) - i) / velocidade if velocidade > 0 else 0
+            
+            print(f"   [{percentual:6.2f}%] {i:3d}/{len(ids_turmas)} | "
+                  f"✅ ID {turma_id:5d} | "
+                  f"{dados['curso'][:30]:30s} | "
+                  f"⏱️  {tempo_restante/60:4.1f}min")
         else:
             resultado.append([
                 turma_id, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
                 'Erro/Não encontrado', time.strftime('%d/%m/%Y %H:%M:%S')
             ])
-            print(f"[{i}/{len(ids_turmas)}] ID {turma_id}: ❌")
+            
+            percentual = (i / len(ids_turmas)) * 100
+            print(f"   [{percentual:6.2f}%] {i:3d}/{len(ids_turmas)} | "
+                  f"❌ ID {turma_id:5d} | Não encontrado")
         
         time.sleep(0.1)
     
@@ -1168,24 +1200,42 @@ def executar_matriculados(session, ids_turmas):
     resultados_resumo = []
     todos_alunos = []
     
-    print(f"\n🚀 Processando...\n")
+    # Log de início
+    print(f"\n{'─' * 80}")
+    print(f"🔄 COLETA DE MATRÍCULAS EM TEMPO REAL")
+    print(f"{'─' * 80}\n")
     
     for idx, turma_id in enumerate(ids_turmas, 1):
-        print(f"[{idx}/{len(ids_turmas)}] Turma {turma_id}...", end=" ")
-        
         alunos = extrair_dados_alunos(session, turma_id)
         
+        # ✅ LOG DETALHADO COM ESTATÍSTICAS
+        percentual = (idx / len(ids_turmas)) * 100
+        tempo_decorrido = time.time() - tempo_inicio
+        velocidade = idx / tempo_decorrido if tempo_decorrido > 0 else 0
+        tempo_restante = (len(ids_turmas) - idx) / velocidade if velocidade > 0 else 0
+        
         if alunos is not None:
-            print(f"✅ {len(alunos)} alunos")
             todos_alunos.extend(alunos)
             resultados_resumo.append([turma_id, len(alunos), "Sucesso"])
+            
+            print(f"   [{percentual:6.2f}%] {idx:3d}/{len(ids_turmas)} | "
+                  f"✅ Turma {turma_id:5d} | "
+                  f"👥 {len(alunos):3d} alunos | "
+                  f"📊 Total: {len(todos_alunos):4d} | "
+                  f"⏱️  {tempo_restante/60:4.1f}min")
         else:
-            print(f"⚠️ Erro")
             resultados_resumo.append([turma_id, 0, "Erro"])
+            print(f"   [{percentual:6.2f}%] {idx:3d}/{len(ids_turmas)} | "
+                  f"❌ Turma {turma_id:5d} | Erro ao coletar")
         
         time.sleep(0.3)
     
-    print(f"\n✅ {len(todos_alunos)} alunos coletados")
+    print(f"\n{'─' * 80}")
+    print(f"✅ COLETA FINALIZADA")
+    print(f"{'─' * 80}")
+    print(f"📊 Total de alunos coletados: {len(todos_alunos):,}")
+    print(f"⏱️ Tempo total: {(time.time() - tempo_inicio)/60:.2f} minutos")
+    print(f"{'─' * 80}\n")
     
     # Preparar dados
     data_coleta = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
