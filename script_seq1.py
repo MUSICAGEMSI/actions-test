@@ -25,18 +25,12 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 
 # URLs dos Apps Scripts
 URL_APPS_SCRIPT_LOCALIDADES = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
-URL_APPS_SCRIPT_ALUNOS = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 URL_APPS_SCRIPT_HISTORICO = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
 # MÓDULO 1: LOCALIDADES
 LOCALIDADES_RANGE_INICIO = 1
 LOCALIDADES_RANGE_FIM = 50000
 LOCALIDADES_NUM_THREADS = 20
-
-# MÓDULO 2: ALUNOS
-ALUNOS_RANGE_INICIO = 1
-ALUNOS_RANGE_FIM = 850000
-ALUNOS_NUM_THREADS = 25
 
 # MÓDULO 3: HISTÓRICO - Configuração híbrida
 HISTORICO_ASYNC_CONNECTIONS = 250
@@ -48,7 +42,10 @@ HISTORICO_CIRURGICO_TIMEOUT = 20
 HISTORICO_CIRURGICO_RETRIES = 6
 HISTORICO_CIRURGICO_DELAY = 2
 HISTORICO_CHUNK_SIZE = 400
-HISTORICO_TAMANHO_LOTE = 400
+
+# ✅ NOVO: Configuração de lotes para envio ao Google Sheets
+LOTE_TAMANHO = 200  # Processar 200 alunos por lote
+LOTE_TIMEOUT = 90   # 90 segundos por lote
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -318,226 +315,40 @@ def executar_localidades(session):
     except Exception as e:
         print(f"⚠️ Erro ao enviar: {e}")
     
-    # RETORNA lista de IDs de igrejas
     ids_igrejas = [loc['id_igreja'] for loc in localidades]
     print(f"\n📦 Retornando {len(ids_igrejas)} IDs de igrejas para o próximo módulo")
     return ids_igrejas
 
-# ==================== MÓDULO 2: COLETA DE ALUNOS ====================
+# ==================== MÓDULO 2: BUSCAR ALUNOS ====================
 
-def coletar_dados_membro(id_membro: int, session: requests.Session, ids_igrejas_set: Set[int]) -> Optional[Dict]:
-    """Coleta dados completos de um único membro"""
-    try:
-        url = f"https://musical.congregacao.org.br/membros/view/{id_membro}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        }
-        
-        resp = session.get(url, headers=headers, timeout=15)
-        
-        if resp.status_code != 200:
-            return None
-        
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # Verificar se é página válida de membro
-        if 'login' in resp.text.lower() or len(resp.text) < 500:
-            return None
-        
-        # Extrair dados
-        nome_elem = soup.find('h2') or soup.find('h3')
-        nome = nome_elem.get_text(strip=True) if nome_elem else ''
-        
-        if not nome:
-            return None
-        
-        # Extrair ID da igreja
-        id_igreja = None
-        igreja_elem = soup.find('a', href=re.compile(r'/igrejas/view/\d+'))
-        if igreja_elem:
-            match = re.search(r'/igrejas/view/(\d+)', igreja_elem.get('href', ''))
-            if match:
-                id_igreja = int(match.group(1))
-        
-        # Filtrar apenas igrejas de Hortolândia
-        if id_igreja not in ids_igrejas_set:
-            return None
-        
-        # Extrair outros dados
-        cargo_elem = soup.find('span', string=re.compile(r'Cargo', re.I))
-        cargo_nome = ''
-        id_cargo = 0
-        if cargo_elem:
-            cargo_parent = cargo_elem.find_parent()
-            if cargo_parent:
-                cargo_nome = cargo_parent.get_text(strip=True).replace('Cargo:', '').strip()
-        
-        nivel_elem = soup.find('span', string=re.compile(r'Nível', re.I))
-        nivel_nome = ''
-        id_nivel = 0
-        if nivel_elem:
-            nivel_parent = nivel_elem.find_parent()
-            if nivel_parent:
-                nivel_nome = nivel_parent.get_text(strip=True).replace('Nível:', '').strip()
-        
-        instrumento_elem = soup.find('span', string=re.compile(r'Instrumento', re.I))
-        instrumento_nome = ''
-        id_instrumento = 0
-        if instrumento_elem:
-            inst_parent = instrumento_elem.find_parent()
-            if inst_parent:
-                instrumento_nome = inst_parent.get_text(strip=True).replace('Instrumento:', '').strip()
-        
-        tonalidade_elem = soup.find('span', string=re.compile(r'Tonalidade', re.I))
-        tonalidade_nome = ''
-        id_tonalidade = 0
-        if tonalidade_elem:
-            ton_parent = tonalidade_elem.find_parent()
-            if ton_parent:
-                tonalidade_nome = ton_parent.get_text(strip=True).replace('Tonalidade:', '').strip()
-        
-        # Status (1 = ativo, 0 = inativo)
-        status_elem = soup.find('span', class_='badge')
-        status = 1
-        if status_elem and 'inativo' in status_elem.get_text(strip=True).lower():
-            status = 0
-        
-        fl_tipo = '1'
-        
-        return {
-            'id_membro': id_membro,
-            'nome': nome,
-            'id_igreja': id_igreja,
-            'id_cargo': id_cargo,
-            'cargo_nome': cargo_nome,
-            'id_nivel': id_nivel,
-            'nivel_nome': nivel_nome,
-            'id_instrumento': id_instrumento,
-            'instrumento_nome': instrumento_nome,
-            'id_tonalidade': id_tonalidade,
-            'tonalidade_nome': tonalidade_nome,
-            'fl_tipo': fl_tipo,
-            'status': status
-        }
-        
-    except Exception:
-        return None
-
-def executar_coleta_alunos(session, ids_igrejas):
-    """Executa coleta de alunos das igrejas de Hortolândia"""
-    tempo_inicio = time.time()
-    timestamp_execucao = datetime.now()
-    
+def buscar_alunos_hortolandia() -> List[Dict]:
+    """Busca lista de alunos do Google Sheets"""
     print("\n" + "=" * 80)
-    print("🎓 MÓDULO 2: COLETA DE ALUNOS DE HORTOLÂNDIA")
+    print("🎓 MÓDULO 2: BUSCAR ALUNOS DE HORTOLÂNDIA")
     print("=" * 80)
-    print(f"🏛️ Igrejas monitoradas: {len(ids_igrejas)}")
-    print(f"🔢 Range de IDs: {ALUNOS_RANGE_INICIO:,} até {ALUNOS_RANGE_FIM:,}")
-    print(f"🧵 Threads: {ALUNOS_NUM_THREADS}")
-    
-    ids_igrejas_set = set(ids_igrejas)
-    
-    membros = []
-    total_ids = ALUNOS_RANGE_FIM - ALUNOS_RANGE_INICIO + 1
-    
-    print(f"\n🚀 Processando {total_ids:,} IDs de membros...")
-    
-    with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
-        futures = {
-            executor.submit(coletar_dados_membro, id_membro, session, ids_igrejas_set): id_membro 
-            for id_membro in range(ALUNOS_RANGE_INICIO, ALUNOS_RANGE_FIM + 1)
-        }
-        
-        processados = 0
-        for future in as_completed(futures):
-            processados += 1
-            resultado = future.result()
-            
-            if resultado:
-                membros.append(resultado)
-                print(f"✓ [{processados}/{total_ids}] ID {resultado['id_membro']}: {resultado['nome'][:50]}")
-            
-            if processados % 1000 == 0:
-                print(f"   Progresso: {processados:,}/{total_ids:,} | {len(membros)} membros encontrados")
-    
-    tempo_total = time.time() - tempo_inicio
-    
-    print(f"\n✅ Coleta finalizada: {len(membros)} membros encontrados")
-    print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
-    
-    # Backup local
-    timestamp_backup = timestamp_execucao.strftime('%d_%m_%Y-%H_%M')
-    backup_file = f'backup_membros_{timestamp_backup}.json'
-    
-    with open(backup_file, 'w', encoding='utf-8') as f:
-        json.dump({'membros': membros, 'timestamp': timestamp_backup}, f, ensure_ascii=False, indent=2)
-    print(f"💾 Backup salvo: {backup_file}")
-    
-    # Enviar para Google Sheets
-    print("\n📤 Enviando para Google Sheets...")
-    
-    dados_formatados = [
-        ['ID_MEMBRO', 'NOME', 'ID_IGREJA', 'ID_CARGO', 'CARGO_NOME', 'ID_NIVEL', 'NIVEL_NOME', 
-         'ID_INSTRUMENTO', 'INSTRUMENTO_NOME', 'ID_TONALIDADE', 'TONALIDADE_NOME', 'FL_TIPO', 'STATUS']
-    ]
-    
-    for membro in membros:
-        dados_formatados.append([
-            membro['id_membro'],
-            membro['nome'],
-            membro['id_igreja'],
-            membro['id_cargo'],
-            membro['cargo_nome'],
-            membro['id_nivel'],
-            membro['nivel_nome'],
-            membro['id_instrumento'],
-            membro['instrumento_nome'],
-            membro['id_tonalidade'],
-            membro['tonalidade_nome'],
-            membro['fl_tipo'],
-            membro['status']
-        ])
-    
-    payload = {
-        "tipo": "nova_planilha_membros_completo",
-        "timestamp": timestamp_backup,
-        "relatorio_formatado": dados_formatados,
-        "metadata": {
-            "total_membros": len(membros),
-            "total_igrejas_monitoradas": len(ids_igrejas),
-            "range_inicio": ALUNOS_RANGE_INICIO,
-            "range_fim": ALUNOS_RANGE_FIM,
-            "tempo_execucao_min": round(tempo_total/60, 2),
-            "timestamp": timestamp_execucao.isoformat()
-        }
-    }
+    print("🔍 Buscando lista de alunos do Google Sheets...")
     
     try:
-        resp = requests.post(URL_APPS_SCRIPT_ALUNOS, json=payload, timeout=60)
-        if resp.status_code == 200:
-            resposta = resp.json()
-            if resposta.get('status') == 'sucesso':
-                print(f"✅ Planilha criada: {resposta.get('planilha', {}).get('url', 'N/A')}")
-            else:
-                print(f"⚠️ Erro: {resposta.get('mensagem', 'Desconhecido')}")
-        else:
-            print(f"⚠️ Erro HTTP {resp.status_code}")
+        response = requests.get(
+            URL_APPS_SCRIPT_HISTORICO, 
+            params={"acao": "listar_ids_alunos"}, 
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('sucesso'):
+                alunos = data.get('alunos', [])
+                print(f"✅ {len(alunos)} alunos encontrados no Google Sheets")
+                print(f"📊 Amostra: {alunos[:3] if len(alunos) >= 3 else alunos}")
+                return alunos
+        
+        print("❌ Erro ao buscar alunos")
+        return []
+    
     except Exception as e:
-        print(f"⚠️ Erro ao enviar: {e}")
-    
-    # Converter para formato esperado pelo Módulo 3
-    alunos = [
-        {
-            'id_aluno': m['id_membro'],
-            'nome': m['nome'],
-            'id_igreja': m['id_igreja']
-        }
-        for m in membros
-    ]
-    
-    print(f"\n📦 Retornando {len(alunos)} alunos para o Módulo 3")
-    return alunos
+        print(f"❌ Erro: {e}")
+        return []
 
 # ==================== MÓDULO 3: HISTÓRICO INDIVIDUAL ====================
 
@@ -1019,7 +830,6 @@ def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
         t_esc_i = sum(1 for x in todos_dados['escalas_individual'] if x[0] == id_aluno)
         t_esc_g = sum(1 for x in todos_dados['escalas_grupo'] if x[0] == id_aluno)
         
-        # Calcular média de provas
         provas_aluno = [x for x in todos_dados['provas'] if x[0] == id_aluno]
         if provas_aluno:
             try:
@@ -1061,8 +871,113 @@ def filtrar_dados_vazios(dados: Dict) -> Dict:
     
     return dados_filtrados
 
+# ✅ NOVA FUNÇÃO: Enviar dados em lotes para Google Sheets
+def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], tempo_total: float):
+    """Envia dados em lotes para evitar timeout do Google Apps Script"""
+    print("\n" + "=" * 80)
+    print("📤 ENVIANDO DADOS EM LOTES PARA GOOGLE SHEETS")
+    print("=" * 80)
+    
+    # Gerar resumo completo
+    resumo_completo = gerar_resumo_alunos(alunos_modulo2, todos_dados)
+    
+    # Calcular número de lotes baseado no resumo
+    total_alunos = len(resumo_completo)
+    num_lotes = (total_alunos + LOTE_TAMANHO - 1) // LOTE_TAMANHO
+    
+    print(f"📊 Total de alunos: {total_alunos}")
+    print(f"📦 Tamanho do lote: {LOTE_TAMANHO} alunos")
+    print(f"🔢 Número de lotes: {num_lotes}")
+    
+    # Metadata geral
+    metadata_base = {
+        'total_alunos_processados': len(alunos_modulo2),
+        'alunos_com_dados': historico_stats['com_dados'],
+        'alunos_sem_dados': historico_stats['sem_dados'],
+        'tempo_coleta_segundos': tempo_total,
+        'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    planilha_url = None
+    
+    # Processar cada lote
+    for lote_num in range(1, num_lotes + 1):
+        inicio = (lote_num - 1) * LOTE_TAMANHO
+        fim = min(lote_num * LOTE_TAMANHO, total_alunos)
+        
+        print(f"\n📦 Processando lote {lote_num}/{num_lotes} (alunos {inicio+1} a {fim})...")
+        
+        # IDs dos alunos neste lote
+        ids_lote = set(resumo_completo[i][0] for i in range(inicio, fim))
+        
+        # Filtrar dados do lote
+        lote_dados = {
+            'mts_individual': [x for x in todos_dados['mts_individual'] if x[0] in ids_lote],
+            'mts_grupo': [x for x in todos_dados['mts_grupo'] if x[0] in ids_lote],
+            'msa_individual': [x for x in todos_dados['msa_individual'] if x[0] in ids_lote],
+            'msa_grupo': [x for x in todos_dados['msa_grupo'] if x[0] in ids_lote],
+            'provas': [x for x in todos_dados['provas'] if x[0] in ids_lote],
+            'hinario_individual': [x for x in todos_dados['hinario_individual'] if x[0] in ids_lote],
+            'hinario_grupo': [x for x in todos_dados['hinario_grupo'] if x[0] in ids_lote],
+            'metodos': [x for x in todos_dados['metodos'] if x[0] in ids_lote],
+            'escalas_individual': [x for x in todos_dados['escalas_individual'] if x[0] in ids_lote],
+            'escalas_grupo': [x for x in todos_dados['escalas_grupo'] if x[0] in ids_lote],
+            'resumo': resumo_completo[inicio:fim]
+        }
+        
+        # Metadata do lote
+        metadata_lote = metadata_base.copy()
+        metadata_lote['alunos_inicio'] = inicio
+        metadata_lote['alunos_fim'] = fim
+        
+        # Payload do lote
+        payload = {
+            'tipo': 'licoes_alunos_lote',
+            'lote_numero': lote_num,
+            'total_lotes': num_lotes,
+            **lote_dados,
+            'metadata': metadata_lote
+        }
+        
+        # Enviar lote
+        try:
+            print(f"   📡 Enviando {fim - inicio} alunos...")
+            response = requests.post(
+                URL_APPS_SCRIPT_HISTORICO, 
+                json=payload, 
+                timeout=LOTE_TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('sucesso'):
+                    print(f"   ✅ Lote {lote_num} processado com sucesso")
+                    
+                    # Capturar URL da planilha no último lote
+                    if lote_num == num_lotes and 'planilha' in result:
+                        planilha_url = result['planilha'].get('url')
+                else:
+                    print(f"   ⚠️ Erro no lote {lote_num}: {result.get('erro', 'Desconhecido')}")
+            else:
+                print(f"   ⚠️ HTTP {response.status_code} no lote {lote_num}")
+        
+        except Exception as e:
+            print(f"   ❌ Erro ao enviar lote {lote_num}: {e}")
+        
+        # Aguardar entre lotes (exceto no último)
+        if lote_num < num_lotes:
+            time.sleep(2)
+    
+    print("\n" + "=" * 80)
+    if planilha_url:
+        print(f"✅ ENVIO COMPLETO!")
+        print(f"📊 Planilha criada: {planilha_url}")
+    else:
+        print("⚠️ Envio finalizado, mas URL da planilha não disponível")
+    print("=" * 80)
+
 def executar_historico(cookies_dict, alunos_modulo2):
-    """✅ CORRIGIDO: Executa coleta + ENVIO EM LOTES para Google Sheets"""
+    """Executa coleta de histórico individual com sistema de 3 fases"""
     tempo_inicio = time.time()
     historico_stats['tempo_inicio'] = tempo_inicio
     
@@ -1146,12 +1061,11 @@ def executar_historico(cookies_dict, alunos_modulo2):
     # Filtrar dados vazios
     todos_dados = filtrar_dados_vazios(todos_dados)
     
-    # Gerar resumo
-    resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
-    
     # Backup local
     timestamp = gerar_timestamp()
     backup_file = f'backup_historico_{timestamp.replace(":", "-")}.json'
+    resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
+    
     with open(backup_file, 'w', encoding='utf-8') as f:
         json.dump({
             'dados': todos_dados,
@@ -1160,99 +1074,8 @@ def executar_historico(cookies_dict, alunos_modulo2):
         }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    # ========== ✅ ENVIAR EM LOTES PARA GOOGLE SHEETS ==========
-    print("\n📤 Enviando para Google Sheets EM LOTES...")
-    
-    total_alunos = len(alunos_modulo2)
-    total_lotes = (total_alunos + HISTORICO_TAMANHO_LOTE - 1) // HISTORICO_TAMANHO_LOTE
-    
-    print(f"📦 Total de lotes: {total_lotes} ({HISTORICO_TAMANHO_LOTE} alunos/lote)")
-    
-    # Criar conjuntos de IDs por lote
-    alunos_ids_lotes = [
-        set([aluno['id_aluno'] for aluno in alunos_modulo2[i:i+HISTORICO_TAMANHO_LOTE]])
-        for i in range(0, total_alunos, HISTORICO_TAMANHO_LOTE)
-    ]
-    
-    for lote_num in range(1, total_lotes + 1):
-        ids_lote = alunos_ids_lotes[lote_num - 1]
-        
-        # Filtrar dados deste lote
-        dados_lote = {
-            'mts_individual': [d for d in todos_dados['mts_individual'] if d[0] in ids_lote],
-            'mts_grupo': [d for d in todos_dados['mts_grupo'] if d[0] in ids_lote],
-            'msa_individual': [d for d in todos_dados['msa_individual'] if d[0] in ids_lote],
-            'msa_grupo': [d for d in todos_dados['msa_grupo'] if d[0] in ids_lote],
-            'provas': [d for d in todos_dados['provas'] if d[0] in ids_lote],
-            'hinario_individual': [d for d in todos_dados['hinario_individual'] if d[0] in ids_lote],
-            'hinario_grupo': [d for d in todos_dados['hinario_grupo'] if d[0] in ids_lote],
-            'metodos': [d for d in todos_dados['metodos'] if d[0] in ids_lote],
-            'escalas_individual': [d for d in todos_dados['escalas_individual'] if d[0] in ids_lote],
-            'escalas_grupo': [d for d in todos_dados['escalas_grupo'] if d[0] in ids_lote]
-        }
-        
-        # Filtrar resumo deste lote
-        resumo_lote = [r for r in resumo_alunos if r[0] in ids_lote]
-        
-        payload = {
-            'tipo': 'licoes_alunos_lote',
-            'lote_numero': lote_num,
-            'total_lotes': total_lotes,
-            'mts_individual': dados_lote['mts_individual'],
-            'mts_grupo': dados_lote['mts_grupo'],
-            'msa_individual': dados_lote['msa_individual'],
-            'msa_grupo': dados_lote['msa_grupo'],
-            'provas': dados_lote['provas'],
-            'hinario_individual': dados_lote['hinario_individual'],
-            'hinario_grupo': dados_lote['hinario_grupo'],
-            'metodos': dados_lote['metodos'],
-            'escalas_individual': dados_lote['escalas_individual'],
-            'escalas_grupo': dados_lote['escalas_grupo'],
-            'resumo': resumo_lote,
-            'metadata': {
-                'alunos_inicio': (lote_num - 1) * HISTORICO_TAMANHO_LOTE,
-                'alunos_fim': min(lote_num * HISTORICO_TAMANHO_LOTE, total_alunos),
-                'total_alunos_processados': total_alunos,
-                'alunos_com_dados': historico_stats['com_dados'],
-                'alunos_sem_dados': historico_stats['sem_dados'],
-                'tempo_coleta_segundos': tempo_total,
-                'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        }
-        
-        print(f"📤 Enviando lote {lote_num}/{total_lotes}...")
-        
-        try:
-            response = requests.post(
-                URL_APPS_SCRIPT_HISTORICO, 
-                json=payload, 
-                timeout=120
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('sucesso'):
-                    print(f"   ✅ Lote {lote_num} enviado com sucesso")
-                    
-                    # Se é o último lote, mostrar URL final
-                    if lote_num == total_lotes and 'planilha' in result:
-                        print(f"\n🎉 PLANILHA COMPLETA CRIADA!")
-                        print(f"📊 URL: {result['planilha']['url']}")
-                else:
-                    print(f"   ⚠️ Erro no lote {lote_num}: {result.get('erro', 'Desconhecido')}")
-            else:
-                print(f"   ⚠️ Erro HTTP {response.status_code} no lote {lote_num}")
-        
-        except requests.exceptions.Timeout:
-            print(f"   ⚠️ Timeout no lote {lote_num} (continuando...)")
-        except Exception as e:
-            print(f"   ⚠️ Erro no lote {lote_num}: {e}")
-        
-        # Delay entre lotes
-        if lote_num < total_lotes:
-            time.sleep(2)
-    
-    print("\n✅ Envio em lotes concluído!")
+    # ✅ ENVIAR EM LOTES
+    enviar_lotes_google_sheets(todos_dados, alunos_modulo2, tempo_total)
 
 # ==================== MAIN - ORQUESTRADOR ====================
 
@@ -1260,69 +1083,35 @@ def main():
     tempo_inicio_total = time.time()
     
     print("\n" + "=" * 80)
-    print("🎼 SISTEMA MUSICAL - COLETOR UNIFICADO V2.0 CORRIGIDO")
+    print("🎼 SISTEMA MUSICAL - COLETOR UNIFICADO CORRIGIDO")
     print("=" * 80)
     print("📋 Ordem de execução:")
-    print("   1️⃣ Login Único")
-    print("   2️⃣ Localidades de Hortolândia (salva IDs de igrejas)")
-    print("   3️⃣ Buscar Alunos das Igrejas Coletadas")
-    print("   4️⃣ Histórico Individual (coleta + envio em lotes)")
+    print("   1️⃣ Localidades de Hortolândia (varredura de IDs)")
+    print("   2️⃣ Buscar Alunos (do Google Sheets)")
+    print("   3️⃣ Histórico Individual (3 fases: async + fallback + cirúrgica)")
     print("=" * 80)
     
-    # ==================== PASSO 1: LOGIN ÚNICO ====================
+    # PASSO 1: Login único
     session, cookies = fazer_login_unico()
     
     if not session:
         print("\n❌ Falha no login. Encerrando processo.")
         return
     
-    # ==================== PASSO 2: EXECUTAR LOCALIDADES ====================
-    print("\n🔄 Iniciando Módulo 1: Localidades...")
-    ids_igrejas = executar_localidades(session)
+    # PASSO 2: Executar Localidades (opcional - pode ser pulado)
+    # ids_igrejas = executar_localidades(session)
     
-    if not ids_igrejas:
-        print("\n❌ Nenhuma localidade encontrada. Abortando processo.")
-        return
-    
-    print(f"\n✅ Módulo 1 concluído: {len(ids_igrejas)} igrejas identificadas")
-    
-    # Salvar IDs em JSON para backup
-    timestamp_ids = datetime.now().strftime('%d_%m_%Y-%H_%M')
-    with open(f'ids_igrejas_{timestamp_ids}.json', 'w') as f:
-        json.dump({'ids': ids_igrejas, 'timestamp': timestamp_ids}, f)
-    print(f"💾 IDs salvos em: ids_igrejas_{timestamp_ids}.json")
-    
-    # ==================== PASSO 3: COLETAR ALUNOS ====================
-    print("\n🔄 Iniciando Módulo 2: Coleta de Alunos...")
-    alunos = executar_coleta_alunos(session, ids_igrejas)
+    # PASSO 3: Buscar alunos do Google Sheets
+    alunos = buscar_alunos_hortolandia()
     
     if not alunos:
-        print("\n❌ Módulo 2 não encontrou alunos. Abortando processo.")
+        print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
         return
     
-    print(f"\n✅ Módulo 2 concluído: {len(alunos)} alunos coletados")
-    
-    # ==================== VALIDAÇÃO: IDs de igreja compatíveis ====================
-    ids_igrejas_alunos = set([a['id_igreja'] for a in alunos])
-    ids_igrejas_locais = set(ids_igrejas)
-    
-    print(f"\n🔍 Validação de Integridade:")
-    print(f"   IDs de igrejas (Módulo 1): {len(ids_igrejas_locais)}")
-    print(f"   IDs únicos nos alunos: {len(ids_igrejas_alunos)}")
-    
-    intersecao = ids_igrejas_alunos.intersection(ids_igrejas_locais)
-    print(f"   IDs compatíveis: {len(intersecao)}")
-    
-    if len(intersecao) == len(ids_igrejas_alunos):
-        print(f"   ✅ Todos os alunos pertencem às igrejas identificadas!")
-    else:
-        print(f"   ⚠️ {len(ids_igrejas_alunos) - len(intersecao)} IDs de alunos não encontrados nas localidades")
-    
-    # ==================== PASSO 4: EXECUTAR HISTÓRICO COM LOTES ====================
-    print("\n🔄 Iniciando Módulo 3: Histórico Individual...")
+    # PASSO 4: Executar Histórico com envio em lotes
     executar_historico(cookies, alunos)
     
-    # ==================== RESUMO FINAL ====================
+    # RESUMO FINAL
     tempo_total = time.time() - tempo_inicio_total
     
     print("\n" + "=" * 80)
@@ -1330,18 +1119,10 @@ def main():
     print("=" * 80)
     print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
     print(f"📊 Módulos executados:")
-    print(f"   ✅ Módulo 1: {len(ids_igrejas)} localidades coletadas")
-    print(f"   ✅ Módulo 2: {len(alunos)} alunos coletados")
+    print(f"   ✅ Módulo 2: {len(alunos)} alunos carregados")
     print(f"   ✅ Módulo 3: {len(historico_stats['alunos_processados'])} históricos")
-    print(f"\n💾 Backups locais:")
-    print(f"   📄 backup_localidades_*.json")
-    print(f"   📄 backup_membros_*.json")
-    print(f"   📄 backup_historico_*.json")
-    print(f"   📄 ids_igrejas_*.json")
-    print(f"\n📊 Planilhas criadas no Google Sheets:")
-    print(f"   📁 Localidades → Pasta: 1i53hnPKn0M5TG6489HbzkTd0p393z4xf")
-    print(f"   📁 Membros → Pasta: 1cQVxXJBMxW62Hu1hq9RlpkRP2WBzM7YL")
-    print(f"   📁 Histórico → Pasta: 1aplI0rCB-s9NXCrDNcvkcfQim_xfBZja")
+    print(f"💾 Todos os backups salvos localmente")
+    print(f"📊 Planilhas criadas no Google Sheets")
     print("=" * 80 + "\n")
 
 if __name__ == "__main__":
