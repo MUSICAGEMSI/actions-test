@@ -1,10 +1,10 @@
-name: Coleta Musical Oficial
+name: Coleta Musical Ultra Rápida
 
 on:
   # 🕐 Execução automática todos os dias às 00h43 AM (horário de Brasília = UTC-3)
   # Brasília 00h43 AM = 3h43 AM UTC
   schedule:
-    - cron: '48 3 * * *'  # Executa às 03:43 UTC = 00:43 Brasília
+    - cron: '54 3 * * *'  # Executa às 03:43 UTC = 00:43 Brasília
   
   # Mantém a opção de execução manual
   workflow_dispatch:
@@ -17,8 +17,6 @@ on:
         options:
           - script_seq1.py
           - script_seq2.py
-          - script_matriculados.py
-          - ambos
 
 jobs:
   # 🎯 Job 1: Executa SEQ1
@@ -137,10 +135,9 @@ jobs:
           fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  # 🎯 Job 2: Executa SEQ2 (aguarda SEQ1 terminar)
+  # 🎯 Job 2: Executa SEQ2 (em paralelo com SEQ1)
   coleta-seq2:
     runs-on: ubuntu-latest
-    needs: coleta-seq1  # Aguarda SEQ1 completar
     timeout-minutes: 360  # 🔥 6 HORAS - Tempo máximo do GitHub Actions
     
     steps:
