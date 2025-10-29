@@ -1,10 +1,10 @@
-name: Coleta Musical Ultra Rápida
+name: Coleta Musical Ultra Rápida 🔥
 
 on:
   # 🕐 Execução automática todos os dias às 00h30 AM (horário de Brasília = UTC-3)
   # Brasília 00h30 AM = 3h30 AM UTC
   schedule:
-    - cron: '30 3 * * *'  # Executa às 03:30 UTC = 00:30 Brasília
+    - cron: '38 3 * * *'  # Executa às 03:30 UTC = 00:30 Brasília
   
   # Mantém a opção de execução manual
   workflow_dispatch:
