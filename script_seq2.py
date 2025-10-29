@@ -511,7 +511,7 @@ def executar_historico_aulas(session):
         print("❌ Não foi possível carregar instrutores. Abortando módulo.")
         return None
     
-    data_hora_inicio = datetime(2024, 1, 1, 0, 0, 0)
+    data_hora_inicio = datetime(2025, 8, 1, 0, 0, 0)
     data_hora_fim = datetime.now()
     
     print(f"\n📅 Período: {data_hora_inicio.strftime('%d/%m/%Y')} até {data_hora_fim.strftime('%d/%m/%Y')}")
@@ -873,7 +873,7 @@ def executar_turmas_corrigido(session):
     print("🔍 BUSCANDO TODAS AS TURMAS DO SISTEMA")
     print("=" * 80)
     
-    ids_turmas_sistema = buscar_todas_turmas_sistema(session, id_min=1, id_max=40000)
+    ids_turmas_sistema = buscar_todas_turmas_sistema(session, id_min=27000, id_max=57000)
     
     if not ids_turmas_sistema:
         print("❌ Nenhuma turma encontrada. Abortando módulo.")
