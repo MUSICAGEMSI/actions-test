@@ -17,6 +17,7 @@ on:
         options:
           - script_seq1.py
           - script_seq2.py
+          - script_matriculados.py
           - ambos
 
 jobs:
