@@ -28,8 +28,8 @@ URL_APPS_SCRIPT_LOCALIDADES = 'https://script.google.com/macros/s/AKfycbzJv9Ylse
 URL_APPS_SCRIPT_HISTORICO = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
 # MÓDULO 1: LOCALIDADES
-LOCALIDADES_RANGE_INICIO = 1
-LOCALIDADES_RANGE_FIM = 50000
+LOCALIDADES_RANGE_INICIO = 20390
+LOCALIDADES_RANGE_FIM = 20392
 LOCALIDADES_NUM_THREADS = 20
 
 # MÓDULO 3: HISTÓRICO - Configuração híbrida
@@ -43,9 +43,9 @@ HISTORICO_CIRURGICO_RETRIES = 6
 HISTORICO_CIRURGICO_DELAY = 2
 HISTORICO_CHUNK_SIZE = 400
 
-# ✅ NOVO: Configuração de lotes para envio ao Google Sheets
-LOTE_TAMANHO = 200  # Processar 200 alunos por lote
-LOTE_TIMEOUT = 90   # 90 segundos por lote
+# Configuração de lotes para envio ao Google Sheets
+LOTE_TAMANHO = 200
+LOTE_TIMEOUT = 90
 
 if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
@@ -100,6 +100,35 @@ def extrair_cookies_playwright(pagina):
 def gerar_timestamp():
     """Gera timestamp no formato DD_MM_YYYY-HH:MM"""
     return datetime.now().strftime('%d_%m_%Y-%H:%M')
+
+def formatar_data_brasileira(data_str: str) -> str:
+    """
+    Converte data para formato brasileiro garantido DD/MM/YYYY
+    Aceita: DD/MM/YY, DD/MM/YYYY, ou variações
+    """
+    if not data_str or data_str.strip() == '':
+        return ''
+    
+    data_str = data_str.strip()
+    
+    # Tentar parsing com diferentes formatos
+    formatos = [
+        '%d/%m/%Y',  # 05/08/2024
+        '%d/%m/%y',  # 05/08/24
+        '%d-%m-%Y',  # 05-08-2024
+        '%d-%m-%y',  # 05-08-24
+    ]
+    
+    for formato in formatos:
+        try:
+            data_obj = datetime.strptime(data_str, formato)
+            # Retornar SEMPRE no formato DD/MM/YYYY
+            return data_obj.strftime('%d/%m/%Y')
+        except:
+            continue
+    
+    # Se não conseguiu parsear, retornar original
+    return data_str
 
 # ==================== LOGIN ÚNICO ====================
 
@@ -369,7 +398,7 @@ def validar_resposta_rigorosa(text: str, id_aluno: int) -> tuple:
     return True, tem_dados
 
 def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
-    """Extração completa e robusta de todos os dados"""
+    """Extração completa e robusta de todos os dados COM FORMATAÇÃO DE DATAS"""
     dados = {
         'mts_individual': [], 'mts_grupo': [],
         'msa_individual': [], 'msa_grupo': [],
@@ -393,6 +422,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ FORMATAR DATA (índice 6)
+                            campos[6] = formatar_data_brasileira(campos[6])
                             dados['mts_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MTS Grupo
@@ -403,6 +434,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # ✅ FORMATAR DATA (índice 2)
+                            campos[2] = formatar_data_brasileira(campos[2])
                             dados['mts_grupo'].append([id_aluno, nome_aluno] + campos)
         
         # MSA Individual
@@ -416,6 +449,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ FORMATAR DATA (índice 6)
+                            campos[6] = formatar_data_brasileira(campos[6])
                             dados['msa_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MSA Grupo
@@ -450,6 +485,9 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                             observacoes = cols[1].get_text(strip=True) if len(cols) > 1 else ""
                             data_licao = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                             
+                            # ✅ FORMATAR DATA
+                            data_licao = formatar_data_brasileira(data_licao)
+                            
                             dados['msa_grupo'].append([
                                 id_aluno, nome_aluno,
                                 fases_de, fases_ate,
@@ -468,6 +506,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 5:
                             campos = [c.get_text(strip=True) for c in cols[:5]]
+                            # ✅ FORMATAR DATA (índice 4)
+                            campos[4] = formatar_data_brasileira(campos[4])
                             dados['provas'].append([id_aluno, nome_aluno] + campos)
         
         # HINÁRIO Individual
@@ -481,6 +521,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ FORMATAR DATA (índice 6)
+                            campos[6] = formatar_data_brasileira(campos[6])
                             dados['hinario_individual'].append([id_aluno, nome_aluno] + campos)
             
             # HINÁRIO Grupo
@@ -491,6 +533,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # ✅ FORMATAR DATA (índice 2)
+                            campos[2] = formatar_data_brasileira(campos[2])
                             dados['hinario_grupo'].append([id_aluno, nome_aluno] + campos)
         
         # MÉTODOS
@@ -504,6 +548,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ FORMATAR DATA (índice 6)
+                            campos[6] = formatar_data_brasileira(campos[6])
                             dados['metodos'].append([id_aluno, nome_aluno] + campos)
         
         # ESCALAS Individual
@@ -517,6 +563,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 6:
                             campos = [c.get_text(strip=True) for c in cols[:6]]
+                            # ✅ FORMATAR DATA (índice 5)
+                            campos[5] = formatar_data_brasileira(campos[5])
                             dados['escalas_individual'].append([id_aluno, nome_aluno] + campos)
             
             # ESCALAS Grupo
@@ -527,6 +575,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # ✅ FORMATAR DATA (índice 2)
+                            campos[2] = formatar_data_brasileira(campos[2])
                             dados['escalas_grupo'].append([id_aluno, nome_aluno] + campos)
     
     except Exception as e:
@@ -871,7 +921,6 @@ def filtrar_dados_vazios(dados: Dict) -> Dict:
     
     return dados_filtrados
 
-# ✅ NOVA FUNÇÃO: Enviar dados em lotes para Google Sheets
 def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], tempo_total: float):
     """Envia dados em lotes para evitar timeout do Google Apps Script"""
     print("\n" + "=" * 80)
@@ -1074,7 +1123,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
         }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    # ✅ ENVIAR EM LOTES
+    # Enviar em lotes
     enviar_lotes_google_sheets(todos_dados, alunos_modulo2, tempo_total)
 
 # ==================== MAIN - ORQUESTRADOR ====================
@@ -1083,12 +1132,12 @@ def main():
     tempo_inicio_total = time.time()
     
     print("\n" + "=" * 80)
-    print("🎼 SISTEMA MUSICAL - COLETOR UNIFICADO CORRIGIDO")
+    print("🎼 SISTEMA MUSICAL - COLETOR COM DATAS CORRIGIDAS")
     print("=" * 80)
     print("📋 Ordem de execução:")
     print("   1️⃣ Localidades de Hortolândia (varredura de IDs)")
     print("   2️⃣ Buscar Alunos (do Google Sheets)")
-    print("   3️⃣ Histórico Individual (3 fases: async + fallback + cirúrgica)")
+    print("   3️⃣ Histórico Individual (3 fases + formatação de datas)")
     print("=" * 80)
     
     # PASSO 1: Login único
@@ -1098,7 +1147,7 @@ def main():
         print("\n❌ Falha no login. Encerrando processo.")
         return
     
-    # PASSO 2: Executar Localidades (opcional - pode ser pulado)
+    # PASSO 2: Executar Localidades (opcional)
     # ids_igrejas = executar_localidades(session)
     
     # PASSO 3: Buscar alunos do Google Sheets
@@ -1108,7 +1157,7 @@ def main():
         print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
         return
     
-    # PASSO 4: Executar Histórico com envio em lotes
+    # PASSO 4: Executar Histórico com datas formatadas
     executar_historico(cookies, alunos)
     
     # RESUMO FINAL
@@ -1123,6 +1172,7 @@ def main():
     print(f"   ✅ Módulo 3: {len(historico_stats['alunos_processados'])} históricos")
     print(f"💾 Todos os backups salvos localmente")
     print(f"📊 Planilhas criadas no Google Sheets")
+    print(f"✅ Todas as datas no formato DD/MM/YYYY")
     print("=" * 80 + "\n")
 
 if __name__ == "__main__":
