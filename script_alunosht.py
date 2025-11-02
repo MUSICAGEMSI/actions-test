@@ -14,8 +14,8 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
 
-RANGE_INICIO = 600000
-RANGE_FIM = 700000
+RANGE_INICIO = 1
+RANGE_FIM = 850000
 NUM_THREADS = 25
 
 if not EMAIL or not SENHA:
