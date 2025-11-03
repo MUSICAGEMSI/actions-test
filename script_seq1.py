@@ -646,7 +646,7 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
             # HINÁRIO Grupo
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
-                if tbodyif tbody_g:
+                if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
