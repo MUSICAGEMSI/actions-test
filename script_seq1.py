@@ -33,11 +33,10 @@ LOCALIDADES_RANGE_INICIO = 20390
 LOCALIDADES_RANGE_FIM = 20392
 LOCALIDADES_NUM_THREADS = 20
 
-# MÓDULO 2: ALUNOS (MEMBROS)
-ALUNOS_NUM_THREADS = 30
-ALUNOS_RANGE_INICIO = 1
-ALUNOS_RANGE_FIM = 850000  # Range completo de IDs de membros
-ALUNOS_CHUNK_SIZE = 50000  # Processar em lotes de 50k
+# MÓDULO 2: ALUNOS (VARREDURA DE IDS)
+ALUNOS_RANGE_INICIO = 600000
+ALUNOS_RANGE_FIM = 650000
+ALUNOS_NUM_THREADS = 25
 
 # MÓDULO 3: HISTÓRICO
 HISTORICO_ASYNC_CONNECTIONS = 250
@@ -85,7 +84,7 @@ def criar_sessao_robusta():
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST", "HEAD"]
     )
-    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retry_strategy)
+    adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=retry_strategy)
     session.mount('https://', adapter)
     session.mount('http://', adapter)
     return session
@@ -117,16 +116,12 @@ def formatar_data_brasileira(data_str: str) -> str:
     return data_str
 
 def validar_e_corrigir_data(data_str: str) -> str:
-    """
-    Validação extra: detecta se data está invertida comparando com data atual
-    Ex: Se vier "09/02/2025" mas hoje é 02/11/2025, pode estar invertido
-    """
+    """Validação extra: detecta se data está invertida"""
     if not data_str or data_str.strip() == '':
         return ''
     
     data_formatada = formatar_data_brasileira(data_str)
     
-    # Se contém '/', verificar se faz sentido cronologicamente
     if '/' in data_formatada:
         try:
             partes = data_formatada.split('/')
@@ -135,14 +130,11 @@ def validar_e_corrigir_data(data_str: str) -> str:
                 mes = int(partes[1])
                 ano = int(partes[2])
                 
-                # Validação básica
                 if dia > 31 or mes > 12:
-                    # Tentar inverter
                     if mes <= 31 and dia <= 12:
                         safe_print(f"⚠️ Data invertida detectada: {data_formatada} → {mes:02d}/{dia:02d}/{ano}")
                         return f"{mes:02d}/{dia:02d}/{ano}"
                 
-                # Validar se a data é válida
                 datetime(ano, mes, dia)
                 return data_formatada
         except:
@@ -374,129 +366,208 @@ def executar_localidades(session):
     
     return ids_igrejas
 
-# ==================== MÓDULO 2: BUSCAR MEMBROS (CORRIGIDO) ====================
+# ==================== MÓDULO 2: BUSCAR ALUNOS (VARREDURA) ====================
 
-def extrair_dados_membro(html: str, id_membro: int) -> Optional[Dict]:
-    """Extrai dados do membro do HTML da página de edição"""
-    if not html or 'igreja_selecionada' not in html:
+def extrair_dados_completos_aluno(html_content: str, id_aluno: int) -> Optional[Dict]:
+    """Extrai TODOS os dados disponíveis do aluno do HTML"""
+    if not html_content or 'igreja_selecionada' not in html_content:
         return None
     
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(html_content, 'html.parser')
+    dados = {'id_aluno': id_aluno}
     
     # Nome
     nome_input = soup.find('input', {'name': 'nome'})
-    nome = nome_input.get('value', '').strip() if nome_input else ''
+    dados['nome'] = nome_input.get('value', '').strip() if nome_input else ''
     
     # ID da Igreja
-    match_igreja = re.search(r'igreja_selecionada\s*\((\d+)\)', html)
-    id_igreja = int(match_igreja.group(1)) if match_igreja else None
+    match_igreja = re.search(r'igreja_selecionada\s*\((\d+)\)', html_content)
+    dados['id_igreja'] = int(match_igreja.group(1)) if match_igreja else None
     
-    if not id_igreja or not nome:
-        return None
+    # Cargo/Ministério
+    cargo_select = soup.find('select', {'name': 'id_cargo', 'id': 'id_cargo'})
+    if cargo_select:
+        cargo_option = cargo_select.find('option', {'selected': True})
+        if cargo_option:
+            dados['id_cargo'] = cargo_option.get('value', '')
+            dados['cargo_nome'] = cargo_option.text.strip()
+        else:
+            dados['id_cargo'] = ''
+            dados['cargo_nome'] = ''
     
-    return {
-        'id_aluno': id_membro,
-        'nome': nome,
-        'id_igreja': id_igreja
-    }
-
-def buscar_membro_por_id(id_membro: int, session: requests.Session, ids_igrejas: Set[int]) -> Optional[Dict]:
-    """Busca um membro específico e verifica se pertence às igrejas de Hortolândia"""
-    try:
-        url = f"https://musical.congregacao.org.br/grp_musical/editar/{id_membro}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        resp = session.get(url, headers=headers, timeout=10)
-        
-        if resp.status_code == 200:
-            dados = extrair_dados_membro(resp.text, id_membro)
+    # Nível
+    nivel_select = soup.find('select', {'name': 'id_nivel', 'id': 'id_nivel'})
+    if nivel_select:
+        nivel_option = nivel_select.find('option', {'selected': True})
+        if nivel_option:
+            dados['id_nivel'] = nivel_option.get('value', '')
+            dados['nivel_nome'] = nivel_option.text.strip()
+        else:
+            dados['id_nivel'] = ''
+            dados['nivel_nome'] = ''
+    
+    # Instrumento
+    instrumento_select = soup.find('select', {'name': 'id_instrumento', 'id': 'id_instrumento'})
+    if instrumento_select:
+        instrumento_option = instrumento_select.find('option', {'selected': True})
+        if instrumento_option:
+            dados['id_instrumento'] = instrumento_option.get('value', '')
+            dados['instrumento_nome'] = instrumento_option.text.strip()
+        else:
+            dados['id_instrumento'] = ''
+            dados['instrumento_nome'] = ''
+    
+    # Tonalidade
+    tonalidade_select = soup.find('select', {'name': 'id_tonalidade', 'id': 'id_tonalidade'})
+    if tonalidade_select:
+        tonalidade_option = tonalidade_select.find('option', {'selected': True})
+        if tonalidade_option:
+            dados['id_tonalidade'] = tonalidade_option.get('value', '')
+            dados['tonalidade_nome'] = tonalidade_option.text.strip()
+        else:
+            dados['id_tonalidade'] = ''
+            dados['tonalidade_nome'] = ''
+    
+    # Status
+    fl_tipo_input = soup.find('input', {'name': 'fl_tipo'})
+    dados['fl_tipo'] = fl_tipo_input.get('value', '') if fl_tipo_input else ''
+    
+    status_input = soup.find('input', {'name': 'status'})
+    dados['status'] = status_input.get('value', '') if status_input else ''
+    
+    # Histórico do Registro
+    historico_div = soup.find('div', {'id': 'collapseOne'})
+    if historico_div:
+        cadastro_p = historico_div.find('p', string=re.compile(r'Cadastrado em:'))
+        if cadastro_p:
+            texto = cadastro_p.get_text()
+            match_data = re.search(r'Cadastrado em:\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})', texto)
+            match_usuario = re.search(r'por:\s*(.+)$', texto)
             
-            # Só retorna se pertencer a uma das igrejas de Hortolândia
-            if dados and dados['id_igreja'] in ids_igrejas:
-                return dados
+            dados['data_cadastro'] = match_data.group(1).strip() if match_data else ''
+            dados['cadastrado_por'] = match_usuario.group(1).strip() if match_usuario else ''
         
-        return None
-    except:
-        return None
+        atualizacao_p = historico_div.find('p', string=re.compile(r'Atualizado em:'))
+        if atualizacao_p:
+            texto = atualizacao_p.get_text()
+            match_data = re.search(r'Atualizado em:\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})', texto)
+            match_usuario = re.search(r'por:\s*(.+)$', texto)
+            
+            dados['data_atualizacao'] = match_data.group(1).strip() if match_data else ''
+            dados['atualizado_por'] = match_usuario.group(1).strip() if match_usuario else ''
+    
+    return dados
+
+class ColetorAlunosThread:
+    def __init__(self, session, thread_id: int, ids_igrejas: Set[int]):
+        self.session = session
+        self.thread_id = thread_id
+        self.ids_igrejas = ids_igrejas
+        self.alunos_encontrados: List[Dict] = []
+        self.requisicoes_feitas = 0
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+    
+    def coletar_batch_alunos(self, ids_batch: List[int]) -> List[Dict]:
+        """Verifica um batch de IDs e retorna os alunos de Hortolândia"""
+        for aluno_id in ids_batch:
+            try:
+                url = f"https://musical.congregacao.org.br/grp_musical/editar/{aluno_id}"
+                
+                resp = self.session.get(url, headers=self.headers, timeout=10)
+                self.requisicoes_feitas += 1
+                
+                if resp.status_code == 200:
+                    dados_aluno = extrair_dados_completos_aluno(resp.text, aluno_id)
+                    
+                    if dados_aluno and dados_aluno['id_igreja'] in self.ids_igrejas:
+                        self.alunos_encontrados.append(dados_aluno)
+                        
+                        safe_print(f"✅ T{self.thread_id}: ID {aluno_id} | Igreja {dados_aluno['id_igreja']} | "
+                              f"{dados_aluno['nome'][:30]} | {dados_aluno.get('instrumento_nome', 'N/A')}")
+                
+                time.sleep(0.08)
+                
+                if self.requisicoes_feitas % 500 == 0:
+                    safe_print(f"📊 T{self.thread_id}: {self.requisicoes_feitas:,} requisições | "
+                          f"{len(self.alunos_encontrados)} alunos encontrados")
+                
+            except Exception as e:
+                if "timeout" in str(e).lower():
+                    safe_print(f"⏱️ T{self.thread_id}: Timeout no ID {aluno_id}")
+                continue
+        
+        return self.alunos_encontrados
 
 def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
-    """🎯 MÓDULO 2: Busca membros das igrejas de Hortolândia"""
+    """🎯 MÓDULO 2: Varre IDs de alunos e filtra por igrejas do Módulo 1"""
     tempo_inicio = time.time()
     timestamp_execucao = datetime.now()
     
     print("\n" + "=" * 80)
-    print("🎓 MÓDULO 2: BUSCAR MEMBROS DAS LOCALIDADES")
+    print("🎓 MÓDULO 2: BUSCAR ALUNOS DAS LOCALIDADES (VARREDURA)")
     print("=" * 80)
-    print(f"📊 Total de igrejas: {len(ids_igrejas)}")
-    print(f"🔍 Estratégia: Verificar IDs de membros e filtrar por igreja")
+    print(f"📊 Range: {ALUNOS_RANGE_INICIO:,} até {ALUNOS_RANGE_FIM:,}")
+    print(f"🏛️ Filtrando por {len(ids_igrejas)} igrejas de Hortolândia")
     print(f"🧵 Threads: {ALUNOS_NUM_THREADS}")
-    print(f"📈 Range de busca: {ALUNOS_RANGE_INICIO:,} até {ALUNOS_RANGE_FIM:,}")
-    print(f"⏱️ Tempo estimado: ~2-4 horas")
     
-    # Converter lista para set para busca mais rápida
     ids_igrejas_set = set(ids_igrejas)
+    total_ids = ALUNOS_RANGE_FIM - ALUNOS_RANGE_INICIO + 1
+    ids_per_thread = total_ids // ALUNOS_NUM_THREADS
+    
+    print(f"\n🚀 Varrendo {total_ids:,} IDs de alunos...")
+    print(f"📈 {ids_per_thread:,} IDs por thread")
+    
+    # Dividir IDs entre threads
+    thread_ranges = []
+    for i in range(ALUNOS_NUM_THREADS):
+        inicio = ALUNOS_RANGE_INICIO + (i * ids_per_thread)
+        fim = inicio + ids_per_thread - 1
+        
+        if i == ALUNOS_NUM_THREADS - 1:
+            fim = ALUNOS_RANGE_FIM
+            
+        thread_ranges.append(list(range(inicio, fim + 1)))
     
     todos_alunos = []
     
-    print(f"\n🚀 Processando em chunks de {ALUNOS_CHUNK_SIZE:,} IDs...")
-    
-    total_verificados = 0
-    
-    for chunk_inicio in range(ALUNOS_RANGE_INICIO, ALUNOS_RANGE_FIM + 1, ALUNOS_CHUNK_SIZE):
-        chunk_fim = min(chunk_inicio + ALUNOS_CHUNK_SIZE - 1, ALUNOS_RANGE_FIM)
-        chunk_num = (chunk_inicio - ALUNOS_RANGE_INICIO) // ALUNOS_CHUNK_SIZE + 1
-        total_chunks = (ALUNOS_RANGE_FIM - ALUNOS_RANGE_INICIO + 1 + ALUNOS_CHUNK_SIZE - 1) // ALUNOS_CHUNK_SIZE
+    with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
+        coletores = [ColetorAlunosThread(session, i, ids_igrejas_set) for i in range(ALUNOS_NUM_THREADS)]
         
-        print(f"\n📦 Chunk {chunk_num}/{total_chunks}: IDs {chunk_inicio:,} até {chunk_fim:,}")
+        futures = []
+        for i, ids_thread in enumerate(thread_ranges):
+            future = executor.submit(coletores[i].coletar_batch_alunos, ids_thread)
+            futures.append((future, i))
         
-        with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
-            futures = {
-                executor.submit(buscar_membro_por_id, id_membro, session, ids_igrejas_set): id_membro
-                for id_membro in range(chunk_inicio, chunk_fim + 1)
-            }
-            
-            processados_chunk = 0
-            for future in as_completed(futures):
-                processados_chunk += 1
-                total_verificados += 1
-                membro = future.result()
-                
-                if membro:
-                    todos_alunos.append(membro)
-                    print(f"✓ [{total_verificados:,}] ID {membro['id_aluno']}: {membro['nome'][:40]} (Igreja {membro['id_igreja']})")
-                
-                # Feedback a cada 5000 IDs
-                if processados_chunk % 5000 == 0:
-                    tempo_decorrido = time.time() - tempo_inicio
-                    velocidade = total_verificados / tempo_decorrido
-                    ids_restantes = ALUNOS_RANGE_FIM - (chunk_inicio + processados_chunk - 1)
-                    tempo_restante = ids_restantes / velocidade / 60
-                    
-                    print(f"   ⏱️ Progresso chunk: {processados_chunk:,}/{ALUNOS_CHUNK_SIZE:,} | "
-                          f"Total membros: {len(todos_alunos)} | "
-                          f"Velocidade: {velocidade:.0f} IDs/s | "
-                          f"Tempo restante: ~{tempo_restante:.0f}min")
-        
-        # Feedback ao final de cada chunk
-        tempo_decorrido = time.time() - tempo_inicio
-        print(f"   ✅ Chunk {chunk_num} concluído | Total: {len(todos_alunos)} membros | "
-              f"Tempo: {tempo_decorrido/60:.1f}min")
+        for future, thread_id in futures:
+            try:
+                alunos_thread = future.result(timeout=7200)  # 2 horas timeout
+                todos_alunos.extend(alunos_thread)
+                coletor = coletores[thread_id]
+                print(f"✅ Thread {thread_id}: {len(alunos_thread)} alunos | "
+                      f"{coletor.requisicoes_feitas:,} requisições")
+            except Exception as e:
+                print(f"❌ Thread {thread_id}: Erro - {e}")
     
     tempo_total = time.time() - tempo_inicio
     
-    print(f"\n✅ Busca finalizada: {len(todos_alunos)} membros encontrados")
-    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
-    print(f"📊 IDs verificados: {total_verificados:,}")
-    print(f"⚡ Velocidade média: {total_verificados/tempo_total:.0f} IDs/segundo")
+    print(f"\n✅ Busca finalizada: {len(todos_alunos)} alunos encontrados")
+    print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
+    print(f"⚡ Velocidade: {total_ids/tempo_total:.2f} IDs verificados/segundo")
     
-    if len(todos_alunos) > 0:
-        # Estatísticas por igreja
+    # Estatísticas
+    if todos_alunos:
         print(f"\n📊 Distribuição por igreja:")
-        distribuicao = Counter([m['id_igreja'] for m in todos_alunos])
-        for igreja_id, qtd in sorted(distribuicao.items()):
-            print(f"   Igreja {igreja_id}: {qtd} membros")
+        distribuicao = Counter([a['id_igreja'] for a in todos_alunos])
+        for igreja_id, qtd in distribuicao.most_common():
+            print(f"   Igreja {igreja_id}: {qtd} alunos")
+        
+        print(f"\n🎵 Distribuição por instrumento:")
+        distribuicao_inst = Counter([a.get('instrumento_nome', 'N/A') for a in todos_alunos])
+        for instrumento, qtd in distribuicao_inst.most_common(10):
+            print(f"   {instrumento}: {qtd} alunos")
     
     # 💾 Backup local JSON
     timestamp_backup = timestamp_execucao.strftime('%d_%m_%Y-%H_%M')
@@ -507,38 +578,64 @@ def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
             'alunos': todos_alunos,
             'timestamp': timestamp_backup,
             'total': len(todos_alunos),
-            'range_verificado': f"{ALUNOS_RANGE_INICIO}-{ALUNOS_RANGE_FIM}",
-            'ids_verificados': total_verificados
+            'ids_igrejas': ids_igrejas
         }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
     # 📤 Enviar para Google Sheets
     print("\n📤 Enviando para Google Sheets...")
     
-    dados_formatados = [
-        [aluno['id_aluno'], aluno['nome'], aluno['id_igreja']]
-        for aluno in todos_alunos
+    headers = [
+        "ID_ALUNO", "NOME", "ID_IGREJA", 
+        "ID_CARGO", "CARGO_NOME", 
+        "ID_NIVEL", "NIVEL_NOME",
+        "ID_INSTRUMENTO", "INSTRUMENTO_NOME",
+        "ID_TONALIDADE", "TONALIDADE_NOME",
+        "FL_TIPO", "STATUS",
+        "DATA_CADASTRO", "CADASTRADO_POR",
+        "DATA_ATUALIZACAO", "ATUALIZADO_POR"
     ]
+    
+    dados_formatados = []
+    for aluno in todos_alunos:
+        linha = [
+            str(aluno.get('id_aluno', '')),
+            aluno.get('nome', ''),
+            str(aluno.get('id_igreja', '')),
+            str(aluno.get('id_cargo', '')),
+            aluno.get('cargo_nome', ''),
+            str(aluno.get('id_nivel', '')),
+            aluno.get('nivel_nome', ''),
+            str(aluno.get('id_instrumento', '')),
+            aluno.get('instrumento_nome', ''),
+            str(aluno.get('id_tonalidade', '')),
+            aluno.get('tonalidade_nome', ''),
+            str(aluno.get('fl_tipo', '')),
+            str(aluno.get('status', '')),
+            aluno.get('data_cadastro', ''),
+            aluno.get('cadastrado_por', ''),
+            aluno.get('data_atualizacao', ''),
+            aluno.get('atualizado_por', '')
+        ]
+        dados_formatados.append(linha)
     
     payload = {
         "tipo": "nova_planilha_alunos",
         "nome_planilha": timestamp_execucao.strftime("Alunos_%d_%m_%y-%H:%M"),
-        "headers": ["ID_Aluno", "Nome", "ID_Igreja"],
+        "headers": headers,
         "dados": dados_formatados,
         "metadata": {
             "total_alunos": len(todos_alunos),
             "total_igrejas": len(ids_igrejas),
+            "range_inicio": ALUNOS_RANGE_INICIO,
+            "range_fim": ALUNOS_RANGE_FIM,
             "tempo_execucao_min": round(tempo_total/60, 2),
-            "timestamp": timestamp_backup,
-            "range_verificado_inicio": ALUNOS_RANGE_INICIO,
-            "range_verificado_fim": ALUNOS_RANGE_FIM,
-            "total_ids_verificados": total_verificados,
-            "velocidade_ids_segundo": round(total_verificados/tempo_total, 2)
+            "timestamp": timestamp_backup
         }
     }
     
     try:
-        resp = requests.post(URL_APPS_SCRIPT_ALUNOS, json=payload, timeout=60)
+        resp = requests.post(URL_APPS_SCRIPT_ALUNOS, json=payload, timeout=120)
         if resp.status_code == 200:
             resposta = resp.json()
             if resposta.get('status') == 'sucesso':
@@ -594,11 +691,10 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ VALIDAR E CORRIGIR DATAS (índices 4, 6)
-                            campos[4] = validar_e_corrigir_data(campos[4])  # DATA_LICAO
-                            campos[6] = validar_e_corrigir_data(campos[6])  # DATA_CADASTRO
+                            campos[4] = validar_e_corrigir_data(campos[4])
+                            campos[6] = validar_e_corrigir_data(campos[6])
                             if len(campos) > 7:
-                                campos[7] = validar_e_corrigir_data(campos[7])  # DATA_ALTERACAO
+                                campos[7] = validar_e_corrigir_data(campos[7])
                             dados['mts_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MTS Grupo
@@ -609,7 +705,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ VALIDAR DATA (índice 2)
                             campos[2] = validar_e_corrigir_data(campos[2])
                             dados['mts_grupo'].append([id_aluno, nome_aluno] + campos)
         
@@ -624,8 +719,7 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ VALIDAR DATA (índice 0)
-                            campos[0] = validar_e_corrigir_data(campos[0])  # DATA_LICAO
+                            campos[0] = validar_e_corrigir_data(campos[0])
                             dados['msa_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MSA Grupo
@@ -659,8 +753,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                             
                             observacoes = cols[1].get_text(strip=True) if len(cols) > 1 else ""
                             data_licao = cols[2].get_text(strip=True) if len(cols) > 2 else ""
-                            
-                            # ✅ VALIDAR DATA
                             data_licao = validar_e_corrigir_data(data_licao)
                             
                             dados['msa_grupo'].append([
@@ -681,10 +773,9 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 5:
                             campos = [c.get_text(strip=True) for c in cols[:5]]
-                            # ✅ VALIDAR DATAS (índices 2, 4)
-                            campos[2] = validar_e_corrigir_data(campos[2])  # DATA_PROVA
+                            campos[2] = validar_e_corrigir_data(campos[2])
                             if len(campos) > 4:
-                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_CADASTRO
+                                campos[4] = validar_e_corrigir_data(campos[4])
                             dados['provas'].append([id_aluno, nome_aluno] + campos)
         
         # HINÁRIO Individual
@@ -698,12 +789,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ VALIDAR DATAS (índices 2, 4, 5)
-                            campos[2] = validar_e_corrigir_data(campos[2])  # DATA_AULA
+                            campos[2] = validar_e_corrigir_data(campos[2])
                             if len(campos) > 4:
-                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_CADASTRO
+                                campos[4] = validar_e_corrigir_data(campos[4])
                             if len(campos) > 5:
-                                campos[5] = validar_e_corrigir_data(campos[5])  # DATA_ALTERACAO
+                                campos[5] = validar_e_corrigir_data(campos[5])
                             dados['hinario_individual'].append([id_aluno, nome_aluno] + campos)
             
             # HINÁRIO Grupo
@@ -714,7 +804,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ VALIDAR DATA (índice 2)
                             campos[2] = validar_e_corrigir_data(campos[2])
                             dados['hinario_grupo'].append([id_aluno, nome_aluno] + campos)
         
@@ -729,10 +818,9 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ VALIDAR DATAS (índices 3, 5)
-                            campos[3] = validar_e_corrigir_data(campos[3])  # DATA_LICAO
+                            campos[3] = validar_e_corrigir_data(campos[3])
                             if len(campos) > 5:
-                                campos[5] = validar_e_corrigir_data(campos[5])  # DATA_CADASTRO
+                                campos[5] = validar_e_corrigir_data(campos[5])
                             dados['metodos'].append([id_aluno, nome_aluno] + campos)
         
         # ESCALAS Individual
@@ -746,12 +834,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 6:
                             campos = [c.get_text(strip=True) for c in cols[:6]]
-                            # ✅ VALIDAR DATAS (índices 1, 3, 4)
-                            campos[1] = validar_e_corrigir_data(campos[1])  # DATA
+                            campos[1] = validar_e_corrigir_data(campos[1])
                             if len(campos) > 3:
-                                campos[3] = validar_e_corrigir_data(campos[3])  # DATA_CADASTRO
+                                campos[3] = validar_e_corrigir_data(campos[3])
                             if len(campos) > 4:
-                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_ALTERACAO
+                                campos[4] = validar_e_corrigir_data(campos[4])
                             dados['escalas_individual'].append([id_aluno, nome_aluno] + campos)
             
             # ESCALAS Grupo
@@ -762,7 +849,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ VALIDAR DATA (índice 2)
                             campos[2] = validar_e_corrigir_data(campos[2])
                             dados['escalas_grupo'].append([id_aluno, nome_aluno] + campos)
     
@@ -1305,12 +1391,23 @@ def executar_historico(cookies_dict, alunos_modulo2):
 def main():
     tempo_inicio_total = time.time()
     
+    print("=" * 80)
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("🚀 EXECUTANDO COLETA SEQUENCIAL COMPLETA - VERSÃO CORRIGIDA")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("📜 Script: script_seq1_CORRIGIDO.py")
+    print("⏱️  Timeout: 6 HORAS (máximo do GitHub Actions)")
+    print("🎯 Estratégia: 3 Módulos Sequenciais com Retry")
+    print("💪 Cada módulo cria JSON local + Planilha no Google Sheets")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("=" * 80)
+    
     print("\n" + "=" * 80)
     print("🎼 SISTEMA MUSICAL - COLETOR SEQUENCIAL CORRIGIDO")
     print("=" * 80)
     print("📋 Ordem de execução:")
     print("   1️⃣ Localidades de Hortolândia → Salva JSON + Envia Google Sheets")
-    print("   2️⃣ Buscar Alunos (usa IDs do Módulo 1) → Salva JSON + Envia Sheets")
+    print("   2️⃣ Buscar Alunos (VARREDURA usando IDs do Módulo 1) → Salva JSON + Envia Sheets")
     print("   3️⃣ Histórico Individual (usa alunos do Módulo 2) → Salva + Envia")
     print("=" * 80)
     
@@ -1329,7 +1426,7 @@ def main():
         print("\n⚠️ Módulo 1 não encontrou localidades. Interrompendo processo.")
         return
     
-    # PASSO 3: Executar Módulo 2 - Alunos (usando IDs do Módulo 1)
+    # PASSO 3: Executar Módulo 2 - Alunos (VARREDURA usando IDs do Módulo 1)
     print("\n🚀 Iniciando Módulo 2...")
     alunos = executar_busca_alunos(session, ids_igrejas)
     
@@ -1347,7 +1444,7 @@ def main():
     print("\n" + "=" * 80)
     print("🎉 PROCESSO COMPLETO FINALIZADO!")
     print("=" * 80)
-    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos ({tempo_total/3600:.2f} horas)")
     print(f"📊 Módulos executados:")
     print(f"   ✅ Módulo 1: {len(ids_igrejas)} localidades")
     print(f"   ✅ Módulo 2: {len(alunos)} alunos encontrados")
