@@ -511,7 +511,7 @@ def executar_historico_aulas(session):
         print("❌ Não foi possível carregar instrutores. Abortando módulo.")
         return None
     
-    data_hora_inicio = datetime(2025, 8, 1, 0, 0, 0)
+    data_hora_inicio = datetime(2024, 1, 1, 0, 0, 0)
     data_hora_fim = datetime.now()
     
     print(f"\n📅 Período: {data_hora_inicio.strftime('%d/%m/%Y')} até {data_hora_fim.strftime('%d/%m/%Y')}")
