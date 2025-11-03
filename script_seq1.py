@@ -15,7 +15,7 @@ import json
 import asyncio
 import aiohttp
 from typing import List, Dict, Optional, Set
-from collections import deque
+from collections import deque, Counter
 import threading
 
 # ==================== CONFIGURAÇÕES GLOBAIS ====================
@@ -33,8 +33,11 @@ LOCALIDADES_RANGE_INICIO = 20000
 LOCALIDADES_RANGE_FIM = 25000
 LOCALIDADES_NUM_THREADS = 20
 
-# MÓDULO 2: ALUNOS
+# MÓDULO 2: ALUNOS (MEMBROS)
 ALUNOS_NUM_THREADS = 30
+ALUNOS_RANGE_INICIO = 1
+ALUNOS_RANGE_FIM = 850000  # Range completo de IDs de membros
+ALUNOS_CHUNK_SIZE = 50000  # Processar em lotes de 50k
 
 # MÓDULO 3: HISTÓRICO
 HISTORICO_ASYNC_CONNECTIONS = 250
@@ -371,75 +374,129 @@ def executar_localidades(session):
     
     return ids_igrejas
 
-# ==================== MÓDULO 2: BUSCAR ALUNOS ====================
+# ==================== MÓDULO 2: BUSCAR MEMBROS (CORRIGIDO) ====================
 
-def buscar_alunos_por_igreja(id_igreja: int, session: requests.Session) -> List[Dict]:
-    """Busca alunos de uma igreja específica"""
+def extrair_dados_membro(html: str, id_membro: int) -> Optional[Dict]:
+    """Extrai dados do membro do HTML da página de edição"""
+    if not html or 'igreja_selecionada' not in html:
+        return None
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Nome
+    nome_input = soup.find('input', {'name': 'nome'})
+    nome = nome_input.get('value', '').strip() if nome_input else ''
+    
+    # ID da Igreja
+    match_igreja = re.search(r'igreja_selecionada\s*\((\d+)\)', html)
+    id_igreja = int(match_igreja.group(1)) if match_igreja else None
+    
+    if not id_igreja or not nome:
+        return None
+    
+    return {
+        'id_aluno': id_membro,
+        'nome': nome,
+        'id_igreja': id_igreja
+    }
+
+def buscar_membro_por_id(id_membro: int, session: requests.Session, ids_igrejas: Set[int]) -> Optional[Dict]:
+    """Busca um membro específico e verifica se pertence às igrejas de Hortolândia"""
     try:
-        url = f"https://musical.congregacao.org.br/alunos/filtra_alunos?id_igreja={id_igreja}"
+        url = f"https://musical.congregacao.org.br/grp_musical/editar/{id_membro}"
         headers = {
-            'X-Requested-With': 'XMLHttpRequest',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        resp = session.get(url, headers=headers, timeout=15)
+        resp = session.get(url, headers=headers, timeout=10)
         
         if resp.status_code == 200:
-            resp.encoding = 'utf-8'
-            json_data = resp.json()
+            dados = extrair_dados_membro(resp.text, id_membro)
             
-            if isinstance(json_data, list):
-                alunos = []
-                for item in json_data:
-                    alunos.append({
-                        'id_aluno': item.get('id'),
-                        'nome': item.get('text', ''),
-                        'id_igreja': id_igreja
-                    })
-                return alunos
+            # Só retorna se pertencer a uma das igrejas de Hortolândia
+            if dados and dados['id_igreja'] in ids_igrejas:
+                return dados
         
-        return []
+        return None
     except:
-        return []
+        return None
 
 def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
-    """🎯 MÓDULO 2: Busca alunos das igrejas coletadas no Módulo 1"""
+    """🎯 MÓDULO 2: Busca membros das igrejas de Hortolândia"""
     tempo_inicio = time.time()
     timestamp_execucao = datetime.now()
     
     print("\n" + "=" * 80)
-    print("🎓 MÓDULO 2: BUSCAR ALUNOS DAS LOCALIDADES")
+    print("🎓 MÓDULO 2: BUSCAR MEMBROS DAS LOCALIDADES")
     print("=" * 80)
     print(f"📊 Total de igrejas: {len(ids_igrejas)}")
+    print(f"🔍 Estratégia: Verificar IDs de membros e filtrar por igreja")
     print(f"🧵 Threads: {ALUNOS_NUM_THREADS}")
+    print(f"📈 Range de busca: {ALUNOS_RANGE_INICIO:,} até {ALUNOS_RANGE_FIM:,}")
+    print(f"⏱️ Tempo estimado: ~2-4 horas")
+    
+    # Converter lista para set para busca mais rápida
+    ids_igrejas_set = set(ids_igrejas)
     
     todos_alunos = []
     
-    print(f"\n🚀 Buscando alunos...")
+    print(f"\n🚀 Processando em chunks de {ALUNOS_CHUNK_SIZE:,} IDs...")
     
-    with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
-        futures = {
-            executor.submit(buscar_alunos_por_igreja, id_igreja, session): id_igreja
-            for id_igreja in ids_igrejas
-        }
+    total_verificados = 0
+    
+    for chunk_inicio in range(ALUNOS_RANGE_INICIO, ALUNOS_RANGE_FIM + 1, ALUNOS_CHUNK_SIZE):
+        chunk_fim = min(chunk_inicio + ALUNOS_CHUNK_SIZE - 1, ALUNOS_RANGE_FIM)
+        chunk_num = (chunk_inicio - ALUNOS_RANGE_INICIO) // ALUNOS_CHUNK_SIZE + 1
+        total_chunks = (ALUNOS_RANGE_FIM - ALUNOS_RANGE_INICIO + 1 + ALUNOS_CHUNK_SIZE - 1) // ALUNOS_CHUNK_SIZE
         
-        processados = 0
-        for future in as_completed(futures):
-            processados += 1
-            id_igreja = futures[future]
-            alunos = future.result()
+        print(f"\n📦 Chunk {chunk_num}/{total_chunks}: IDs {chunk_inicio:,} até {chunk_fim:,}")
+        
+        with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
+            futures = {
+                executor.submit(buscar_membro_por_id, id_membro, session, ids_igrejas_set): id_membro
+                for id_membro in range(chunk_inicio, chunk_fim + 1)
+            }
             
-            if alunos:
-                todos_alunos.extend(alunos)
-                print(f"✓ [{processados}/{len(ids_igrejas)}] Igreja {id_igreja}: {len(alunos)} alunos")
-            
-            if processados % 50 == 0:
-                print(f"   Progresso: {processados}/{len(ids_igrejas)} igrejas | {len(todos_alunos)} alunos")
+            processados_chunk = 0
+            for future in as_completed(futures):
+                processados_chunk += 1
+                total_verificados += 1
+                membro = future.result()
+                
+                if membro:
+                    todos_alunos.append(membro)
+                    print(f"✓ [{total_verificados:,}] ID {membro['id_aluno']}: {membro['nome'][:40]} (Igreja {membro['id_igreja']})")
+                
+                # Feedback a cada 5000 IDs
+                if processados_chunk % 5000 == 0:
+                    tempo_decorrido = time.time() - tempo_inicio
+                    velocidade = total_verificados / tempo_decorrido
+                    ids_restantes = ALUNOS_RANGE_FIM - (chunk_inicio + processados_chunk - 1)
+                    tempo_restante = ids_restantes / velocidade / 60
+                    
+                    print(f"   ⏱️ Progresso chunk: {processados_chunk:,}/{ALUNOS_CHUNK_SIZE:,} | "
+                          f"Total membros: {len(todos_alunos)} | "
+                          f"Velocidade: {velocidade:.0f} IDs/s | "
+                          f"Tempo restante: ~{tempo_restante:.0f}min")
+        
+        # Feedback ao final de cada chunk
+        tempo_decorrido = time.time() - tempo_inicio
+        print(f"   ✅ Chunk {chunk_num} concluído | Total: {len(todos_alunos)} membros | "
+              f"Tempo: {tempo_decorrido/60:.1f}min")
     
     tempo_total = time.time() - tempo_inicio
     
-    print(f"\n✅ Busca finalizada: {len(todos_alunos)} alunos encontrados")
-    print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
+    print(f"\n✅ Busca finalizada: {len(todos_alunos)} membros encontrados")
+    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"📊 IDs verificados: {total_verificados:,}")
+    print(f"⚡ Velocidade média: {total_verificados/tempo_total:.0f} IDs/segundo")
+    
+    if len(todos_alunos) > 0:
+        # Estatísticas por igreja
+        print(f"\n📊 Distribuição por igreja:")
+        distribuicao = Counter([m['id_igreja'] for m in todos_alunos])
+        for igreja_id, qtd in sorted(distribuicao.items()):
+            print(f"   Igreja {igreja_id}: {qtd} membros")
     
     # 💾 Backup local JSON
     timestamp_backup = timestamp_execucao.strftime('%d_%m_%Y-%H_%M')
@@ -449,7 +506,9 @@ def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
         json.dump({
             'alunos': todos_alunos,
             'timestamp': timestamp_backup,
-            'total': len(todos_alunos)
+            'total': len(todos_alunos),
+            'range_verificado': f"{ALUNOS_RANGE_INICIO}-{ALUNOS_RANGE_FIM}",
+            'ids_verificados': total_verificados
         }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
@@ -470,7 +529,11 @@ def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
             "total_alunos": len(todos_alunos),
             "total_igrejas": len(ids_igrejas),
             "tempo_execucao_min": round(tempo_total/60, 2),
-            "timestamp": timestamp_backup
+            "timestamp": timestamp_backup,
+            "range_verificado_inicio": ALUNOS_RANGE_INICIO,
+            "range_verificado_fim": ALUNOS_RANGE_FIM,
+            "total_ids_verificados": total_verificados,
+            "velocidade_ids_segundo": round(total_verificados/tempo_total, 2)
         }
     }
     
