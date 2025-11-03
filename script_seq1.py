@@ -24,8 +24,8 @@ SENHA = os.environ.get("SENHA_MUSICAL")
 URL_INICIAL = "https://musical.congregacao.org.br/"
 
 # URLs dos Apps Scripts
-URL_APPS_SCRIPT_LOCALIDADES = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
-URL_APPS_SCRIPT_ALUNOS = 'https://script.google.com/macros/s/SEU_SCRIPT_ALUNOS/exec'  # ⚠️ CONFIGURAR
+URL_APPS_SCRIPT_LOCALIDADES = 'https://script.google.com/macros/s/AKfycbw7OMC2bGrMLDPcMBXAgS569UM6n1uIyYMSLN6r-d908qn_dBXskwdAIOiZY4MfsYXe/exec'
+URL_APPS_SCRIPT_ALUNOS = 'https://script.google.com/macros/s/AKfycbzl1l143sg2_S5a6bOQy6WqWATMDZpSglIyKUp3OVZtycuHXQmGjisOpzffHTW5TvyK/exec'
 URL_APPS_SCRIPT_HISTORICO = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
 # MÓDULO 1: LOCALIDADES
