@@ -25,6 +25,7 @@ URL_INICIAL = "https://musical.congregacao.org.br/"
 
 # URLs dos Apps Scripts
 URL_APPS_SCRIPT_LOCALIDADES = 'https://script.google.com/macros/s/AKfycbzJv9YlseCXdvXwi0OOpxh-Q61rmCly2kMUBEtcv5VSyPEKdcKg7MAVvIgDYSM1yWpV/exec'
+URL_APPS_SCRIPT_ALUNOS = 'https://script.google.com/macros/s/SEU_SCRIPT_ALUNOS/exec'  # ⚠️ CONFIGURAR
 URL_APPS_SCRIPT_HISTORICO = 'https://script.google.com/macros/s/AKfycbwByAvTIdpefgitKoSr0c3LepgfjsAyNbbEeV3krU1AkNEZca037RzpgHRhjmt-M8sesg/exec'
 
 # MÓDULO 1: LOCALIDADES
@@ -32,7 +33,10 @@ LOCALIDADES_RANGE_INICIO = 20390
 LOCALIDADES_RANGE_FIM = 20392
 LOCALIDADES_NUM_THREADS = 20
 
-# MÓDULO 3: HISTÓRICO - Configuração híbrida
+# MÓDULO 2: ALUNOS
+ALUNOS_NUM_THREADS = 30
+
+# MÓDULO 3: HISTÓRICO
 HISTORICO_ASYNC_CONNECTIONS = 250
 HISTORICO_ASYNC_TIMEOUT = 4
 HISTORICO_ASYNC_MAX_RETRIES = 2
@@ -51,16 +55,12 @@ if not EMAIL or not SENHA:
     print("❌ Erro: Credenciais não definidas")
     exit(1)
 
-# Stats para histórico
+# Stats globais
 historico_stats = {
-    'fase1_sucesso': 0,
-    'fase1_falha': 0,
-    'fase2_sucesso': 0,
-    'fase2_falha': 0,
-    'fase3_sucesso': 0,
-    'fase3_falha': 0,
-    'com_dados': 0,
-    'sem_dados': 0,
+    'fase1_sucesso': 0, 'fase1_falha': 0,
+    'fase2_sucesso': 0, 'fase2_falha': 0,
+    'fase3_sucesso': 0, 'fase3_falha': 0,
+    'com_dados': 0, 'sem_dados': 0,
     'tempo_inicio': None,
     'tempos_resposta': deque(maxlen=200),
     'alunos_processados': set()
@@ -78,16 +78,11 @@ def criar_sessao_robusta():
     """Cria sessão HTTP com retry automático"""
     session = requests.Session()
     retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
+        total=3, backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST", "HEAD"]
     )
-    adapter = HTTPAdapter(
-        pool_connections=20,
-        pool_maxsize=20,
-        max_retries=retry_strategy
-    )
+    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retry_strategy)
     session.mount('https://', adapter)
     session.mount('http://', adapter)
     return session
@@ -102,38 +97,26 @@ def gerar_timestamp():
     return datetime.now().strftime('%d_%m_%Y-%H:%M')
 
 def formatar_data_brasileira(data_str: str) -> str:
-    """
-    Converte data para formato brasileiro garantido DD/MM/YYYY
-    Aceita: DD/MM/YY, DD/MM/YYYY, ou variações
-    """
+    """Converte data para formato brasileiro DD/MM/YYYY"""
     if not data_str or data_str.strip() == '':
         return ''
     
     data_str = data_str.strip()
-    
-    # Tentar parsing com diferentes formatos
-    formatos = [
-        '%d/%m/%Y',  # 05/08/2024
-        '%d/%m/%y',  # 05/08/24
-        '%d-%m-%Y',  # 05-08-2024
-        '%d-%m-%y',  # 05-08-24
-    ]
+    formatos = ['%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y']
     
     for formato in formatos:
         try:
             data_obj = datetime.strptime(data_str, formato)
-            # Retornar SEMPRE no formato DD/MM/YYYY
             return data_obj.strftime('%d/%m/%Y')
         except:
             continue
     
-    # Se não conseguiu parsear, retornar original
     return data_str
 
 # ==================== LOGIN ÚNICO ====================
 
 def fazer_login_unico():
-    """Realiza login único via Playwright e retorna sessão requests configurada"""
+    """Realiza login único via Playwright"""
     print("\n" + "=" * 80)
     print("🔐 REALIZANDO LOGIN ÚNICO")
     print("=" * 80)
@@ -173,7 +156,7 @@ def fazer_login_unico():
 # ==================== MÓDULO 1: LOCALIDADES ====================
 
 def verificar_hortolandia(texto: str) -> bool:
-    """Verifica se o texto contém referência a Hortolândia DO SETOR CAMPINAS"""
+    """Verifica se contém referência a Hortolândia do Setor Campinas"""
     if not texto:
         return False
     
@@ -267,7 +250,7 @@ def verificar_id_hortolandia(igreja_id: int, session: requests.Session) -> Optio
         return None
 
 def executar_localidades(session):
-    """Executa coleta de localidades e RETORNA OS IDs DAS IGREJAS"""
+    """🎯 MÓDULO 1: Coleta localidades e RETORNA lista de IDs"""
     tempo_inicio = time.time()
     timestamp_execucao = datetime.now()
     
@@ -298,22 +281,26 @@ def executar_localidades(session):
                 print(f"✓ [{processados}/{total_ids}] ID {resultado['id_igreja']}: {resultado['nome_localidade'][:50]}")
             
             if processados % 1000 == 0:
-                print(f"   Progresso: {processados:,}/{total_ids:,} | {len(localidades)} localidades encontradas")
+                print(f"   Progresso: {processados:,}/{total_ids:,} | {len(localidades)} localidades")
     
     tempo_total = time.time() - tempo_inicio
     
     print(f"\n✅ Coleta finalizada: {len(localidades)} localidades encontradas")
     print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
     
-    # Backup local
+    # 💾 Backup local JSON
     timestamp_backup = timestamp_execucao.strftime('%d_%m_%Y-%H_%M')
-    backup_file = f'backup_localidades_{timestamp_backup}.json'
+    backup_file = f'modulo1_localidades_{timestamp_backup}.json'
     
     with open(backup_file, 'w', encoding='utf-8') as f:
-        json.dump({'localidades': localidades, 'timestamp': timestamp_backup}, f, ensure_ascii=False, indent=2)
+        json.dump({
+            'localidades': localidades,
+            'timestamp': timestamp_backup,
+            'total': len(localidades)
+        }, f, ensure_ascii=False, indent=2)
     print(f"💾 Backup salvo: {backup_file}")
     
-    # Enviar para Google Sheets
+    # 📤 Enviar para Google Sheets
     print("\n📤 Enviando para Google Sheets...")
     
     dados_formatados = [
@@ -344,45 +331,133 @@ def executar_localidades(session):
     except Exception as e:
         print(f"⚠️ Erro ao enviar: {e}")
     
+    # ✅ Retornar lista de IDs de igrejas para o Módulo 2
     ids_igrejas = [loc['id_igreja'] for loc in localidades]
-    print(f"\n📦 Retornando {len(ids_igrejas)} IDs de igrejas para o próximo módulo")
+    print(f"\n📦 Retornando {len(ids_igrejas)} IDs para o Módulo 2")
+    
     return ids_igrejas
 
 # ==================== MÓDULO 2: BUSCAR ALUNOS ====================
 
-def buscar_alunos_hortolandia() -> List[Dict]:
-    """Busca lista de alunos do Google Sheets"""
-    print("\n" + "=" * 80)
-    print("🎓 MÓDULO 2: BUSCAR ALUNOS DE HORTOLÂNDIA")
-    print("=" * 80)
-    print("🔍 Buscando lista de alunos do Google Sheets...")
-    
+def buscar_alunos_por_igreja(id_igreja: int, session: requests.Session) -> List[Dict]:
+    """Busca alunos de uma igreja específica"""
     try:
-        response = requests.get(
-            URL_APPS_SCRIPT_HISTORICO, 
-            params={"acao": "listar_ids_alunos"}, 
-            timeout=30
-        )
+        url = f"https://musical.congregacao.org.br/alunos/filtra_alunos?id_igreja={id_igreja}"
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('sucesso'):
-                alunos = data.get('alunos', [])
-                print(f"✅ {len(alunos)} alunos encontrados no Google Sheets")
-                print(f"📊 Amostra: {alunos[:3] if len(alunos) >= 3 else alunos}")
+        resp = session.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            resp.encoding = 'utf-8'
+            json_data = resp.json()
+            
+            if isinstance(json_data, list):
+                alunos = []
+                for item in json_data:
+                    alunos.append({
+                        'id_aluno': item.get('id'),
+                        'nome': item.get('text', ''),
+                        'id_igreja': id_igreja
+                    })
                 return alunos
         
-        print("❌ Erro ao buscar alunos")
         return []
-    
-    except Exception as e:
-        print(f"❌ Erro: {e}")
+    except:
         return []
 
-# ==================== MÓDULO 3: HISTÓRICO INDIVIDUAL ====================
+def executar_busca_alunos(session, ids_igrejas: List[int]) -> List[Dict]:
+    """🎯 MÓDULO 2: Busca alunos das igrejas coletadas no Módulo 1"""
+    tempo_inicio = time.time()
+    timestamp_execucao = datetime.now()
+    
+    print("\n" + "=" * 80)
+    print("🎓 MÓDULO 2: BUSCAR ALUNOS DAS LOCALIDADES")
+    print("=" * 80)
+    print(f"📊 Total de igrejas: {len(ids_igrejas)}")
+    print(f"🧵 Threads: {ALUNOS_NUM_THREADS}")
+    
+    todos_alunos = []
+    
+    print(f"\n🚀 Buscando alunos...")
+    
+    with ThreadPoolExecutor(max_workers=ALUNOS_NUM_THREADS) as executor:
+        futures = {
+            executor.submit(buscar_alunos_por_igreja, id_igreja, session): id_igreja
+            for id_igreja in ids_igrejas
+        }
+        
+        processados = 0
+        for future in as_completed(futures):
+            processados += 1
+            id_igreja = futures[future]
+            alunos = future.result()
+            
+            if alunos:
+                todos_alunos.extend(alunos)
+                print(f"✓ [{processados}/{len(ids_igrejas)}] Igreja {id_igreja}: {len(alunos)} alunos")
+            
+            if processados % 50 == 0:
+                print(f"   Progresso: {processados}/{len(ids_igrejas)} igrejas | {len(todos_alunos)} alunos")
+    
+    tempo_total = time.time() - tempo_inicio
+    
+    print(f"\n✅ Busca finalizada: {len(todos_alunos)} alunos encontrados")
+    print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
+    
+    # 💾 Backup local JSON
+    timestamp_backup = timestamp_execucao.strftime('%d_%m_%Y-%H_%M')
+    backup_file = f'modulo2_alunos_{timestamp_backup}.json'
+    
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            'alunos': todos_alunos,
+            'timestamp': timestamp_backup,
+            'total': len(todos_alunos)
+        }, f, ensure_ascii=False, indent=2)
+    print(f"💾 Backup salvo: {backup_file}")
+    
+    # 📤 Enviar para Google Sheets
+    print("\n📤 Enviando para Google Sheets...")
+    
+    dados_formatados = [
+        [aluno['id_aluno'], aluno['nome'], aluno['id_igreja']]
+        for aluno in todos_alunos
+    ]
+    
+    payload = {
+        "tipo": "nova_planilha_alunos",
+        "nome_planilha": timestamp_execucao.strftime("Alunos_%d_%m_%y-%H:%M"),
+        "headers": ["ID_Aluno", "Nome", "ID_Igreja"],
+        "dados": dados_formatados,
+        "metadata": {
+            "total_alunos": len(todos_alunos),
+            "total_igrejas": len(ids_igrejas),
+            "tempo_execucao_min": round(tempo_total/60, 2),
+            "timestamp": timestamp_backup
+        }
+    }
+    
+    try:
+        resp = requests.post(URL_APPS_SCRIPT_ALUNOS, json=payload, timeout=60)
+        if resp.status_code == 200:
+            resposta = resp.json()
+            if resposta.get('status') == 'sucesso':
+                print(f"✅ Planilha criada: {resposta.get('planilha', {}).get('url', 'N/A')}")
+    except Exception as e:
+        print(f"⚠️ Erro ao enviar: {e}")
+    
+    # ✅ Retornar lista de alunos para o Módulo 3
+    print(f"\n📦 Retornando {len(todos_alunos)} alunos para o Módulo 3")
+    
+    return todos_alunos
+
+# ==================== MÓDULO 3: HISTÓRICO (mantido igual) ====================
 
 def validar_resposta_rigorosa(text: str, id_aluno: int) -> tuple:
-    """Validação rigorosa da resposta - Retorna: (valido, tem_dados)"""
+    """Validação rigorosa da resposta"""
     if len(text) < 1000:
         return False, False
     
@@ -398,7 +473,7 @@ def validar_resposta_rigorosa(text: str, id_aluno: int) -> tuple:
     return True, tem_dados
 
 def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
-    """Extração completa e robusta de todos os dados COM FORMATAÇÃO DE DATAS"""
+    """Extração completa e robusta de todos os dados COM VALIDAÇÃO RIGOROSA DE DATAS"""
     dados = {
         'mts_individual': [], 'mts_grupo': [],
         'msa_individual': [], 'msa_grupo': [],
@@ -422,8 +497,11 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ FORMATAR DATA (índice 6)
-                            campos[6] = formatar_data_brasileira(campos[6])
+                            # ✅ VALIDAR E CORRIGIR DATAS (índices 4, 6)
+                            campos[4] = validar_e_corrigir_data(campos[4])  # DATA_LICAO
+                            campos[6] = validar_e_corrigir_data(campos[6])  # DATA_CADASTRO
+                            if len(campos) > 7:
+                                campos[7] = validar_e_corrigir_data(campos[7])  # DATA_ALTERACAO
                             dados['mts_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MTS Grupo
@@ -434,8 +512,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ FORMATAR DATA (índice 2)
-                            campos[2] = formatar_data_brasileira(campos[2])
+                            # ✅ VALIDAR DATA (índice 2)
+                            campos[2] = validar_e_corrigir_data(campos[2])
                             dados['mts_grupo'].append([id_aluno, nome_aluno] + campos)
         
         # MSA Individual
@@ -449,8 +527,8 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ FORMATAR DATA (índice 6)
-                            campos[6] = formatar_data_brasileira(campos[6])
+                            # ✅ VALIDAR DATA (índice 0)
+                            campos[0] = validar_e_corrigir_data(campos[0])  # DATA_LICAO
                             dados['msa_individual'].append([id_aluno, nome_aluno] + campos)
             
             # MSA Grupo
@@ -485,7 +563,760 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                             observacoes = cols[1].get_text(strip=True) if len(cols) > 1 else ""
                             data_licao = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                             
-                            # ✅ FORMATAR DATA
+                            # ✅ VALIDAR DATA
+                            data_licao = validar_e_corrigir_data(data_licao)
+                            
+                            dados['msa_grupo'].append([
+                                id_aluno, nome_aluno,
+                                fases_de, fases_ate,
+                                pag_de, pag_ate,
+                                claves, observacoes, data_licao
+                            ])
+        
+        # PROVAS
+        aba_provas = soup.find('div', {'id': 'provas'})
+        if aba_provas:
+            tabela = aba_provas.find('table', class_='table')
+            if tabela:
+                tbody = tabela.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 5:
+                            campos = [c.get_text(strip=True) for c in cols[:5]]
+                            # ✅ VALIDAR DATAS (índices 2, 4)
+                            campos[2] = validar_e_corrigir_data(campos[2])  # DATA_PROVA
+                            if len(campos) > 4:
+                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_CADASTRO
+                            dados['provas'].append([id_aluno, nome_aluno] + campos)
+        
+        # HINÁRIO Individual
+        aba_hin = soup.find('div', {'id': 'hinario'})
+        if aba_hin:
+            tabelas = aba_hin.find_all('table', class_='table')
+            if len(tabelas) > 0:
+                tbody = tabelas[0].find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ VALIDAR DATAS (índices 2, 4, 5)
+                            campos[2] = validar_e_corrigir_data(campos[2])  # DATA_AULA
+                            if len(campos) > 4:
+                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_CADASTRO
+                            if len(campos) > 5:
+                                campos[5] = validar_e_corrigir_data(campos[5])  # DATA_ALTERACAO
+                            dados['hinario_individual'].append([id_aluno, nome_aluno] + campos)
+            
+            # HINÁRIO Grupo
+            if len(tabelas) > 1:
+                tbody_g = tabelas[1].find('tbody')
+                if tbody_g:
+                    for linha in tbody_g.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # ✅ VALIDAR DATA (índice 2)
+                            campos[2] = validar_e_corrigir_data(campos[2])
+                            dados['hinario_grupo'].append([id_aluno, nome_aluno] + campos)
+        
+        # MÉTODOS
+        aba_met = soup.find('div', {'id': 'metodos'})
+        if aba_met:
+            tabela = aba_met.find('table', class_='table')
+            if tabela:
+                tbody = tabela.find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            # ✅ VALIDAR DATAS (índices 3, 5)
+                            campos[3] = validar_e_corrigir_data(campos[3])  # DATA_LICAO
+                            if len(campos) > 5:
+                                campos[5] = validar_e_corrigir_data(campos[5])  # DATA_CADASTRO
+                            dados['metodos'].append([id_aluno, nome_aluno] + campos)
+        
+        # ESCALAS Individual
+        aba_esc = soup.find('div', {'id': 'escalas'})
+        if aba_esc:
+            tabelas = aba_esc.find_all('table', class_='table')
+            if len(tabelas) > 0:
+                tbody = tabelas[0].find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 6:
+                            campos = [c.get_text(strip=True) for c in cols[:6]]
+                            # ✅ VALIDAR DATAS (índices 1, 3, 4)
+                            campos[1] = validar_e_corrigir_data(campos[1])  # DATA
+                            if len(campos) > 3:
+                                campos[3] = validar_e_corrigir_data(campos[3])  # DATA_CADASTRO
+                            if len(campos) > 4:
+                                campos[4] = validar_e_corrigir_data(campos[4])  # DATA_ALTERACAO
+                            dados['escalas_individual'].append([id_aluno, nome_aluno] + campos)
+            
+            # ESCALAS Grupo
+            if len(tabelas) > 1:
+                tbody_g = tabelas[1].find('tbody')
+                if tbody_g:
+                    for linha in tbody_g.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            # ✅ VALIDAR DATA (índice 2)
+                            campos[2] = validar_e_corrigir_data(campos[2])
+                            dados['escalas_grupo'].append([id_aluno, nome_aluno] + campos)
+    
+    except Exception as e:
+        safe_print(f"⚠️ Erro ao extrair dados do aluno {id_aluno}: {e}")
+    
+    return dados
+async def coletar_aluno_async(session: aiohttp.ClientSession, aluno: Dict, semaphore: asyncio.Semaphore) -> tuple:
+    """Coleta assíncrona com validação rigorosa"""
+    id_aluno = aluno['id_aluno']
+    nome_aluno = aluno['nome']
+    
+    url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
+    
+    async with semaphore:
+        for tentativa in range(HISTORICO_ASYNC_MAX_RETRIES):
+            try:
+                timeout = aiohttp.ClientTimeout(total=HISTORICO_ASYNC_TIMEOUT)
+                async with session.get(url, timeout=timeout) as response:
+                    if response.status != 200:
+                        if tentativa < HISTORICO_ASYNC_MAX_RETRIES - 1:
+                            await asyncio.sleep(0.2 * (tentativa + 1))
+                            continue
+                        return None, aluno
+                    
+                    html = await response.text()
+                    valido, tem_dados = validar_resposta_rigorosa(html, id_aluno)
+                    
+                    if not valido:
+                        if tentativa < HISTORICO_ASYNC_MAX_RETRIES - 1:
+                            await asyncio.sleep(0.2 * (tentativa + 1))
+                            continue
+                        return None, aluno
+                    
+                    dados = extrair_dados_completo(html, id_aluno, nome_aluno)
+                    total = sum(len(v) for v in dados.values())
+                    
+                    with stats_lock:
+                        if total > 0:
+                            historico_stats['com_dados'] += 1
+                        else:
+                            historico_stats['sem_dados'] += 1
+                        historico_stats['fase1_sucesso'] += 1
+                        historico_stats['alunos_processados'].add(id_aluno)
+                    
+                    return dados, None
+                    
+            except asyncio.TimeoutError:
+                if tentativa < HISTORICO_ASYNC_MAX_RETRIES - 1:
+                    await asyncio.sleep(0.2 * (tentativa + 1))
+                    continue
+            except Exception:
+                if tentativa < HISTORICO_ASYNC_MAX_RETRIES - 1:
+                    await asyncio.sleep(0.2 * (tentativa + 1))
+                    continue
+        
+        with stats_lock:
+            historico_stats['fase1_falha'] += 1
+        return None, aluno
+
+async def processar_chunk_async(alunos_chunk: List[Dict], cookies_dict: Dict) -> tuple:
+    """Processa chunk com coleta assíncrona"""
+    connector = aiohttp.TCPConnector(
+        limit=HISTORICO_ASYNC_CONNECTIONS,
+        limit_per_host=HISTORICO_ASYNC_CONNECTIONS,
+        ttl_dns_cache=300
+    )
+    timeout = aiohttp.ClientTimeout(total=HISTORICO_ASYNC_TIMEOUT)
+    
+    cookie_str = "; ".join([f"{k}={v}" for k, v in cookies_dict.items()])
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Cookie': cookie_str,
+        'Connection': 'keep-alive'
+    }
+    
+    todos_dados = {
+        'mts_individual': [], 'mts_grupo': [],
+        'msa_individual': [], 'msa_grupo': [],
+        'provas': [],
+        'hinario_individual': [], 'hinario_grupo': [],
+        'metodos': [],
+        'escalas_individual': [], 'escalas_grupo': []
+    }
+    
+    falhas = []
+    semaphore = asyncio.Semaphore(HISTORICO_ASYNC_CONNECTIONS)
+    
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers) as session:
+        tasks = [coletar_aluno_async(session, aluno, semaphore) for aluno in alunos_chunk]
+        resultados = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for resultado in resultados:
+            if isinstance(resultado, Exception):
+                continue
+            
+            dados, aluno_falha = resultado
+            if dados:
+                for key in todos_dados.keys():
+                    todos_dados[key].extend(dados[key])
+            elif aluno_falha:
+                falhas.append(aluno_falha)
+    
+    return todos_dados, falhas
+
+def coletar_fallback_robusto(alunos: List[Dict], cookies_dict: Dict) -> tuple:
+    """Fallback síncrono com múltiplas tentativas"""
+    if not alunos:
+        return {
+            'mts_individual': [], 'mts_grupo': [],
+            'msa_individual': [], 'msa_grupo': [],
+            'provas': [],
+            'hinario_individual': [], 'hinario_grupo': [],
+            'metodos': [],
+            'escalas_individual': [], 'escalas_grupo': []
+        }, []
+    
+    safe_print(f"\n🎯 FASE 2: Fallback robusto para {len(alunos)} alunos...")
+    
+    session = requests.Session()
+    session.cookies.update(cookies_dict)
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    })
+    
+    todos_dados = {
+        'mts_individual': [], 'mts_grupo': [],
+        'msa_individual': [], 'msa_grupo': [],
+        'provas': [],
+        'hinario_individual': [], 'hinario_grupo': [],
+        'metodos': [],
+        'escalas_individual': [], 'escalas_grupo': []
+    }
+    
+    falhas_persistentes = []
+    processados = 0
+    
+    for aluno in alunos:
+        id_aluno = aluno['id_aluno']
+        nome_aluno = aluno['nome']
+        
+        url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
+        sucesso = False
+        
+        for tentativa in range(HISTORICO_FALLBACK_RETRIES):
+            try:
+                resp = session.get(url, timeout=HISTORICO_FALLBACK_TIMEOUT)
+                
+                if resp.status_code == 200:
+                    valido, tem_dados = validar_resposta_rigorosa(resp.text, id_aluno)
+                    
+                    if valido:
+                        dados = extrair_dados_completo(resp.text, id_aluno, nome_aluno)
+                        for key in todos_dados.keys():
+                            todos_dados[key].extend(dados[key])
+                        
+                        total = sum(len(v) for v in dados.values())
+                        with stats_lock:
+                            if total > 0:
+                                historico_stats['com_dados'] += 1
+                            else:
+                                historico_stats['sem_dados'] += 1
+                            historico_stats['fase2_sucesso'] += 1
+                            historico_stats['alunos_processados'].add(id_aluno)
+                        
+                        sucesso = True
+                        break
+                
+                if tentativa < HISTORICO_FALLBACK_RETRIES - 1:
+                    time.sleep(0.5 * (tentativa + 1))
+            
+            except Exception:
+                if tentativa < HISTORICO_FALLBACK_RETRIES - 1:
+                    time.sleep(0.5 * (tentativa + 1))
+                    continue
+        
+        if not sucesso:
+            with stats_lock:
+                historico_stats['fase2_falha'] += 1
+            falhas_persistentes.append(aluno)
+        
+        processados += 1
+        if processados % 10 == 0:
+            safe_print(f"   Fallback: {processados}/{len(alunos)} processados")
+    
+    session.close()
+    return todos_dados, falhas_persistentes
+
+def coletar_cirurgico(alunos: List[Dict], cookies_dict: Dict) -> tuple:
+    """Coleta cirúrgica individual com máximo esforço"""
+    if not alunos:
+        return {
+            'mts_individual': [], 'mts_grupo': [],
+            'msa_individual': [], 'msa_grupo': [],
+            'provas': [],
+            'hinario_individual': [], 'hinario_grupo': [],
+            'metodos': [],
+            'escalas_individual': [], 'escalas_grupo': []
+        }, []
+    
+    safe_print(f"\n🔬 FASE 3: Coleta cirúrgica para {len(alunos)} alunos...")
+    
+    todos_dados = {
+        'mts_individual': [], 'mts_grupo': [],
+        'msa_individual': [], 'msa_grupo': [],
+        'provas': [],
+        'hinario_individual': [], 'hinario_grupo': [],
+        'metodos': [],
+        'escalas_individual': [], 'escalas_grupo': []
+    }
+    
+    falhas_finais = []
+    
+    for idx, aluno in enumerate(alunos, 1):
+        id_aluno = aluno['id_aluno']
+        nome_aluno = aluno['nome']
+        
+        safe_print(f"   [{idx}/{len(alunos)}] Tentando ID {id_aluno} - {nome_aluno[:30]}...")
+        
+        url = f"https://musical.congregacao.org.br/licoes/index/{id_aluno}"
+        sucesso = False
+        
+        for tentativa in range(HISTORICO_CIRURGICO_RETRIES):
+            try:
+                session = requests.Session()
+                session.cookies.update(cookies_dict)
+                session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                })
+                
+                resp = session.get(url, timeout=HISTORICO_CIRURGICO_TIMEOUT)
+                
+                if resp.status_code == 200:
+                    valido, tem_dados = validar_resposta_rigorosa(resp.text, id_aluno)
+                    
+                    if valido:
+                        dados = extrair_dados_completo(resp.text, id_aluno, nome_aluno)
+                        for key in todos_dados.keys():
+                            todos_dados[key].extend(dados[key])
+                        
+                        total = sum(len(v) for v in dados.values())
+                        with stats_lock:
+                            if total > 0:
+                                historico_stats['com_dados'] += 1
+                            else:
+                                historico_stats['sem_dados'] += 1
+                            historico_stats['fase3_sucesso'] += 1
+                            historico_stats['alunos_processados'].add(id_aluno)
+                        
+                        safe_print(f"      ✅ Sucesso na tentativa {tentativa + 1}")
+                        sucesso = True
+                        break
+                
+                session.close()
+                
+                if tentativa < HISTORICO_CIRURGICO_RETRIES - 1:
+                    time.sleep(HISTORICO_CIRURGICO_DELAY)
+            
+            except Exception:
+                if tentativa < HISTORICO_CIRURGICO_RETRIES - 1:
+                    time.sleep(HISTORICO_CIRURGICO_DELAY)
+                continue
+        
+        if not sucesso:
+            with stats_lock:
+                historico_stats['fase3_falha'] += 1
+            falhas_finais.append(aluno)
+            safe_print(f"      ❌ Falha após {HISTORICO_CIRURGICO_RETRIES} tentativas")
+        
+        if idx < len(alunos):
+            time.sleep(0.5)
+    
+    return todos_dados, falhas_finais
+
+def mesclar_dados(dados1: Dict, dados2: Dict) -> Dict:
+    """Mescla dois dicionários de dados"""
+    resultado = {}
+    for key in dados1.keys():
+        resultado[key] = dados1[key] + dados2[key]
+    return resultado
+
+def gerar_resumo_alunos(alunos: List[Dict], todos_dados: Dict) -> List[List]:
+    """Gera resumo com 14 colunas"""
+    resumo = []
+    
+    for aluno in alunos:
+        id_aluno = aluno['id_aluno']
+        nome = aluno['nome']
+        id_igreja = aluno['id_igreja']
+        
+        t_mts_i = sum(1 for x in todos_dados['mts_individual'] if x[0] == id_aluno)
+        t_mts_g = sum(1 for x in todos_dados['mts_grupo'] if x[0] == id_aluno)
+        t_msa_i = sum(1 for x in todos_dados['msa_individual'] if x[0] == id_aluno)
+        t_msa_g = sum(1 for x in todos_dados['msa_grupo'] if x[0] == id_aluno)
+        t_prov = sum(1 for x in todos_dados['provas'] if x[0] == id_aluno)
+        t_hin_i = sum(1 for x in todos_dados['hinario_individual'] if x[0] == id_aluno)
+        t_hin_g = sum(1 for x in todos_dados['hinario_grupo'] if x[0] == id_aluno)
+        t_met = sum(1 for x in todos_dados['metodos'] if x[0] == id_aluno)
+        t_esc_i = sum(1 for x in todos_dados['escalas_individual'] if x[0] == id_aluno)
+        t_esc_g = sum(1 for x in todos_dados['escalas_grupo'] if x[0] == id_aluno)
+        
+        provas_aluno = [x for x in todos_dados['provas'] if x[0] == id_aluno]
+        if provas_aluno:
+            try:
+                notas = []
+                for prova in provas_aluno:
+                    if len(prova) > 3:
+                        nota_str = str(prova[3]).replace(',', '.')
+                        try:
+                            nota = float(nota_str)
+                            notas.append(nota)
+                        except:
+                            pass
+                media = sum(notas) / len(notas) if notas else 0
+            except:
+                media = 0
+        else:
+            media = 0
+        
+        resumo.append([
+            id_aluno, nome, id_igreja,
+            t_mts_i, t_mts_g, t_msa_i, t_msa_g,
+            t_prov, round(media, 2),
+            t_hin_i, t_hin_g, t_met,
+            t_esc_i, t_esc_g
+        ])
+    
+    return resumo
+
+def filtrar_dados_vazios(dados: Dict) -> Dict:
+    """Filtra arrays vazios"""
+    dados_filtrados = {}
+    
+    for categoria, valores in dados.items():
+        if valores and len(valores) > 0:
+            valores_validos = [v for v in valores if v and len(v) > 0]
+            dados_filtrados[categoria] = valores_validos
+        else:
+            dados_filtrados[categoria] = []
+    
+    return dados_filtrados
+
+def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], tempo_total: float):
+    """Envia dados em lotes para evitar timeout"""
+    print("\n" + "=" * 80)
+    print("📤 ENVIANDO DADOS EM LOTES PARA GOOGLE SHEETS")
+    print("=" * 80)
+    
+    resumo_completo = gerar_resumo_alunos(alunos_modulo2, todos_dados)
+    
+    total_alunos = len(resumo_completo)
+    num_lotes = (total_alunos + LOTE_TAMANHO - 1) // LOTE_TAMANHO
+    
+    print(f"📊 Total de alunos: {total_alunos}")
+    print(f"📦 Tamanho do lote: {LOTE_TAMANHO} alunos")
+    print(f"🔢 Número de lotes: {num_lotes}")
+    
+    metadata_base = {
+        'total_alunos_processados': len(alunos_modulo2),
+        'alunos_com_dados': historico_stats['com_dados'],
+        'alunos_sem_dados': historico_stats['sem_dados'],
+        'tempo_coleta_segundos': tempo_total,
+        'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    planilha_url = None
+    
+    for lote_num in range(1, num_lotes + 1):
+        inicio = (lote_num - 1) * LOTE_TAMANHO
+        fim = min(lote_num * LOTE_TAMANHO, total_alunos)
+        
+        print(f"\n📦 Processando lote {lote_num}/{num_lotes} (alunos {inicio+1} a {fim})...")
+        
+        ids_lote = set(resumo_completo[i][0] for i in range(inicio, fim))
+        
+        lote_dados = {
+            'mts_individual': [x for x in todos_dados['mts_individual'] if x[0] in ids_lote],
+            'mts_grupo': [x for x in todos_dados['mts_grupo'] if x[0] in ids_lote],
+            'msa_individual': [x for x in todos_dados['msa_individual'] if x[0] in ids_lote],
+            'msa_grupo': [x for x in todos_dados['msa_grupo'] if x[0] in ids_lote],
+            'provas': [x for x in todos_dados['provas'] if x[0] in ids_lote],
+            'hinario_individual': [x for x in todos_dados['hinario_individual'] if x[0] in ids_lote],
+            'hinario_grupo': [x for x in todos_dados['hinario_grupo'] if x[0] in ids_lote],
+            'metodos': [x for x in todos_dados['metodos'] if x[0] in ids_lote],
+            'escalas_individual': [x for x in todos_dados['escalas_individual'] if x[0] in ids_lote],
+            'escalas_grupo': [x for x in todos_dados['escalas_grupo'] if x[0] in ids_lote],
+            'resumo': resumo_completo[inicio:fim]
+        }
+        
+        metadata_lote = metadata_base.copy()
+        metadata_lote['alunos_inicio'] = inicio
+        metadata_lote['alunos_fim'] = fim
+        
+        payload = {
+            'tipo': 'licoes_alunos_lote',
+            'lote_numero': lote_num,
+            'total_lotes': num_lotes,
+            **lote_dados,
+            'metadata': metadata_lote
+        }
+        
+        try:
+            print(f"   📡 Enviando {fim - inicio} alunos...")
+            response = requests.post(
+                URL_APPS_SCRIPT_HISTORICO, 
+                json=payload, 
+                timeout=LOTE_TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('sucesso'):
+                    print(f"   ✅ Lote {lote_num} processado com sucesso")
+                    
+                    if lote_num == num_lotes and 'planilha' in result:
+                        planilha_url = result['planilha'].get('url')
+                else:
+                    print(f"   ⚠️ Erro no lote {lote_num}: {result.get('erro', 'Desconhecido')}")
+            else:
+                print(f"   ⚠️ HTTP {response.status_code} no lote {lote_num}")
+        
+        except Exception as e:
+            print(f"   ❌ Erro ao enviar lote {lote_num}: {e}")
+        
+        if lote_num < num_lotes:
+            time.sleep(2)
+    
+    print("\n" + "=" * 80)
+    if planilha_url:
+        print(f"✅ ENVIO COMPLETO!")
+        print(f"📊 Planilha criada: {planilha_url}")
+    else:
+        print("⚠️ Envio finalizado, mas URL da planilha não disponível")
+    print("=" * 80)
+
+def executar_historico(cookies_dict, alunos_modulo2):
+    """🎯 MÓDULO 3: Coleta histórico individual"""
+    tempo_inicio = time.time()
+    historico_stats['tempo_inicio'] = tempo_inicio
+    
+    print("\n" + "=" * 80)
+    print("📚 MÓDULO 3: HISTÓRICO INDIVIDUAL")
+    print("=" * 80)
+    
+    if not alunos_modulo2:
+        print("❌ Nenhum aluno recebido do Módulo 2. Abortando.")
+        return
+    
+    print(f"🎓 Total de alunos a processar: {len(alunos_modulo2)}")
+    print(f"⚡ Conexões simultâneas: {HISTORICO_ASYNC_CONNECTIONS}")
+    print(f"📦 Tamanho do chunk: {HISTORICO_CHUNK_SIZE}")
+    
+    todos_dados = {
+        'mts_individual': [], 'mts_grupo': [],
+        'msa_individual': [], 'msa_grupo': [],
+        'provas': [],
+        'hinario_individual': [], 'hinario_grupo': [],
+        'metodos': [],
+        'escalas_individual': [], 'escalas_grupo': []
+    }
+    
+    # FASE 1: COLETA ASSÍNCRONA
+    print(f"\n⚡ FASE 1: Coleta assíncrona em alta velocidade...")
+    
+    falhas_fase1 = []
+    total_chunks = (len(alunos_modulo2) + HISTORICO_CHUNK_SIZE - 1) // HISTORICO_CHUNK_SIZE
+    
+    for i in range(0, len(alunos_modulo2), HISTORICO_CHUNK_SIZE):
+        chunk = alunos_modulo2[i:i+HISTORICO_CHUNK_SIZE]
+        chunk_num = i // HISTORICO_CHUNK_SIZE + 1
+        
+        safe_print(f"📦 Chunk {chunk_num}/{total_chunks} ({len(chunk)} alunos)...")
+        
+        dados_chunk, falhas_chunk = asyncio.run(processar_chunk_async(chunk, cookies_dict))
+        todos_dados = mesclar_dados(todos_dados, dados_chunk)
+        falhas_fase1.extend(falhas_chunk)
+        
+        if i + HISTORICO_CHUNK_SIZE < len(alunos_modulo2):
+            time.sleep(0.5)
+    
+    print(f"\n✅ FASE 1 CONCLUÍDA")
+    print(f"   Sucesso: {historico_stats['fase1_sucesso']} | Falhas: {len(falhas_fase1)}")
+    
+    # FASE 2: FALLBACK ROBUSTO
+    if falhas_fase1:
+        dados_fase2, falhas_fase2 = coletar_fallback_robusto(falhas_fase1, cookies_dict)
+        todos_dados = mesclar_dados(todos_dados, dados_fase2)
+        
+        print(f"✅ FASE 2 CONCLUÍDA")
+        print(f"   Recuperados: {historico_stats['fase2_sucesso']} | Falhas: {len(falhas_fase2)}")
+    else:
+        falhas_fase2 = []
+        print("\n🎉 FASE 2 não necessária - todos processados na Fase 1!")
+    
+    # FASE 3: COLETA CIRÚRGICA
+    if falhas_fase2:
+        dados_fase3, falhas_finais = coletar_cirurgico(falhas_fase2, cookies_dict)
+        todos_dados = mesclar_dados(todos_dados, dados_fase3)
+        
+        print(f"✅ FASE 3 CONCLUÍDA")
+        print(f"   Recuperados: {historico_stats['fase3_sucesso']} | Falhas: {len(falhas_finais)}")
+        
+        if falhas_finais:
+            print("\n⚠️ ALUNOS NÃO COLETADOS:")
+            for aluno in falhas_finais:
+                print(f"   - ID {aluno['id_aluno']}: {aluno['nome']}")
+    else:
+        print("\n🎉 FASE 3 não necessária!")
+    
+    tempo_total = time.time() - tempo_inicio
+    
+    print(f"\n✅ Coleta finalizada!")
+    print(f"   Alunos processados: {len(historico_stats['alunos_processados'])}")
+    print(f"   Com dados: {historico_stats['com_dados']}")
+    print(f"   Sem dados: {historico_stats['sem_dados']}")
+    print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
+    
+    todos_dados = filtrar_dados_vazios(todos_dados)
+    
+    # Backup local
+    timestamp = gerar_timestamp()
+    backup_file = f'modulo3_historico_{timestamp.replace(":", "-")}.json'
+    resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
+    
+    with open(backup_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            'dados': todos_dados,
+            'resumo': resumo_alunos,
+            'timestamp': timestamp
+        }, f, ensure_ascii=False, indent=2)
+    print(f"💾 Backup salvo: {backup_file}")
+    
+    # Enviar em lotes
+    enviar_lotes_google_sheets(todos_dados, alunos_modulo2, tempo_total)
+
+# ==================== MAIN - ORQUESTRADOR SEQUENCIAL ====================
+
+def main():
+    tempo_inicio_total = time.time()
+    
+    print("\n" + "=" * 80)
+    print("🎼 SISTEMA MUSICAL - COLETOR SEQUENCIAL CORRIGIDO")
+    print("=" * 80)
+    print("📋 Ordem de execução:")
+    print("   1️⃣ Localidades de Hortolândia → Salva JSON + Envia Google Sheets")
+    print("   2️⃣ Buscar Alunos (usa IDs do Módulo 1) → Salva JSON + Envia Sheets")
+    print("   3️⃣ Histórico Individual (usa alunos do Módulo 2) → Salva + Envia")
+    print("=" * 80)
+    
+    # PASSO 1: Login único
+    session, cookies = fazer_login_unico()
+    
+    if not session:
+        print("\n❌ Falha no login. Encerrando processo.")
+        return
+    
+    # PASSO 2: Executar Módulo 1 - Localidades
+    print("\n🚀 Iniciando Módulo 1...")
+    ids_igrejas = executar_localidades(session)
+    
+    if not ids_igrejas:
+        print("\n⚠️ Módulo 1 não encontrou localidades. Interrompendo processo.")
+        return
+    
+    # PASSO 3: Executar Módulo 2 - Alunos (usando IDs do Módulo 1)
+    print("\n🚀 Iniciando Módulo 2...")
+    alunos = executar_busca_alunos(session, ids_igrejas)
+    
+    if not alunos:
+        print("\n⚠️ Módulo 2 não encontrou alunos. Interrompendo processo.")
+        return
+    
+    # PASSO 4: Executar Módulo 3 - Histórico (usando alunos do Módulo 2)
+    print("\n🚀 Iniciando Módulo 3...")
+    executar_historico(cookies, alunos)
+    
+    # RESUMO FINAL
+    tempo_total = time.time() - tempo_inicio_total
+    
+    print("\n" + "=" * 80)
+    print("🎉 PROCESSO COMPLETO FINALIZADO!")
+    print("=" * 80)
+    print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
+    print(f"📊 Módulos executados:")
+    print(f"   ✅ Módulo 1: {len(ids_igrejas)} localidades")
+    print(f"   ✅ Módulo 2: {len(alunos)} alunos encontrados")
+    print(f"   ✅ Módulo 3: {len(historico_stats['alunos_processados'])} históricos")
+    print(f"💾 Todos os backups salvos localmente:")
+    print(f"   - modulo1_localidades_*.json")
+    print(f"   - modulo2_alunos_*.json")
+    print(f"   - modulo3_historico_*.json")
+    print(f"📊 Planilhas criadas no Google Sheets")
+    print(f"✅ Todas as datas no formato DD/MM/YYYY")
+    print("=" * 80 + "\n")
+
+if __name__ == "__main__":
+    main()
+                if tbody_g:
+                    for linha in tbody_g.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            campos = [c.get_text(strip=True) for c in cols[:3]]
+                            campos[2] = formatar_data_brasileira(campos[2])
+                            dados['mts_grupo'].append([id_aluno, nome_aluno] + campos)
+        
+        # MSA Individual
+        aba_msa = soup.find('div', {'id': 'msa'})
+        if aba_msa:
+            tabelas = aba_msa.find_all('table', class_='table')
+            if len(tabelas) > 0:
+                tbody = tabelas[0].find('tbody')
+                if tbody:
+                    for linha in tbody.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 7:
+                            campos = [c.get_text(strip=True) for c in cols[:7]]
+                            campos[6] = formatar_data_brasileira(campos[6])
+                            dados['msa_individual'].append([id_aluno, nome_aluno] + campos)
+            
+            if len(tabelas) > 1:
+                tbody_g = tabelas[1].find('tbody')
+                if tbody_g:
+                    for linha in tbody_g.find_all('tr'):
+                        cols = linha.find_all('td')
+                        if len(cols) >= 3:
+                            paginas_html = cols[0].decode_contents()
+                            
+                            fases_de = ""
+                            fases_ate = ""
+                            pag_de = ""
+                            pag_ate = ""
+                            claves = ""
+                            
+                            fases_m = re.search(r'<b>Fase\(s\):</b>\s*de\s+([\d.]+)\s+até\s+([\d.]+)', paginas_html)
+                            if fases_m:
+                                fases_de = fases_m.group(1)
+                                fases_ate = fases_m.group(2)
+                            
+                            pag_m = re.search(r'<b>Página\(s\):</b>\s*de\s+(\d+)\s+até\s+(\d+)', paginas_html)
+                            if pag_m:
+                                pag_de = pag_m.group(1)
+                                pag_ate = pag_m.group(2)
+                            
+                            clave_m = re.search(r'<b>Clave\(s\):</b>\s*([^<\n]+)', paginas_html)
+                            if clave_m:
+                                claves = clave_m.group(1).strip()
+                            
+                            observacoes = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            data_licao = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                             data_licao = formatar_data_brasileira(data_licao)
                             
                             dados['msa_grupo'].append([
@@ -506,7 +1337,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 5:
                             campos = [c.get_text(strip=True) for c in cols[:5]]
-                            # ✅ FORMATAR DATA (índice 4)
                             campos[4] = formatar_data_brasileira(campos[4])
                             dados['provas'].append([id_aluno, nome_aluno] + campos)
         
@@ -521,11 +1351,9 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ FORMATAR DATA (índice 6)
                             campos[6] = formatar_data_brasileira(campos[6])
                             dados['hinario_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # HINÁRIO Grupo
             if len(tabelas) > 1:
                 tbody_g = tabelas[1].find('tbody')
                 if tbody_g:
@@ -533,7 +1361,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ FORMATAR DATA (índice 2)
                             campos[2] = formatar_data_brasileira(campos[2])
                             dados['hinario_grupo'].append([id_aluno, nome_aluno] + campos)
         
@@ -548,7 +1375,6 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 7:
                             campos = [c.get_text(strip=True) for c in cols[:7]]
-                            # ✅ FORMATAR DATA (índice 6)
                             campos[6] = formatar_data_brasileira(campos[6])
                             dados['metodos'].append([id_aluno, nome_aluno] + campos)
         
@@ -563,26 +1389,57 @@ def extrair_dados_completo(html: str, id_aluno: int, nome_aluno: str) -> Dict:
                         cols = linha.find_all('td')
                         if len(cols) >= 6:
                             campos = [c.get_text(strip=True) for c in cols[:6]]
-                            # ✅ FORMATAR DATA (índice 5)
                             campos[5] = formatar_data_brasileira(campos[5])
                             dados['escalas_individual'].append([id_aluno, nome_aluno] + campos)
             
-            # ESCALAS Grupo
             if len(tabelas) > 1:
-                tbody_g = tabelas[1].find('tbody')
-                if tbody_g:
+                tbody_g = tabelas[1].find('tbody')if tbody_g:
                     for linha in tbody_g.find_all('tr'):
                         cols = linha.find_all('td')
                         if len(cols) >= 3:
                             campos = [c.get_text(strip=True) for c in cols[:3]]
-                            # ✅ FORMATAR DATA (índice 2)
-                            campos[2] = formatar_data_brasileira(campos[2])
+                            # ✅ VALIDAR DATA (índice 2)
+                            campos[2] = validar_e_corrigir_data(campos[2])
                             dados['escalas_grupo'].append([id_aluno, nome_aluno] + campos)
     
     except Exception as e:
         safe_print(f"⚠️ Erro ao extrair dados do aluno {id_aluno}: {e}")
     
     return dados
+
+def validar_e_corrigir_data(data_str: str) -> str:
+    """
+    Validação extra: detecta se data está invertida comparando com data atual
+    Ex: Se vier "09/02/2025" mas hoje é 02/11/2025, pode estar invertido
+    """
+    if not data_str or data_str.strip() == '':
+        return ''
+    
+    data_formatada = formatar_data_brasileira(data_str)
+    
+    # Se contém '/', verificar se faz sentido cronologicamente
+    if '/' in data_formatada:
+        try:
+            partes = data_formatada.split('/')
+            if len(partes) == 3:
+                dia = int(partes[0])
+                mes = int(partes[1])
+                ano = int(partes[2])
+                
+                # Validação básica
+                if dia > 31 or mes > 12:
+                    # Tentar inverter
+                    if mes <= 31 and dia <= 12:
+                        safe_print(f"⚠️ Data invertida detectada: {data_formatada} → {mes:02d}/{dia:02d}/{ano}")
+                        return f"{mes:02d}/{dia:02d}/{ano}"
+                
+                # Validar se a data é válida
+                datetime(ano, mes, dia)
+                return data_formatada
+        except:
+            pass
+    
+    return data_formatada
 
 async def coletar_aluno_async(session: aiohttp.ClientSession, aluno: Dict, semaphore: asyncio.Semaphore) -> tuple:
     """Coleta assíncrona com validação rigorosa"""
@@ -922,15 +1779,13 @@ def filtrar_dados_vazios(dados: Dict) -> Dict:
     return dados_filtrados
 
 def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], tempo_total: float):
-    """Envia dados em lotes para evitar timeout do Google Apps Script"""
+    """Envia dados em lotes para evitar timeout"""
     print("\n" + "=" * 80)
     print("📤 ENVIANDO DADOS EM LOTES PARA GOOGLE SHEETS")
     print("=" * 80)
     
-    # Gerar resumo completo
     resumo_completo = gerar_resumo_alunos(alunos_modulo2, todos_dados)
     
-    # Calcular número de lotes baseado no resumo
     total_alunos = len(resumo_completo)
     num_lotes = (total_alunos + LOTE_TAMANHO - 1) // LOTE_TAMANHO
     
@@ -938,7 +1793,6 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
     print(f"📦 Tamanho do lote: {LOTE_TAMANHO} alunos")
     print(f"🔢 Número de lotes: {num_lotes}")
     
-    # Metadata geral
     metadata_base = {
         'total_alunos_processados': len(alunos_modulo2),
         'alunos_com_dados': historico_stats['com_dados'],
@@ -949,17 +1803,14 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
     
     planilha_url = None
     
-    # Processar cada lote
     for lote_num in range(1, num_lotes + 1):
         inicio = (lote_num - 1) * LOTE_TAMANHO
         fim = min(lote_num * LOTE_TAMANHO, total_alunos)
         
         print(f"\n📦 Processando lote {lote_num}/{num_lotes} (alunos {inicio+1} a {fim})...")
         
-        # IDs dos alunos neste lote
         ids_lote = set(resumo_completo[i][0] for i in range(inicio, fim))
         
-        # Filtrar dados do lote
         lote_dados = {
             'mts_individual': [x for x in todos_dados['mts_individual'] if x[0] in ids_lote],
             'mts_grupo': [x for x in todos_dados['mts_grupo'] if x[0] in ids_lote],
@@ -974,12 +1825,10 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
             'resumo': resumo_completo[inicio:fim]
         }
         
-        # Metadata do lote
         metadata_lote = metadata_base.copy()
         metadata_lote['alunos_inicio'] = inicio
         metadata_lote['alunos_fim'] = fim
         
-        # Payload do lote
         payload = {
             'tipo': 'licoes_alunos_lote',
             'lote_numero': lote_num,
@@ -988,7 +1837,6 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
             'metadata': metadata_lote
         }
         
-        # Enviar lote
         try:
             print(f"   📡 Enviando {fim - inicio} alunos...")
             response = requests.post(
@@ -1002,7 +1850,6 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
                 if result.get('sucesso'):
                     print(f"   ✅ Lote {lote_num} processado com sucesso")
                     
-                    # Capturar URL da planilha no último lote
                     if lote_num == num_lotes and 'planilha' in result:
                         planilha_url = result['planilha'].get('url')
                 else:
@@ -1013,7 +1860,6 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
         except Exception as e:
             print(f"   ❌ Erro ao enviar lote {lote_num}: {e}")
         
-        # Aguardar entre lotes (exceto no último)
         if lote_num < num_lotes:
             time.sleep(2)
     
@@ -1026,7 +1872,7 @@ def enviar_lotes_google_sheets(todos_dados: Dict, alunos_modulo2: List[Dict], te
     print("=" * 80)
 
 def executar_historico(cookies_dict, alunos_modulo2):
-    """Executa coleta de histórico individual com sistema de 3 fases"""
+    """🎯 MÓDULO 3: Coleta histórico individual"""
     tempo_inicio = time.time()
     historico_stats['tempo_inicio'] = tempo_inicio
     
@@ -1051,7 +1897,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
         'escalas_individual': [], 'escalas_grupo': []
     }
     
-    # ========== FASE 1: COLETA ASSÍNCRONA ==========
+    # FASE 1: COLETA ASSÍNCRONA
     print(f"\n⚡ FASE 1: Coleta assíncrona em alta velocidade...")
     
     falhas_fase1 = []
@@ -1073,7 +1919,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
     print(f"\n✅ FASE 1 CONCLUÍDA")
     print(f"   Sucesso: {historico_stats['fase1_sucesso']} | Falhas: {len(falhas_fase1)}")
     
-    # ========== FASE 2: FALLBACK ROBUSTO ==========
+    # FASE 2: FALLBACK ROBUSTO
     if falhas_fase1:
         dados_fase2, falhas_fase2 = coletar_fallback_robusto(falhas_fase1, cookies_dict)
         todos_dados = mesclar_dados(todos_dados, dados_fase2)
@@ -1084,7 +1930,7 @@ def executar_historico(cookies_dict, alunos_modulo2):
         falhas_fase2 = []
         print("\n🎉 FASE 2 não necessária - todos processados na Fase 1!")
     
-    # ========== FASE 3: COLETA CIRÚRGICA ==========
+    # FASE 3: COLETA CIRÚRGICA
     if falhas_fase2:
         dados_fase3, falhas_finais = coletar_cirurgico(falhas_fase2, cookies_dict)
         todos_dados = mesclar_dados(todos_dados, dados_fase3)
@@ -1107,12 +1953,11 @@ def executar_historico(cookies_dict, alunos_modulo2):
     print(f"   Sem dados: {historico_stats['sem_dados']}")
     print(f"⏱️ Tempo: {tempo_total/60:.2f} minutos")
     
-    # Filtrar dados vazios
     todos_dados = filtrar_dados_vazios(todos_dados)
     
     # Backup local
     timestamp = gerar_timestamp()
-    backup_file = f'backup_historico_{timestamp.replace(":", "-")}.json'
+    backup_file = f'modulo3_historico_{timestamp.replace(":", "-")}.json'
     resumo_alunos = gerar_resumo_alunos(alunos_modulo2, todos_dados)
     
     with open(backup_file, 'w', encoding='utf-8') as f:
@@ -1126,18 +1971,18 @@ def executar_historico(cookies_dict, alunos_modulo2):
     # Enviar em lotes
     enviar_lotes_google_sheets(todos_dados, alunos_modulo2, tempo_total)
 
-# ==================== MAIN - ORQUESTRADOR ====================
+# ==================== MAIN - ORQUESTRADOR SEQUENCIAL ====================
 
 def main():
     tempo_inicio_total = time.time()
     
     print("\n" + "=" * 80)
-    print("🎼 SISTEMA MUSICAL - COLETOR COM DATAS CORRIGIDAS")
+    print("🎼 SISTEMA MUSICAL - COLETOR SEQUENCIAL CORRIGIDO")
     print("=" * 80)
     print("📋 Ordem de execução:")
-    print("   1️⃣ Localidades de Hortolândia (varredura de IDs)")
-    print("   2️⃣ Buscar Alunos (do Google Sheets)")
-    print("   3️⃣ Histórico Individual (3 fases + formatação de datas)")
+    print("   1️⃣ Localidades de Hortolândia → Salva JSON + Envia Google Sheets")
+    print("   2️⃣ Buscar Alunos (usa IDs do Módulo 1) → Salva JSON + Envia Sheets")
+    print("   3️⃣ Histórico Individual (usa alunos do Módulo 2) → Salva + Envia")
     print("=" * 80)
     
     # PASSO 1: Login único
@@ -1147,18 +1992,25 @@ def main():
         print("\n❌ Falha no login. Encerrando processo.")
         return
     
-    # PASSO 2: Executar Localidades (opcional)
-    # ids_igrejas = executar_localidades(session)
+    # PASSO 2: Executar Módulo 1 - Localidades
+    print("\n🚀 Iniciando Módulo 1...")
+    ids_igrejas = executar_localidades(session)
     
-    # PASSO 3: Buscar alunos do Google Sheets
-    alunos = buscar_alunos_hortolandia()
-    
-    if not alunos:
-        print("\n⚠️ Módulo 2 falhou. Interrompendo processo.")
+    if not ids_igrejas:
+        print("\n⚠️ Módulo 1 não encontrou localidades. Interrompendo processo.")
         return
     
-    # PASSO 4: Executar Histórico com datas formatadas
-    executar_historico(cookies, alunos)
+    # PASSO 3: Executar Módulo 2 - Alunos (usando IDs do Módulo 1)
+    print("\n🚀 Iniciando Módulo 2...")
+    alunos = executar_busca_alunos(session, ids_igrejas)
+    
+    if not alunos:
+        print("\n⚠️ Módulo 2 não encontrou alunos. Interrompendo processo.")
+        return
+    
+    # PASSO 4: Executar Módulo 3 - Histórico (usando alunos do Módulo 2)
+    print("\n🚀 Iniciando Módulo 3...")
+    executar_historico(cookies, alunosexecutar_historico(cookies, alunos)
     
     # RESUMO FINAL
     tempo_total = time.time() - tempo_inicio_total
@@ -1168,9 +2020,13 @@ def main():
     print("=" * 80)
     print(f"⏱️ Tempo total: {tempo_total/60:.2f} minutos")
     print(f"📊 Módulos executados:")
-    print(f"   ✅ Módulo 2: {len(alunos)} alunos carregados")
+    print(f"   ✅ Módulo 1: {len(ids_igrejas)} localidades")
+    print(f"   ✅ Módulo 2: {len(alunos)} alunos encontrados")
     print(f"   ✅ Módulo 3: {len(historico_stats['alunos_processados'])} históricos")
-    print(f"💾 Todos os backups salvos localmente")
+    print(f"💾 Todos os backups salvos localmente:")
+    print(f"   - modulo1_localidades_*.json")
+    print(f"   - modulo2_alunos_*.json")
+    print(f"   - modulo3_historico_*.json")
     print(f"📊 Planilhas criadas no Google Sheets")
     print(f"✅ Todas as datas no formato DD/MM/YYYY")
     print("=" * 80 + "\n")
