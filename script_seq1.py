@@ -1239,7 +1239,6 @@ def executar_historico(cookies_dict, alunos_modulo2):
     enviar_lotes_google_sheets(todos_dados, alunos_modulo2, tempo_total)
 
 # ==================== MAIN - ORQUESTRADOR SEQUENCIAL ====================
-
 def main():
     tempo_inicio_total = time.time()
     
@@ -1253,7 +1252,9 @@ def main():
     print("=" * 80)
     
     # PASSO 1: Login único
-    session, cookies = fazer_login_unico()if not session:
+    session, cookies = fazer_login_unico()
+    
+    if not session:
         print("\n❌ Falha no login. Encerrando processo.")
         return
     
@@ -1295,6 +1296,7 @@ def main():
     print(f"📊 Planilhas criadas no Google Sheets")
     print(f"✅ Todas as datas no formato DD/MM/YYYY")
     print("=" * 80 + "\n")
+
 
 if __name__ == "__main__":
     main()
