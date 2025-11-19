@@ -5,7 +5,10 @@ httpx==0.27.0  # Async HTTP client - NECESSÁRIO para velocidade
 h2==4.1.0  # HTTP/2 support para httpx
 requests==2.32.3
 urllib3==2.4.0
-
+# ========================================
+# COMPRESSÃO (ADICIONAR ESTA SEÇÃO)
+# ========================================
+brotli==1.1.0
 # ========================================
 # WEB SCRAPING E PARSING
 # ========================================
@@ -55,4 +58,5 @@ colorama==0.4.6
 greenlet==3.2.2
 typing_extensions==4.13.2
 tqdm==4.66.5
+
 
