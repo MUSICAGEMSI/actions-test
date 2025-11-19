@@ -135,34 +135,25 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
             timeout = 15 + (tentativa * 5)
             print(f"   Tentativa {tentativa}/{max_tentativas} (timeout: {timeout}s)...", end=" ")
             
-            # ⭐ ADICIONAR 'Accept-Encoding' no header e stream=False
-            headers_completo = {
-                **headers,
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Accept': 'application/json, text/plain, */*'
-            }
-
-            resp = session.get(url, headers=headers_completo, timeout=timeout, stream=False)
-
+            resp = session.get(url, headers=headers, timeout=timeout)
+            
             if resp.status_code != 200:
                 print(f"HTTP {resp.status_code}")
                 continue
-
-            # ⭐ FORÇAR DECODE DO CONTEÚDO
+            
+            # Decodificar resposta (suporta Brotli, Gzip e JSON direto)
             try:
-                # Tentar como JSON direto
                 instrutores = resp.json()
             except:
-                # Se falhar, decodificar manualmente
-                import gzip
                 try:
-                    content = gzip.decompress(resp.content).decode('utf-8')
+                    import brotli
+                    content = brotli.decompress(resp.content).decode('utf-8')
                     instrutores = json.loads(content)
-                except:
-                    print(f"Erro ao decodificar resposta")
-                    print(f"🔍 Content-Type: {resp.headers.get('Content-Type')}")
-                    print(f"🔍 Encoding: {resp.headers.get('Content-Encoding')}")
-                    print(f"🔍 Primeiros 100 bytes: {resp.content[:100]}")
+                except ImportError:
+                    print(f"❌ Biblioteca 'brotli' não instalada")
+                    continue
+                except Exception as e:
+                    print(f"Erro ao decodificar: {e}")
                     continue
             
             ids_dict = {}
@@ -200,7 +191,7 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
     
     print("\n❌ Falha ao carregar instrutores\n")
     return {}, set()
-
+    
 def extrair_data_hora_abertura_rapido(session, aula_id):
     """Extrai data e horário de abertura da aula"""
     try:
