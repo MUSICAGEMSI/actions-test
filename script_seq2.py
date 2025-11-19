@@ -135,17 +135,35 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
             timeout = 15 + (tentativa * 5)
             print(f"   Tentativa {tentativa}/{max_tentativas} (timeout: {timeout}s)...", end=" ")
             
-            resp = session.get(url, headers=headers, timeout=timeout)
-            
+            # ⭐ ADICIONAR 'Accept-Encoding' no header e stream=False
+            headers_completo = {
+                **headers,
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept': 'application/json, text/plain, */*'
+            }
+
+            resp = session.get(url, headers=headers_completo, timeout=timeout, stream=False)
+
             if resp.status_code != 200:
                 print(f"HTTP {resp.status_code}")
                 continue
-            print(f"\n🔍 Status: {resp.status_code}")
-            print(f"🔍 Content-Type: {resp.headers.get('Content-Type')}")
-            print(f"🔍 Primeiros 300 chars:\n{resp.text[:300]}")
-            print(f"🔍 Cookies na sessão: {len(session.cookies)}")
-            print()
-            instrutores = json.loads(resp.text)
+
+            # ⭐ FORÇAR DECODE DO CONTEÚDO
+            try:
+                # Tentar como JSON direto
+                instrutores = resp.json()
+            except:
+                # Se falhar, decodificar manualmente
+                import gzip
+                try:
+                    content = gzip.decompress(resp.content).decode('utf-8')
+                    instrutores = json.loads(content)
+                except:
+                    print(f"Erro ao decodificar resposta")
+                    print(f"🔍 Content-Type: {resp.headers.get('Content-Type')}")
+                    print(f"🔍 Encoding: {resp.headers.get('Content-Encoding')}")
+                    print(f"🔍 Primeiros 100 bytes: {resp.content[:100]}")
+                    continue
             
             ids_dict = {}
             nomes_completos_normalizados = set()
