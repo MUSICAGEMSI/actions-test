@@ -101,11 +101,18 @@ def fazer_login_unico():
             return None, None
         
         cookies_dict = extrair_cookies_playwright(pagina)
+        user_agent = pagina.evaluate("() => navigator.userAgent")
         navegador.close()
     
     session = criar_sessao_robusta()
     session.cookies.update(cookies_dict)
-    
+    session.headers.update({
+        'User-Agent': user_agent,
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+        'Referer': 'https://musical.congregacao.org.br/painel'
+    })
+  
     print("   ✅ Sessão configurada e pronta para uso\n")
     return session, cookies_dict
 
@@ -133,7 +140,11 @@ def carregar_instrutores_hortolandia(session, max_tentativas=5):
             if resp.status_code != 200:
                 print(f"HTTP {resp.status_code}")
                 continue
-            
+            print(f"\n🔍 Status: {resp.status_code}")
+            print(f"🔍 Content-Type: {resp.headers.get('Content-Type')}")
+            print(f"🔍 Primeiros 300 chars:\n{resp.text[:300]}")
+            print(f"🔍 Cookies na sessão: {len(session.cookies)}")
+            print()
             instrutores = json.loads(resp.text)
             
             ids_dict = {}
