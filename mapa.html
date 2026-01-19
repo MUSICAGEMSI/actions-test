@@ -1,0 +1,2081 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hortolândia – Mapa Interativo Premium</title>
+
+<style><!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hortolândia – Mapa Interativo Premium</title>
+
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    overflow: hidden;
+    height: 100vh;
+}
+
+#map-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at center, #0d0d0d 0%, #000 100%);
+}
+
+#map-wrapper {
+    position: relative;
+    z-index: 10;
+    cursor: grab;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#map-wrapper:active {
+    cursor: grabbing;
+}
+
+#map-wrapper.zooming {
+    transition: transform 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#svg-container {
+    height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+#city-map {
+    height: 100%;
+    width: auto;
+    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.1));
+}
+
+#city-map path {
+    stroke-width: 1.2;
+    fill: none;
+    animation: roadColors 20s ease-in-out infinite;
+}
+
+@keyframes roadColors {
+    0% { stroke: rgba(212, 175, 55, 0.85); }
+    25% { stroke: rgba(192, 192, 192, 0.85); }
+    50% { stroke: rgba(59, 130, 246, 0.85); }
+    75% { stroke: rgba(255, 255, 255, 0.75); }
+    100% { stroke: rgba(212, 175, 55, 0.85); }
+}
+
+/* ========== MARCADORES COM TRANSIÇÃO ========== */
+.marker {
+    position: absolute;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(37, 99, 235, 0.85));
+    border: 3px solid rgba(255, 255, 255, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transform: translate(-50%, -50%);
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100;
+    box-shadow: 
+        0 4px 15px rgba(0, 0, 0, 0.6),
+        0 0 20px rgba(59, 130, 246, 0.4);
+    overflow: hidden;
+}
+
+.marker-images {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.marker-image-desenho {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 1;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 2;
+}
+
+.marker-image-real {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 1;
+}
+
+.marker.active .marker-image-desenho {
+    opacity: 0;
+}
+
+.marker.active .marker-image-real {
+    opacity: 1;
+}
+
+.marker-emoji {
+    font-size: 22px;
+    z-index: 3;
+    position: absolute;
+}
+
+.marker::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: -1;
+}
+
+.marker:hover {
+    transform: translate(-50%, -50%) scale(1.4);
+    box-shadow: 
+        0 6px 25px rgba(0, 0, 0, 0.8),
+        0 0 35px rgba(59, 130, 246, 0.7),
+        0 0 50px rgba(59, 130, 246, 0.4);
+    z-index: 200;
+}
+
+.marker:hover::before {
+    opacity: 1;
+    animation: ripple 1.5s ease-out infinite;
+}
+
+@keyframes ripple {
+    0% {
+        inset: -8px;
+        opacity: 0.5;
+    }
+    100% {
+        inset: -25px;
+        opacity: 0;
+    }
+}
+
+.marker.active {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(220, 38, 38, 0.9));
+    border-color: rgba(255, 255, 255, 1);
+    transform: translate(-50%, -50%) scale(1.3);
+    box-shadow: 
+        0 6px 25px rgba(0, 0, 0, 0.8),
+        0 0 30px rgba(239, 68, 68, 0.8),
+        0 0 45px rgba(239, 68, 68, 0.5);
+    z-index: 150;
+    animation: activePulse 2s ease-in-out infinite;
+}
+
+@keyframes activePulse {
+    0%, 100% { 
+        box-shadow: 
+            0 6px 25px rgba(0, 0, 0, 0.8),
+            0 0 30px rgba(239, 68, 68, 0.8),
+            0 0 45px rgba(239, 68, 68, 0.5);
+    }
+    50% { 
+        box-shadow: 
+            0 8px 30px rgba(0, 0, 0, 0.9),
+            0 0 40px rgba(239, 68, 68, 1),
+            0 0 60px rgba(239, 68, 68, 0.6);
+    }
+}
+
+/* ========== GLASS MORPHISM ========== */
+.glass {
+    background: rgba(15, 15, 15, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(25px) saturate(150%);
+    -webkit-backdrop-filter: blur(25px) saturate(150%);
+    border-radius: 16px;
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.8),
+        inset 0 1px 1px rgba(255, 255, 255, 0.05);
+}
+
+/* ========== HEADER ========== */
+#header {
+    position: fixed;
+    top: 22px;
+    right: 22px;
+    padding: 18px 26px;
+    z-index: 1000;
+    animation: slideInDown 0.6s ease;
+}
+
+@keyframes slideInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+#header h2 {
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, #60a5fa, #3b82f6, #2563eb);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradientFlow 6s ease infinite;
+}
+
+@keyframes gradientFlow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+#header p {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+
+/* ========== SIDEBAR ========== */
+#sidebar {
+    position: fixed;
+    top: 22px;
+    left: 22px;
+    width: 310px;
+    max-height: calc(100vh - 44px);
+    padding: 22px;
+    overflow-y: auto;
+    z-index: 1000;
+    animation: slideInLeft 0.6s ease;
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+#sidebar h3 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: #fff;
+}
+
+.total-count {
+    display: inline-block;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(37, 99, 235, 0.15));
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #60a5fa;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: 0.5px;
+}
+
+.bairro-item {
+    padding: 13px 15px;
+    margin-bottom: 7px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+
+.bairro-item::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, #3b82f6, #6366f1);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.bairro-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(59, 130, 246, 0.5);
+    transform: translateX(6px);
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.15);
+}
+
+.bairro-item:hover::before {
+    opacity: 1;
+}
+
+.bairro-item.active {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.12));
+    border-color: rgba(59, 130, 246, 0.6);
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.25);
+}
+
+.bairro-item.active::before {
+    opacity: 1;
+    width: 4px;
+}
+
+.bairro-icon {
+    font-size: 19px;
+    margin-right: 11px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.bairro-nome {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.95);
+    flex: 1;
+}
+
+#sidebar::-webkit-scrollbar {
+    width: 7px;
+}
+
+#sidebar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+}
+
+#sidebar::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.35);
+    border-radius: 4px;
+    transition: background 0.3s;
+}
+
+#sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(59, 130, 246, 0.55);
+}
+
+/* ========== CARD ========== */
+#info-card {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 370px;
+    padding: 0;
+    display: none;
+    z-index: 1000;
+    animation: slideUpSmooth 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideUpSmooth {
+    from {
+        opacity: 0;
+        transform: translateY(40px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+#info-card.visible {
+    display: block;
+}
+
+.card-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(37, 99, 235, 0.08));
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#card-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.close-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #fff;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    font-size: 21px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.close-btn:hover {
+    background: rgba(239, 68, 68, 0.85);
+    border-color: rgba(239, 68, 68, 1);
+    transform: rotate(90deg);
+    box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+}
+
+.card-content {
+    padding: 22px 24px;
+}
+
+#card-description {
+    font-size: 18px;
+    line-height: 1.7;
+    color: #60a5fa;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 1px;
+    text-align: center;
+    padding: 12px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 8px;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    margin-bottom: 18px;
+}
+
+.ver-dados-btn {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    color: #fff;
+    border: none;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+    letter-spacing: 0.5px;
+}
+
+.ver-dados-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 25px rgba(59, 130, 246, 0.5);
+}
+
+.ver-dados-btn:active {
+    transform: translateY(0);
+}
+
+/* ========== CONTROLES ========== */
+#zoom-controls {
+    position: fixed;
+    bottom: 32px;
+    left: 32px;
+    display: flex;
+    gap: 11px;
+    z-index: 1000;
+    animation: slideInUp 0.6s ease;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.zoom-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(15, 15, 15, 0.8);
+    backdrop-filter: blur(20px);
+    color: #fff;
+    font-size: 23px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+}
+
+.zoom-btn:hover {
+    background: rgba(59, 130, 246, 0.3);
+    border-color: rgba(59, 130, 246, 0.6);
+    transform: scale(1.12);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
+}
+
+.zoom-btn:active {
+    transform: scale(1.05);
+}
+
+/* ========== LOADING ========== */
+#loading-status {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(15, 15, 15, 0.9);
+    padding: 30px 40px;
+    border-radius: 15px;
+    border: 1px solid rgba(59, 130, 246, 0.5);
+    color: #60a5fa;
+    font-size: 16px;
+    z-index: 2000;
+    display: none;
+}
+
+#loading-status.visible {
+    display: block;
+}
+
+/* ========== RESPONSIVO ========== */
+@media (max-width: 768px) {
+    #sidebar {
+        width: 270px;
+        left: 12px;
+        top: 12px;
+    }
+
+    #header {
+        right: 12px;
+        top: 12px;
+    }
+
+    #info-card {
+        width: calc(100% - 24px);
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+    }
+
+    #zoom-controls {
+        left: 12px;
+        bottom: 12px;
+    }
+
+    #svg-container {
+        height: 75vh;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading-status">
+    <div>🔄 Carregando mapa...</div>
+</div>
+
+<div id="header" class="glass">
+    <h2>🗺️ SAM - Hortolândia</h2>
+    <p>v.PREMIUM/2026</p>
+</div>
+
+<div id="map-container">
+    <div id="map-wrapper">
+        <div id="svg-container"></div>
+    </div>
+</div>
+
+<div id="sidebar" class="glass">
+    <h3>📍 Localidades</h3>
+    <div class="total-count" id="total-count">35 localidades</div>
+    <div id="bairros-list"></div>
+</div>
+
+<div id="info-card" class="glass">
+    <div class="card-header">
+        <h3 id="card-title">Localidade</h3>
+        <button class="close-btn" onclick="fecharCard()">×</button>
+    </div>
+    <div class="card-content">
+        <p id="card-description">Informações da localidade</p>
+        <button class="ver-dados-btn" onclick="verDados()">VER DADOS COMPLETOS</button>
+    </div>
+</div>
+
+<div id="zoom-controls">
+    <button class="zoom-btn" onclick="zoom(1.3)" title="Aumentar Zoom">+</button>
+    <button class="zoom-btn" onclick="zoom(0.77)" title="Diminuir Zoom">−</button>
+    <button class="zoom-btn" onclick="resetZoom()" title="Resetar Visualização">⟲</button>
+</div>
+
+<script>
+console.log('🗺️ Iniciando Sistema SAM Premium - Hortolândia');
+console.log('=================================================');
+
+// ============================================
+// DADOS DAS LOCALIDADES
+// ============================================
+const bairros = [
+    {nome: "Jardim Santana - Central", codigo: "BR-22-1431", x: 600, y: 245, img: "jardim-santana"},
+    {nome: "Jardim Santa Izabel", codigo: "BR-22-1434", x: 809, y: 389, img: "jardim-santa-izabel"},
+    {nome: "Vila Real", codigo: "BR-22-1997", x: 567, y: 129, img: "vila-real"},
+    {nome: "Jardim Amanda I", codigo: "BR-22-2052", x: 480, y: 365, img: "amanda-1"},
+    {nome: "Jardim Aline", codigo: "BR-22-2795", x: 877, y: 180, img: "jardim-aline"},
+    {nome: "Jardim das Colinas", codigo: "BR-22-3238", x: 517, y: 136, img: "jardim-das-colinas"},
+    {nome: "Jardim Novo Horizonte", codigo: "BR-22-3493", x: 342, y: 279, img: "jardim-novo-horizonte"},
+    {nome: "Jardim Interlagos", codigo: "BR-22-3833", x: 606, y: 350, img: "jardim-interlagos"},
+    {nome: "Jardim Amanda IV", codigo: "BR-22-5419", x: 447, y: 332, img: "amanda-4"},
+    {nome: "Residencial Bellaville", codigo: "BR-22-5420", x: 525, y: 35, imagem: "residencial-bellaville"}
+];
+
+let bairroAtivo = null;
+let scale = 1;
+let translateX = 0;
+let translateY = 0;
+let isDragging = false;
+let startX, startY;
+let svgBounds = null;
+
+// ============================================
+// CARREGAR SVG
+// ============================================
+const loadingStatus = document.getElementById('loading-status');
+loadingStatus.classList.add('visible');
+
+console.log('📂 Carregando SVG: assets/hortolandia-roads.svg');
+
+fetch('assets/hortolandia-roads.svg')
+    .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        console.log('✅ SVG encontrado! Status:', response.status);
+        return response.text();
+    })
+    .then(svgText => {
+        console.log('✅ SVG carregado! Tamanho:', svgText.length, 'caracteres');
+        document.getElementById('svg-container').innerHTML = svgText;
+        const svgElement = document.querySelector('#svg-container svg');
+        if (svgElement) {
+            svgElement.id = "city-map";
+            console.log('✅ SVG inserido no DOM');
+            
+            setTimeout(() => {
+                calcularPosicoes();
+                criarMarcadores();
+                loadingStatus.classList.remove('visible');
+            }, 100);
+        }
+    })
+    .catch(error => {
+        console.error('❌ Erro ao carregar SVG:', error);
+        console.log('⚠️ Criando mapa sem SVG...');
+        loadingStatus.textContent = '⚠️ Mapa carregado sem fundo SVG';
+        setTimeout(() => {
+            loadingStatus.classList.remove('visible');
+            criarMarcadores();
+        }, 2000);
+    });
+
+// ============================================
+// CALCULAR POSIÇÕES RELATIVAS AO SVG
+// ============================================
+function calcularPosicoes() {
+    const svg = document.getElementById('city-map');
+    if (!svg) {
+        console.warn('⚠️ SVG não encontrado, usando posições absolutas');
+        return;
+    }
+    
+    svgBounds = svg.getBoundingClientRect();
+    console.log('📐 Dimensões do SVG:', svgBounds);
+}
+
+// ============================================
+// RENDERIZAR LISTA
+// ============================================
+function renderizarLista() {
+    console.log('📋 Renderizando lista de', bairros.length, 'localidades');
+    const lista = document.getElementById("bairros-list");
+    lista.innerHTML = "";
+
+    bairros.forEach((bairro, index) => {
+        const item = document.createElement("div");
+        item.className = "bairro-item";
+        item.innerHTML = `
+            <span class="bairro-icon">🏛️</span>
+            <span class="bairro-nome">${bairro.nome}</span>
+        `;
+        item.onclick = () => focarBairro(index);
+        lista.appendChild(item);
+    });
+
+    document.getElementById('total-count').textContent = `${bairros.length} localidades`;
+    console.log('✅ Lista renderizada');
+}
+
+// ============================================
+// CRIAR MARCADORES
+// ============================================
+function criarMarcadores() {
+    console.log('🎯 Criando marcadores...');
+    console.log('📂 Pasta desenhos: assets/fotos/');
+    console.log('📂 Pasta reais: assets/fotosreal/');
+    
+    let marcadoresOk = 0;
+    let imagensDesenhOk = 0;
+    let imagensRealOk = 0;
+    
+    let markersContainer = document.getElementById('markers-overlay');
+    if (!markersContainer) {
+        markersContainer = document.createElement('div');
+        markersContainer.id = 'markers-overlay';
+        markersContainer.style.position = 'absolute';
+        markersContainer.style.top = '0';
+        markersContainer.style.left = '0';
+        markersContainer.style.width = '100%';
+        markersContainer.style.height = '100%';
+        markersContainer.style.pointerEvents = 'none';
+        document.getElementById('map-wrapper').appendChild(markersContainer);
+    }
+    
+    bairros.forEach((bairro, index) => {
+        const marker = document.createElement("div");
+        marker.className = "marker";
+        marker.id = `marker-${index}`;
+        marker.style.left = `${bairro.x}px`;
+        marker.style.top = `${bairro.y}px`;
+        marker.style.pointerEvents = 'auto';
+        
+        const imgDesenho = `assets/fotos/${bairro.img}.png`;
+        const imgReal = `assets/fotosreal/${bairro.img}.jpg`;
+        
+        const imagesContainer = document.createElement("div");
+        imagesContainer.className = "marker-images";
+        
+        const desenho = document.createElement("img");
+        desenho.src = imgDesenho;
+        desenho.alt = `${bairro.nome} - Desenho`;
+        desenho.className = "marker-image-desenho";
+        desenho.onload = function() {
+            imagensDesenhOk++;
+            console.log(`✅ Desenho ${imagensDesenhOk}/${bairros.length}: ${bairro.img}.png`);
+        };
+        desenho.onerror = function() {
+            console.warn(`⚠️ Desenho não encontrado: ${imgDesenho}`);
+            const emoji = document.createElement("span");
+            emoji.className = "marker-emoji";
+            emoji.textContent = "🏛️";
+            marker.appendChild(emoji);
+        };
+        
+        const real = document.createElement("img");
+        real.src = imgReal;
+        real.alt = `${bairro.nome} - Real`;
+        real.className = "marker-image-real";
+        real.onload = function() {
+            imagensRealOk++;
+            console.log(`✅ Foto real ${imagensRealOk}/${bairros.length}: ${bairro.img}.jpg`);
+        };
+        real.onerror = function() {
+            console.warn(`⚠️ Foto real não encontrada: ${imgReal}`);
+        };
+        
+        imagesContainer.appendChild(real);
+        imagesContainer.appendChild(desenho);
+        marker.appendChild(imagesContainer);
+        
+        marker.onclick = (e) => {
+            e.stopPropagation();
+            focarBairro(index);
+        };
+        
+        markersContainer.appendChild(marker);
+        marcadoresOk++;
+    });
+    
+    console.log(`✅ ${marcadoresOk} marcadores criados no mapa`);
+    console.log('📊 RESUMO DO CARREGAMENTO:');
+    console.log(`- Marcadores criados: ${marcadoresOk}/${bairros.length}`);
+    
+    setTimeout(() => {
+        console.log(`- Desenhos carregados: ${imagensDesenhOk}/${bairros.length}`);
+        console.log(`- Fotos reais carregadas: ${imagensRealOk}/${bairros.length}`);
+        if (imagensDesenhOk === 0) {
+            console.error('❌ NENHUM DESENHO FOI CARREGADO!');
+        }
+        if (imagensRealOk === 0) {
+            console.error('❌ NENHUMA FOTO REAL FOI CARREGADA!');
+        }
+    }, 3000);
+}
+
+// ============================================
+// FOCAR EM BAIRRO
+// ============================================
+function focarBairro(index) {
+    const bairro = bairros[index];
+    console.log('🎯 Focando em:', bairro.nome);
+    
+    document.querySelectorAll('.marker').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.bairro-item').forEach(m => m.classList.remove('active'));
+    
+    const marker = document.getElementById(`marker-${index}`);
+    if (marker) marker.classList.add('active');
+    
+    const items = document.querySelectorAll('.bairro-item');
+    if (items[index]) {
+        items[index].classList.add('active');
+        items[index].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.classList.add('zooming');
+    
+    scale = 1.7;
+    translateX = (window.innerWidth / 2) - (bairro.x * scale);
+    translateY = (window.innerHeight / 2) - (bairro.y * scale);
+    
+    updateTransform();
+    
+    setTimeout(() => wrapper.classList.remove('zooming'), 1000);
+    
+    mostrarCard(bairro);
+    bairroAtivo = bairro;
+}
+
+function mostrarCard(bairro) {
+    const card = document.getElementById("info-card");
+    document.getElementById("card-title").textContent = bairro.nome;
+    document.getElementById("card-description").textContent = bairro.codigo;
+    card.classList.add("visible");
+}
+
+function fecharCard() {
+    document.getElementById("info-card").classList.remove("visible");
+    document.querySelectorAll('.marker').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.bairro-item').forEach(m => m.classList.remove('active'));
+    bairroAtivo = null;
+    resetZoom();
+}
+
+function verDados() {
+    if (bairroAtivo) {
+        alert(`🚧 Funcionalidade em desenvolvimento!\n\nEm breve: dados completos sobre ${bairroAtivo.nome}`);
+    }
+}
+
+// ============================================
+// ZOOM
+// ============================================
+function zoom(factor) {
+    scale *= factor;
+    scale = Math.max(0.5, Math.min(scale, 3));
+    updateTransform();
+}
+
+function resetZoom() {
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.classList.add('zooming');
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform();
+    setTimeout(() => wrapper.classList.remove('zooming'), 1000);
+}
+
+function updateTransform() {
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+}
+
+// ============================================
+// PAN (ARRASTAR)
+// ============================================
+const mapContainer = document.getElementById("map-container");
+
+mapContainer.addEventListener("mousedown", (e) => {
+    if (!e.target.closest('.marker') && 
+        !e.target.closest('#sidebar') && 
+        !e.target.closest('#header') && 
+        !e.target.closest('#info-card') &&
+        !e.target.closest('#zoom-controls')) {
+        isDragging = true;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        e.preventDefault();
+    }
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (isDragging) {
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        updateTransform();
+    }
+});
+
+document.addEventListener("mouseup", () => {
+    if (isDragging) {
+        isDragging = false;
+    }
+});
+
+// ============================================
+// ZOOM COM SCROLL
+// ============================================
+mapContainer.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = scale * delta;
+    
+    if (newScale >= 0.5 && newScale <= 3) {
+        const wrapper = document.getElementById("map-wrapper");
+        const rect = wrapper.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        const xs = (x - translateX) / scale;
+        const ys = (y - translateY) / scale;
+        
+        scale = newScale;
+        
+        translateX = x - xs * scale;
+        translateY = y - ys * scale;
+        
+        updateTransform();
+    }
+}, { passive: false });
+
+// ============================================
+// TOUCH SUPPORT
+// ============================================
+let touchStartDistance = 0;
+let touchStartScale = 1;
+
+mapContainer.addEventListener("touchstart", (e) => {
+    if (e.target.closest('.marker') || 
+        e.target.closest('#sidebar') || 
+        e.target.closest('#header') || 
+        e.target.closest('#info-card') ||
+        e.target.closest('#zoom-controls')) {
+        return;
+    }
+    
+    if (e.touches.length === 2) {
+        touchStartDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        touchStartScale = scale;
+    } else if (e.touches.length === 1) {
+        isDragging = true;
+        startX = e.touches[0].clientX - translateX;
+        startY = e.touches[0].clientY - translateY;
+    }
+});
+
+mapContainer.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+        e.preventDefault();
+        const distance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        const newScale = touchStartScale * (distance / touchStartDistance);
+        if (newScale >= 0.5 && newScale <= 3) {
+            scale = newScale;
+            updateTransform();
+        }
+    } else if (isDragging && e.touches.length === 1) {
+        e.preventDefault();
+        translateX = e.touches[0].clientX - startX;
+        translateY = e.touches[0].clientY - startY;
+        updateTransform();
+    }
+}, { passive: false });
+
+mapContainer.addEventListener("touchend", () => {
+    isDragging = false;
+});
+
+// ============================================
+// INICIALIZAÇÃO
+// ============================================
+window.onload = () => {
+    renderizarLista();
+    console.log('✅ Sistema iniciado!');
+    console.log('💡 Funcionalidades:');
+    console.log('- ✅ Mapa SVG responsivo');
+    console.log('- ✅ Transição de imagens (desenho → real ao clicar)');
+    console.log('- ✅ Zoom suave com scroll/pinch');
+    console.log('- ✅ Pan (arrastar) com mouse/touch');
+    console.log('- ✅ Marcadores mantêm posição em qualquer zoom');
+    console.log('- ✅ Reset automático ao fechar card');
+};
+</script>
+
+</body>
+</html>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    overflow: hidden;
+    height: 100vh;
+}
+
+#map-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at center, #0d0d0d 0%, #000 100%);
+}
+
+#map-wrapper {
+    position: relative;
+    z-index: 10;
+    cursor: grab;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#map-wrapper:active {
+    cursor: grabbing;
+}
+
+#map-wrapper.zooming {
+    transition: transform 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#svg-container {
+    height: 75vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+#city-map {
+    height: 100%;
+    width: auto;
+    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.1));
+}
+
+#city-map path {
+    stroke-width: 1.2;
+    fill: none;
+    animation: roadColors 20s ease-in-out infinite;
+}
+
+@keyframes roadColors {
+    0% { stroke: rgba(212, 175, 55, 0.85); }
+    25% { stroke: rgba(192, 192, 192, 0.85); }
+    50% { stroke: rgba(59, 130, 246, 0.85); }
+    75% { stroke: rgba(255, 255, 255, 0.75); }
+    100% { stroke: rgba(212, 175, 55, 0.85); }
+}
+
+/* ========== MARCADORES COM TRANSIÇÃO ========== */
+.marker {
+    position: absolute;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(37, 99, 235, 0.85));
+    border: 3px solid rgba(255, 255, 255, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transform: translate(-50%, -50%);
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100;
+    box-shadow: 
+        0 4px 15px rgba(0, 0, 0, 0.6),
+        0 0 20px rgba(59, 130, 246, 0.4);
+    overflow: hidden;
+}
+
+.marker-images {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.marker-image-desenho {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 1;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 2;
+}
+
+.marker-image-real {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 1;
+}
+
+.marker.active .marker-image-desenho {
+    opacity: 0;
+}
+
+.marker.active .marker-image-real {
+    opacity: 1;
+}
+
+.marker-emoji {
+    font-size: 22px;
+    z-index: 3;
+    position: absolute;
+}
+
+.marker::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: -1;
+}
+
+.marker:hover {
+    transform: translate(-50%, -50%) scale(1.4);
+    box-shadow: 
+        0 6px 25px rgba(0, 0, 0, 0.8),
+        0 0 35px rgba(59, 130, 246, 0.7),
+        0 0 50px rgba(59, 130, 246, 0.4);
+    z-index: 200;
+}
+
+.marker:hover::before {
+    opacity: 1;
+    animation: ripple 1.5s ease-out infinite;
+}
+
+@keyframes ripple {
+    0% {
+        inset: -8px;
+        opacity: 0.5;
+    }
+    100% {
+        inset: -25px;
+        opacity: 0;
+    }
+}
+
+.marker.active {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(220, 38, 38, 0.9));
+    border-color: rgba(255, 255, 255, 1);
+    transform: translate(-50%, -50%) scale(1.3);
+    box-shadow: 
+        0 6px 25px rgba(0, 0, 0, 0.8),
+        0 0 30px rgba(239, 68, 68, 0.8),
+        0 0 45px rgba(239, 68, 68, 0.5);
+    z-index: 150;
+    animation: activePulse 2s ease-in-out infinite;
+}
+
+@keyframes activePulse {
+    0%, 100% { 
+        box-shadow: 
+            0 6px 25px rgba(0, 0, 0, 0.8),
+            0 0 30px rgba(239, 68, 68, 0.8),
+            0 0 45px rgba(239, 68, 68, 0.5);
+    }
+    50% { 
+        box-shadow: 
+            0 8px 30px rgba(0, 0, 0, 0.9),
+            0 0 40px rgba(239, 68, 68, 1),
+            0 0 60px rgba(239, 68, 68, 0.6);
+    }
+}
+
+/* ========== GLASS MORPHISM ========== */
+.glass {
+    background: rgba(15, 15, 15, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(25px) saturate(150%);
+    -webkit-backdrop-filter: blur(25px) saturate(150%);
+    border-radius: 16px;
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.8),
+        inset 0 1px 1px rgba(255, 255, 255, 0.05);
+}
+
+/* ========== HEADER ========== */
+#header {
+    position: fixed;
+    top: 22px;
+    right: 22px;
+    padding: 18px 26px;
+    z-index: 1000;
+    animation: slideInDown 0.6s ease;
+}
+
+@keyframes slideInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+#header h2 {
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, #60a5fa, #3b82f6, #2563eb);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradientFlow 6s ease infinite;
+}
+
+@keyframes gradientFlow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+#header p {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+
+/* ========== SIDEBAR ========== */
+#sidebar {
+    position: fixed;
+    top: 22px;
+    left: 22px;
+    width: 310px;
+    max-height: calc(100vh - 44px);
+    padding: 22px;
+    overflow-y: auto;
+    z-index: 1000;
+    animation: slideInLeft 0.6s ease;
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+#sidebar h3 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: #fff;
+}
+
+.total-count {
+    display: inline-block;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(37, 99, 235, 0.15));
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #60a5fa;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: 0.5px;
+}
+
+.bairro-item {
+    padding: 13px 15px;
+    margin-bottom: 7px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+
+.bairro-item::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, #3b82f6, #6366f1);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.bairro-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(59, 130, 246, 0.5);
+    transform: translateX(6px);
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.15);
+}
+
+.bairro-item:hover::before {
+    opacity: 1;
+}
+
+.bairro-item.active {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.12));
+    border-color: rgba(59, 130, 246, 0.6);
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.25);
+}
+
+.bairro-item.active::before {
+    opacity: 1;
+    width: 4px;
+}
+
+.bairro-icon {
+    font-size: 19px;
+    margin-right: 11px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.bairro-nome {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.95);
+    flex: 1;
+}
+
+#sidebar::-webkit-scrollbar {
+    width: 7px;
+}
+
+#sidebar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+}
+
+#sidebar::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.35);
+    border-radius: 4px;
+    transition: background 0.3s;
+}
+
+#sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(59, 130, 246, 0.55);
+}
+
+/* ========== CARD ========== */
+#info-card {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 370px;
+    padding: 0;
+    display: none;
+    z-index: 1000;
+    animation: slideUpSmooth 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideUpSmooth {
+    from {
+        opacity: 0;
+        transform: translateY(40px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+#info-card.visible {
+    display: block;
+}
+
+.card-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(37, 99, 235, 0.08));
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#card-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.close-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #fff;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    font-size: 21px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.close-btn:hover {
+    background: rgba(239, 68, 68, 0.85);
+    border-color: rgba(239, 68, 68, 1);
+    transform: rotate(90deg);
+    box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+}
+
+.card-content {
+    padding: 22px 24px;
+}
+
+#card-description {
+    font-size: 18px;
+    line-height: 1.7;
+    color: #60a5fa;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 1px;
+    text-align: center;
+    padding: 12px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 8px;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    margin-bottom: 18px;
+}
+
+.ver-dados-btn {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    color: #fff;
+    border: none;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+    letter-spacing: 0.5px;
+}
+
+.ver-dados-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 25px rgba(59, 130, 246, 0.5);
+}
+
+.ver-dados-btn:active {
+    transform: translateY(0);
+}
+
+/* ========== CONTROLES ========== */
+#zoom-controls {
+    position: fixed;
+    bottom: 32px;
+    left: 32px;
+    display: flex;
+    gap: 11px;
+    z-index: 1000;
+    animation: slideInUp 0.6s ease;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.zoom-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(15, 15, 15, 0.8);
+    backdrop-filter: blur(20px);
+    color: #fff;
+    font-size: 23px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+}
+
+.zoom-btn:hover {
+    background: rgba(59, 130, 246, 0.3);
+    border-color: rgba(59, 130, 246, 0.6);
+    transform: scale(1.12);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
+}
+
+.zoom-btn:active {
+    transform: scale(1.05);
+}
+
+/* ========== LOADING ========== */
+#loading-status {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(15, 15, 15, 0.9);
+    padding: 30px 40px;
+    border-radius: 15px;
+    border: 1px solid rgba(59, 130, 246, 0.5);
+    color: #60a5fa;
+    font-size: 16px;
+    z-index: 2000;
+    display: none;
+}
+
+#loading-status.visible {
+    display: block;
+}
+
+/* ========== RESPONSIVO ========== */
+@media (max-width: 768px) {
+    #sidebar {
+        width: 270px;
+        left: 12px;
+        top: 12px;
+    }
+
+    #header {
+        right: 12px;
+        top: 12px;
+    }
+
+    #info-card {
+        width: calc(100% - 24px);
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+    }
+
+    #zoom-controls {
+        left: 12px;
+        bottom: 12px;
+    }
+
+    #svg-container {
+        height: 75vh;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading-status">
+    <div>🔄 Carregando mapa...</div>
+</div>
+
+<div id="header" class="glass">
+    <h2>🗺️ SAM - Hortolândia</h2>
+    <p>v.PREMIUM/2026</p>
+</div>
+
+<div id="map-container">
+    <div id="map-wrapper">
+        <div id="svg-container"></div>
+    </div>
+</div>
+
+<div id="sidebar" class="glass">
+    <h3>📍 Localidades</h3>
+    <div class="total-count" id="total-count">35 localidades</div>
+    <div id="bairros-list"></div>
+</div>
+
+<div id="info-card" class="glass">
+    <div class="card-header">
+        <h3 id="card-title">Localidade</h3>
+        <button class="close-btn" onclick="fecharCard()">×</button>
+    </div>
+    <div class="card-content">
+        <p id="card-description">Informações da localidade</p>
+        <button class="ver-dados-btn" onclick="verDados()">VER DADOS COMPLETOS</button>
+    </div>
+</div>
+
+<div id="zoom-controls">
+    <button class="zoom-btn" onclick="zoom(1.3)" title="Aumentar Zoom">+</button>
+    <button class="zoom-btn" onclick="zoom(0.77)" title="Diminuir Zoom">−</button>
+    <button class="zoom-btn" onclick="resetZoom()" title="Resetar Visualização">⟲</button>
+</div>
+
+<script>
+console.log('🗺️ Iniciando Sistema SAM Premium - Hortolândia');
+console.log('=================================================');
+
+// ============================================
+// DADOS DAS LOCALIDADES
+// ============================================
+const bairros = [
+    {nome: "Jardim Santana - Central", codigo: "BR-22-1431", x: 600, y: 245, img: "jardim-santana"},
+    {nome: "Jardim Santa Izabel", codigo: "BR-22-1434", x: 809, y: 389, img: "jardim-santa-izabel"},
+    {nome: "Vila Real", codigo: "BR-22-1997", x: 567, y: 129, img: "vila-real"},
+    {nome: "Jardim Amanda I", codigo: "BR-22-2052", x: 480, y: 365, img: "amanda-1"},
+    {nome: "Jardim Aline", codigo: "BR-22-2795", x: 877, y: 180, img: "jardim-aline"},
+    {nome: "Jardim das Colinas", codigo: "BR-22-3238", x: 517, y: 136, img: "jardim-das-colinas"},
+    {nome: "Jardim Novo Horizonte", codigo: "BR-22-3493", x: 342, y: 279, img: "jardim-novo-horizonte"},
+    {nome: "Jardim Interlagos", codigo: "BR-22-3833", x: 606, y: 350, img: "jardim-interlagos"},
+    {nome: "Jardim Amanda IV", codigo: "BR-22-5419", x: 447, y: 332, img: "amanda-4"},
+    {nome: "Residencial Bellaville", codigo: "BR-22-5420", x: 525, y: 35, imagem: "residencial-bellaville"}    
+];
+
+let bairroAtivo = null;
+let scale = 1;
+let translateX = 0;
+let translateY = 0;
+let isDragging = false;
+let startX, startY;
+let svgBounds = null;
+
+// ============================================
+// CARREGAR SVG
+// ============================================
+const loadingStatus = document.getElementById('loading-status');
+loadingStatus.classList.add('visible');
+
+console.log('📂 Carregando SVG: assets/hortolandia-roads.svg');
+
+fetch('assets/hortolandia-roads.svg')
+    .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        console.log('✅ SVG encontrado! Status:', response.status);
+        return response.text();
+    })
+    .then(svgText => {
+        console.log('✅ SVG carregado! Tamanho:', svgText.length, 'caracteres');
+        document.getElementById('svg-container').innerHTML = svgText;
+        const svgElement = document.querySelector('#svg-container svg');
+        if (svgElement) {
+            svgElement.id = "city-map";
+            console.log('✅ SVG inserido no DOM');
+            
+            setTimeout(() => {
+                calcularPosicoes();
+                criarMarcadores();
+                loadingStatus.classList.remove('visible');
+            }, 100);
+        }
+    })
+    .catch(error => {
+        console.error('❌ Erro ao carregar SVG:', error);
+        console.log('⚠️ Criando mapa sem SVG...');
+        loadingStatus.textContent = '⚠️ Mapa carregado sem fundo SVG';
+        setTimeout(() => {
+            loadingStatus.classList.remove('visible');
+            criarMarcadores();
+        }, 2000);
+    });
+
+// ============================================
+// CALCULAR POSIÇÕES RELATIVAS AO SVG
+// ============================================
+function calcularPosicoes() {
+    const svg = document.getElementById('city-map');
+    if (!svg) {
+        console.warn('⚠️ SVG não encontrado, usando posições absolutas');
+        return;
+    }
+    
+    svgBounds = svg.getBoundingClientRect();
+    console.log('📐 Dimensões do SVG:', svgBounds);
+}
+
+// ============================================
+// RENDERIZAR LISTA
+// ============================================
+function renderizarLista() {
+    console.log('📋 Renderizando lista de', bairros.length, 'localidades');
+    const lista = document.getElementById("bairros-list");
+    lista.innerHTML = "";
+
+    bairros.forEach((bairro, index) => {
+        const item = document.createElement("div");
+        item.className = "bairro-item";
+        item.innerHTML = `
+            <span class="bairro-icon">🏛️</span>
+            <span class="bairro-nome">${bairro.nome}</span>
+        `;
+        item.onclick = () => focarBairro(index);
+        lista.appendChild(item);
+    });
+
+    document.getElementById('total-count').textContent = `${bairros.length} localidades`;
+    console.log('✅ Lista renderizada');
+}
+
+// ============================================
+// CRIAR MARCADORES
+// ============================================
+function criarMarcadores() {
+    console.log('🎯 Criando marcadores...');
+    console.log('📂 Pasta desenhos: assets/fotos/');
+    console.log('📂 Pasta reais: assets/fotosreal/');
+    
+    let marcadoresOk = 0;
+    let imagensDesenhOk = 0;
+    let imagensRealOk = 0;
+    
+    let markersContainer = document.getElementById('markers-overlay');
+    if (!markersContainer) {
+        markersContainer = document.createElement('div');
+        markersContainer.id = 'markers-overlay';
+        markersContainer.style.position = 'absolute';
+        markersContainer.style.top = '0';
+        markersContainer.style.left = '0';
+        markersContainer.style.width = '100%';
+        markersContainer.style.height = '100%';
+        markersContainer.style.pointerEvents = 'none';
+        document.getElementById('map-wrapper').appendChild(markersContainer);
+    }
+    
+    bairros.forEach((bairro, index) => {
+        const marker = document.createElement("div");
+        marker.className = "marker";
+        marker.id = `marker-${index}`;
+        marker.style.left = `${bairro.x}px`;
+        marker.style.top = `${bairro.y}px`;
+        marker.style.pointerEvents = 'auto';
+        
+        const imgDesenho = `assets/fotos/${bairro.img}.png`;
+        const imgReal = `assets/fotosreal/${bairro.img}.jpg`;
+        
+        const imagesContainer = document.createElement("div");
+        imagesContainer.className = "marker-images";
+        
+        const desenho = document.createElement("img");
+        desenho.src = imgDesenho;
+        desenho.alt = `${bairro.nome} - Desenho`;
+        desenho.className = "marker-image-desenho";
+        desenho.onload = function() {
+            imagensDesenhOk++;
+            console.log(`✅ Desenho ${imagensDesenhOk}/${bairros.length}: ${bairro.img}.png`);
+        };
+        desenho.onerror = function() {
+            console.warn(`⚠️ Desenho não encontrado: ${imgDesenho}`);
+            const emoji = document.createElement("span");
+            emoji.className = "marker-emoji";
+            emoji.textContent = "🏛️";
+            marker.appendChild(emoji);
+        };
+        
+        const real = document.createElement("img");
+        real.src = imgReal;
+        real.alt = `${bairro.nome} - Real`;
+        real.className = "marker-image-real";
+        real.onload = function() {
+            imagensRealOk++;
+            console.log(`✅ Foto real ${imagensRealOk}/${bairros.length}: ${bairro.img}.jpg`);
+        };
+        real.onerror = function() {
+            console.warn(`⚠️ Foto real não encontrada: ${imgReal}`);
+        };
+        
+        imagesContainer.appendChild(real);
+        imagesContainer.appendChild(desenho);
+        marker.appendChild(imagesContainer);
+        
+        marker.onclick = (e) => {
+            e.stopPropagation();
+            focarBairro(index);
+        };
+        
+        markersContainer.appendChild(marker);
+        marcadoresOk++;
+    });
+    
+    console.log(`✅ ${marcadoresOk} marcadores criados no mapa`);
+    console.log('📊 RESUMO DO CARREGAMENTO:');
+    console.log(`- Marcadores criados: ${marcadoresOk}/${bairros.length}`);
+    
+    setTimeout(() => {
+        console.log(`- Desenhos carregados: ${imagensDesenhOk}/${bairros.length}`);
+        console.log(`- Fotos reais carregadas: ${imagensRealOk}/${bairros.length}`);
+        if (imagensDesenhOk === 0) {
+            console.error('❌ NENHUM DESENHO FOI CARREGADO!');
+        }
+        if (imagensRealOk === 0) {
+            console.error('❌ NENHUMA FOTO REAL FOI CARREGADA!');
+        }
+    }, 3000);
+}
+
+// ============================================
+// FOCAR EM BAIRRO
+// ============================================
+function focarBairro(index) {
+    const bairro = bairros[index];
+    console.log('🎯 Focando em:', bairro.nome);
+    
+    document.querySelectorAll('.marker').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.bairro-item').forEach(m => m.classList.remove('active'));
+    
+    const marker = document.getElementById(`marker-${index}`);
+    if (marker) marker.classList.add('active');
+    
+    const items = document.querySelectorAll('.bairro-item');
+    if (items[index]) {
+        items[index].classList.add('active');
+        items[index].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.classList.add('zooming');
+    
+    scale = 1.7;
+    translateX = (window.innerWidth / 2) - (bairro.x * scale);
+    translateY = (window.innerHeight / 2) - (bairro.y * scale);
+    
+    updateTransform();
+    
+    setTimeout(() => wrapper.classList.remove('zooming'), 1000);
+    
+    mostrarCard(bairro);
+    bairroAtivo = bairro;
+}
+
+function mostrarCard(bairro) {
+    const card = document.getElementById("info-card");
+    document.getElementById("card-title").textContent = bairro.nome;
+    document.getElementById("card-description").textContent = bairro.codigo;
+    card.classList.add("visible");
+}
+
+function fecharCard() {
+    document.getElementById("info-card").classList.remove("visible");
+    document.querySelectorAll('.marker').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll('.bairro-item').forEach(m => m.classList.remove('active'));
+    bairroAtivo = null;
+    resetZoom();
+}
+
+function verDados() {
+    if (bairroAtivo) {
+        alert(`🚧 Funcionalidade em desenvolvimento!\n\nEm breve: dados completos sobre ${bairroAtivo.nome}`);
+    }
+}
+
+// ============================================
+// ZOOM
+// ============================================
+function zoom(factor) {
+    scale *= factor;
+    scale = Math.max(0.5, Math.min(scale, 3));
+    updateTransform();
+}
+
+function resetZoom() {
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.classList.add('zooming');
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform();
+    setTimeout(() => wrapper.classList.remove('zooming'), 1000);
+}
+
+function updateTransform() {
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+}
+
+// ============================================
+// PAN (ARRASTAR)
+// ============================================
+const mapContainer = document.getElementById("map-container");
+
+mapContainer.addEventListener("mousedown", (e) => {
+    if (!e.target.closest('.marker') && 
+        !e.target.closest('#sidebar') && 
+        !e.target.closest('#header') && 
+        !e.target.closest('#info-card') &&
+        !e.target.closest('#zoom-controls')) {
+        isDragging = true;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        e.preventDefault();
+    }
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (isDragging) {
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        updateTransform();
+    }
+});
+
+document.addEventListener("mouseup", () => {
+    if (isDragging) {
+        isDragging = false;
+    }
+});
+
+// ============================================
+// ZOOM COM SCROLL
+// ============================================
+mapContainer.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = scale * delta;
+    
+    if (newScale >= 0.5 && newScale <= 3) {
+        const wrapper = document.getElementById("map-wrapper");
+        const rect = wrapper.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        const xs = (x - translateX) / scale;
+        const ys = (y - translateY) / scale;
+        
+        scale = newScale;
+        
+        translateX = x - xs * scale;
+        translateY = y - ys * scale;
+        
+        updateTransform();
+    }
+}, { passive: false });
+
+// ============================================
+// TOUCH SUPPORT
+// ============================================
+let touchStartDistance = 0;
+let touchStartScale = 1;
+
+mapContainer.addEventListener("touchstart", (e) => {
+    if (e.target.closest('.marker') || 
+        e.target.closest('#sidebar') || 
+        e.target.closest('#header') || 
+        e.target.closest('#info-card') ||
+        e.target.closest('#zoom-controls')) {
+        return;
+    }
+    
+    if (e.touches.length === 2) {
+        touchStartDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        touchStartScale = scale;
+    } else if (e.touches.length === 1) {
+        isDragging = true;
+        startX = e.touches[0].clientX - translateX;
+        startY = e.touches[0].clientY - translateY;
+    }
+});
+
+mapContainer.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+        e.preventDefault();
+        const distance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        const newScale = touchStartScale * (distance / touchStartDistance);
+        if (newScale >= 0.5 && newScale <= 3) {
+            scale = newScale;
+            updateTransform();
+        }
+    } else if (isDragging && e.touches.length === 1) {
+        e.preventDefault();
+        translateX = e.touches[0].clientX - startX;
+        translateY = e.touches[0].clientY - startY;
+        updateTransform();
+    }
+}, { passive: false });
+
+mapContainer.addEventListener("touchend", () => {
+    isDragging = false;
+});
+
+// ============================================
+// INICIALIZAÇÃO
+// ============================================
+window.onload = () => {
+    renderizarLista();
+    console.log('✅ Sistema iniciado!');
+    console.log('💡 Funcionalidades:');
+    console.log('- ✅ Mapa SVG responsivo');
+    console.log('- ✅ Transição de imagens (desenho → real ao clicar)');
+    console.log('- ✅ Zoom suave com scroll/pinch');
+    console.log('- ✅ Pan (arrastar) com mouse/touch');
+    console.log('- ✅ Marcadores mantêm posição em qualquer zoom');
+    console.log('- ✅ Reset automático ao fechar card');
+};
+</script>
+
+</body>
+</html>
