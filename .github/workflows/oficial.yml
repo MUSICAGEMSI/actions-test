@@ -1,170 +1,44 @@
-name: Coleta Musical Oficial
+name: Coleta Musical - Supabase
 
 on:
-  # 🕐 Execução automática todos os dias às 00h43 AM (horário de Brasília = UTC-3)
-  # Brasília 00h43 AM = 3h43 AM UTC
+  # 🕐 Execução automática todos os dias às 00h43 (Brasília)
+  # Brasília 00:43 = 03:43 UTC
   schedule:
-    - cron: '54 3 * * *'  # Executa às 03:43 UTC = 00:43 Brasília
-  
-  # Mantém a opção de execução manual
+    - cron: '43 3 * * *'
+
+  # ▶️ Execução manual
   workflow_dispatch:
-    inputs:
-      script_name:
-        description: 'Script para executar'
-        required: true
-        default: 'script_seq1.py'
-        type: choice
-        options:
-          - script_seq1.py
-          - script_seq2.py
 
 jobs:
-  # 🎯 Job 1: Executa SEQ1
-  coleta-seq1:
+  coleta-supabase:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 🔥 6 HORAS - Tempo máximo do GitHub Actions
-    
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-        
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - name: Instalar dependências do sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxml2-dev libxslt-dev
-      
-      - name: Instalar dependências Python
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install chromium --with-deps
-      
-      # 🔥 OTIMIZAÇÃO CRÍTICA: Kernel Linux para alta concorrência
-      - name: Otimizar kernel Linux para performance extrema
-        run: |
-          echo "🔧 Configurando kernel para 2.000 conexões simultâneas..."
-          sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
-          sudo sysctl -w net.ipv4.tcp_tw_reuse=1
-          sudo sysctl -w net.ipv4.tcp_fin_timeout=15
-          sudo sysctl -w net.core.somaxconn=65535
-          sudo sysctl -w net.core.netdev_max_backlog=65535
-          sudo sysctl -w fs.file-max=2000000
-          sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192
-          sudo sysctl -w net.ipv4.tcp_keepalive_time=600
-          sudo sysctl -w net.ipv4.tcp_keepalive_probes=3
-          sudo sysctl -w net.ipv4.tcp_keepalive_intvl=15
-          echo "✓ Kernel otimizado para performance extrema"
-          echo "📊 Configurações aplicadas:"
-          sysctl net.ipv4.ip_local_port_range
-          sysctl net.core.somaxconn
-          echo "File descriptors: $(ulimit -n)"
-      
-      - name: Verificar instalação
-        run: |
-          echo "📦 Verificando pacotes instalados..."
-          pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
-          python -c "import httpx; print(f'✓ httpx version: {httpx.__version__}')"
-          python -c "import h2; print(f'✓ h2 (HTTP/2) version: {h2.__version__}')"
-          python -c "import asyncio; print(f'✓ asyncio disponível')"
-      
-      - name: 🎵 Executar SEQ1 - Primeira metade
-        if: github.event_name == 'schedule' || github.event.inputs.script_name == 'script_seq1.py' || github.event.inputs.script_name == 'ambos'
-        env:
-          LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
-          SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🚀 EXECUTANDO COLETA SEQ1 - PRIMEIRA METADE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📜 Script: script_seq1.py"
-          echo "⏱️  Timeout: 6 HORAS (máximo do GitHub Actions)"
-          echo "🎯 Estratégia: 3 Fases com Retry até completar"
-          echo "💪 O script executará até processar TODOS os IDs"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          python script_seq1.py
-      
-      - name: Upload de artefatos SEQ1 em caso de erro
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-seq1-${{ github.run_number }}
-          path: |
-            debug_*.png
-            debug_*.html
-            backup_*.json
-            checkpoint_coleta.json
-          retention-days: 7
-          if-no-files-found: ignore
-      
-      - name: Upload de logs e backups SEQ1
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coleta-seq1-completa-${{ github.run_number }}
-          path: |
-            backup_*.json
-            checkpoint_coleta.json
-            *.log
-          retention-days: 30
-          if-no-files-found: ignore
-      
-      - name: Relatório de Performance SEQ1
-        if: always()
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 RELATÓRIO FINAL SEQ1"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⏱️  Status: ${{ job.status }}"
-          echo "📜 Script: script_seq1.py"
-          echo "🔢 Run Number: ${{ github.run_number }}"
-          echo "📅 Data/Hora: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "🇧🇷 Horário Brasília: $(TZ=America/Sao_Paulo date '+%Y-%m-%d %H:%M:%S BRT')"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ SEQ1 finalizado com SUCESSO!"
-          elif [ "${{ job.status }}" == "failure" ]; then
-            echo "❌ SEQ1 finalizou com ERRO"
-          else
-            echo "⚠️  SEQ1 foi CANCELADO ou teve timeout"
-          fi
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    timeout-minutes: 360  # 6 HORAS
 
-  # 🎯 Job 2: Executa SEQ2 (em paralelo com SEQ1)
-  coleta-seq2:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360  # 🔥 6 HORAS - Tempo máximo do GitHub Actions
-    
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
-        
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: Instalar dependências do sistema
         run: |
           sudo apt-get update
           sudo apt-get install -y libxml2-dev libxslt-dev
-      
+
       - name: Instalar dependências Python
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
-      
-      # 🔥 OTIMIZAÇÃO CRÍTICA: Kernel Linux para alta concorrência
-      - name: Otimizar kernel Linux para performance extrema
+
+      # 🔥 Otimização de kernel
+      - name: Otimizar kernel Linux
         run: |
-          echo "🔧 Configurando kernel para 2.000 conexões simultâneas..."
+          echo "🔧 Otimizando kernel..."
           sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
           sudo sysctl -w net.ipv4.tcp_tw_reuse=1
           sudo sysctl -w net.ipv4.tcp_fin_timeout=15
@@ -175,79 +49,81 @@ jobs:
           sudo sysctl -w net.ipv4.tcp_keepalive_time=600
           sudo sysctl -w net.ipv4.tcp_keepalive_probes=3
           sudo sysctl -w net.ipv4.tcp_keepalive_intvl=15
-          echo "✓ Kernel otimizado para performance extrema"
-          echo "📊 Configurações aplicadas:"
+          echo "✓ Kernel otimizado"
           sysctl net.ipv4.ip_local_port_range
           sysctl net.core.somaxconn
           echo "File descriptors: $(ulimit -n)"
-      
+
       - name: Verificar instalação
         run: |
-          echo "📦 Verificando pacotes instalados..."
-          pip list | grep -E "httpx|h2|beautifulsoup4|playwright"
-          python -c "import httpx; print(f'✓ httpx version: {httpx.__version__}')"
-          python -c "import h2; print(f'✓ h2 (HTTP/2) version: {h2.__version__}')"
-          python -c "import asyncio; print(f'✓ asyncio disponível')"
-      
-      - name: 🎵 Executar SEQ2 - Segunda metade
-        if: github.event_name == 'schedule' || github.event.inputs.script_name == 'script_seq2.py' || github.event.inputs.script_name == 'ambos'
+          echo "📦 Verificando pacotes..."
+          pip list | grep -E "httpx|h2|beautifulsoup4|playwright|supabase"
+          python -c "import httpx; print(f'✓ httpx {httpx.__version__}')"
+          python -c "import h2; print(f'✓ h2 {h2.__version__}')"
+
+      # 🚀 EXECUÇÃO PRINCIPAL
+      - name: 🎵 Executar coleta Supabase
         env:
           LOGIN_MUSICAL: ${{ secrets.LOGIN_MUSICAL }}
           SENHA_MUSICAL: ${{ secrets.SENHA_MUSICAL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🚀 EXECUTANDO COLETA SEQ2 - SEGUNDA METADE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📜 Script: script_seq2.py"
-          echo "⏱️  Timeout: 6 HORAS (máximo do GitHub Actions)"
-          echo "🎯 Estratégia: 3 Fases com Retry até completar"
-          echo "💪 O script executará até processar TODOS os IDs"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          python script_seq2.py
-      
-      - name: Upload de artefatos SEQ2 em caso de erro
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🚀 EXECUTANDO script_supabase.py"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⏱️ Timeout: 6 horas"
+          echo "📜 Script: script_supabase.py"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          python script_supabase.py
+
+      # 🧯 Upload em caso de erro
+      - name: Upload artefatos (ERRO)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-seq2-${{ github.run_number }}
+          name: debug-supabase-${{ github.run_number }}
           path: |
             debug_*.png
             debug_*.html
             backup_*.json
-            checkpoint_coleta.json
+            checkpoint_*.json
+            *.log
           retention-days: 7
           if-no-files-found: ignore
-      
-      - name: Upload de logs e backups SEQ2
+
+      # 📦 Upload em caso de sucesso
+      - name: Upload backups e logs
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: coleta-seq2-completa-${{ github.run_number }}
+          name: coleta-supabase-${{ github.run_number }}
           path: |
             backup_*.json
-            checkpoint_coleta.json
+            checkpoint_*.json
             *.log
           retention-days: 30
           if-no-files-found: ignore
-      
-      - name: Relatório de Performance SEQ2
+
+      # 📊 RELATÓRIO FINAL
+      - name: Relatório final
         if: always()
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 RELATÓRIO FINAL SEQ2"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "⏱️  Status: ${{ job.status }}"
-          echo "📜 Script: script_seq2.py"
-          echo "🔢 Run Number: ${{ github.run_number }}"
-          echo "📅 Data/Hora: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "🇧🇷 Horário Brasília: $(TZ=America/Sao_Paulo date '+%Y-%m-%d %H:%M:%S BRT')"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 RELATÓRIO FINAL"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Status: ${{ job.status }}"
+          echo "Script: script_supabase.py"
+          echo "Run: ${{ github.run_number }}"
+          echo "UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "BRT: $(TZ=America/Sao_Paulo date '+%Y-%m-%d %H:%M:%S')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ SEQ2 finalizado com SUCESSO!"
-            echo "🎉 COLETA DIÁRIA COMPLETA!"
+            echo "✅ COLETA SUPABASE FINALIZADA COM SUCESSO!"
           elif [ "${{ job.status }}" == "failure" ]; then
-            echo "❌ SEQ2 finalizou com ERRO"
+            echo "❌ ERRO NA COLETA SUPABASE"
           else
-            echo "⚠️  SEQ2 foi CANCELADO ou teve timeout"
+            echo "⚠️ JOB CANCELADO OU TIMEOUT"
           fi
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
