@@ -28,6 +28,7 @@ on:
           - script_usuarios.py
           - script_orquestraccb1.py
           - script_localidadesccb.py
+          - script_supabase.py
 
 jobs:
   coleta:
