@@ -3,7 +3,7 @@
  * Cliente JavaScript para consumir dados da API backend
  */
 
-const API_BASE_URL = 'http://localhost:5000/api';  // Alterar para URL de produção quando deployar
+const API_BASE_URL = 'https://multiplica-sam-api.onrender.com/api';  // Alterar para URL de produção quando deployar
 
 class SAM_API {
     /**
