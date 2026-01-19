@@ -1,0 +1,1309 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MULTIPLICA SAM - Sistema Avançado de Monitoramento</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #141414;
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0a0;
+    --accent: #3b82f6;
+    --accent-light: #60a5fa;
+    --accent-cyan: #7dd3fc;
+}
+
+[data-theme="light"] {
+    --bg-primary: #f5f1e8;
+    --bg-secondary: #ebe7de;
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow-x: hidden;
+    transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* ========== NAVIGATION ========== */
+nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 20px 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    backdrop-filter: blur(20px);
+    background: rgba(10, 10, 10, 0.8);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] nav {
+    background: rgba(245, 241, 232, 0.9);
+    border-bottom-color: rgba(0, 0, 0, 0.05);
+}
+
+.nav-logo {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.nav-right {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+}
+
+.nav-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: color 0.3s ease;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+}
+
+.theme-toggle {
+    width: 50px;
+    height: 26px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 13px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+.theme-toggle::before {
+    content: '◐';
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    background: var(--text-primary);
+    border-radius: 50%;
+    transition: left 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--bg-primary);
+}
+
+.theme-toggle.active::before {
+    left: 27px;
+}
+
+/* ========== HERO SECTION ========== */
+.hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    padding: 120px 60px 60px;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.03) 0%, transparent 100%);
+}
+
+.hero-content {
+    max-width: 1400px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    align-items: center;
+    text-align: center;
+}
+
+.hero-title-wrapper {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.multiplica-text {
+    font-size: clamp(48px, 6vw, 72px);
+    font-weight: 300;
+    letter-spacing: -2px;
+    color: var(--text-primary);
+    position: relative;
+}
+
+.typing-cursor {
+    display: inline-block;
+    width: 3px;
+    height: 0.9em;
+    background: var(--accent-cyan);
+    margin-left: 5px;
+    animation: blink 1s infinite;
+    vertical-align: middle;
+}
+
+@keyframes blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+.sam-text {
+    font-size: clamp(72px, 9vw, 110px);
+    font-weight: 900;
+    letter-spacing: -3px;
+    background: linear-gradient(135deg, var(--accent-cyan), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.hero-subtitle {
+    font-size: 18px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-width: 700px;
+}
+
+.hero-location {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    font-size: 16px;
+    color: var(--text-secondary);
+}
+
+.location-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.hero-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 30px;
+    padding-top: 20px;
+}
+
+.stat-mini {
+    text-align: center;
+}
+
+.stat-mini-value {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 5px;
+}
+
+.stat-mini-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+}
+
+/* ========== SEARCH SECTION ========== */
+.search-section {
+    padding: 80px 60px;
+    background: var(--bg-secondary);
+}
+
+.search-container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.search-header {
+    margin-bottom: 50px;
+}
+
+.search-title {
+    font-size: 36px;
+    font-weight: 700;
+    margin-bottom: 15px;
+}
+
+.search-box {
+    position: relative;
+    margin-bottom: 40px;
+}
+
+.search-input-wrapper {
+    position: relative;
+}
+
+.search-icon {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 20px;
+    color: var(--text-secondary);
+}
+
+.search-input {
+    width: 100%;
+    padding: 20px 20px 20px 40px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 300;
+    outline: none;
+    transition: border-color 0.3s ease;
+}
+
+[data-theme="light"] .search-input {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+.search-input:focus {
+    border-bottom-color: var(--accent);
+}
+
+.search-placeholder {
+    position: absolute;
+    left: 40px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.locations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px;
+}
+
+.location-card {
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+[data-theme="light"] .location-card {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.05);
+}
+
+.location-card:hover {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+    transform: translateY(-2px);
+}
+
+.location-card.active {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.5);
+}
+
+.location-icon-wrapper {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    position: relative;
+    border-radius: 50%;
+    overflow: hidden;
+}
+
+.location-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.location-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.location-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.location-code {
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    color: var(--text-secondary);
+}
+
+/* ========== MAP SECTION ========== */
+.map-section {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: var(--bg-primary);
+    z-index: 2000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+}
+
+.map-section.active {
+    opacity: 1;
+    pointer-events: all;
+}
+
+.map-viewer {
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, #0d0d0d 0%, #000 100%);
+    position: relative;
+    overflow: hidden;
+}
+
+.map-canvas {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#map-wrapper {
+    position: relative;
+    cursor: grab;
+    transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#map-wrapper:active {
+    cursor: grabbing;
+}
+
+#svg-container-main {
+    height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+#city-map-main {
+    height: 100%;
+    width: auto;
+    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.1));
+}
+
+#city-map-main path {
+    stroke-width: 1.2;
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.15);
+    stroke-dasharray: 2000;
+    stroke-dashoffset: 2000;
+    transition: stroke 0.3s ease;
+}
+
+#city-map-main path.drawing {
+    animation: drawPath 0.3s ease-out forwards;
+}
+
+@keyframes drawPath {
+    to {
+        stroke-dashoffset: 0;
+        stroke: rgba(59, 130, 246, 0.6);
+    }
+}
+
+.map-markers {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.marker {
+    position: absolute;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(100, 100, 100, 0.3), rgba(80, 80, 80, 0.3));
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transform: translate(-50%, -50%) scale(0);
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+    pointer-events: auto;
+    filter: grayscale(1);
+    opacity: 0;
+}
+
+.marker.visible {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+}
+
+.marker-images {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.marker-image-desenho {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 1;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 2;
+}
+
+.marker-image-real {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 1.2s ease-in-out;
+    z-index: 1;
+}
+
+.marker.active {
+    width: 70px;
+    height: 70px;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.9));
+    border-color: rgba(255, 255, 255, 1);
+    border-width: 3px;
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.9),
+        0 0 60px rgba(59, 130, 246, 1),
+        0 0 90px rgba(59, 130, 246, 0.6);
+    z-index: 200;
+    filter: grayscale(0);
+    animation: activePulse 2s ease-in-out infinite;
+}
+
+.marker.active .marker-image-desenho {
+    opacity: 0;
+}
+
+.marker.active .marker-image-real {
+    opacity: 1;
+}
+
+@keyframes activePulse {
+    0%, 100% { 
+        box-shadow: 
+            0 10px 40px rgba(0, 0, 0, 0.9),
+            0 0 60px rgba(59, 130, 246, 1),
+            0 0 90px rgba(59, 130, 246, 0.6);
+    }
+    50% { 
+        box-shadow: 
+            0 12px 50px rgba(0, 0, 0, 1),
+            0 0 80px rgba(59, 130, 246, 1),
+            0 0 120px rgba(59, 130, 246, 0.8);
+    }
+}
+
+/* ========== INFO CARD ========== */
+.info-card {
+    position: fixed;
+    bottom: 40px;
+    right: 40px;
+    width: 420px;
+    background: rgba(15, 15, 15, 0.95);
+    border: 2px solid rgba(59, 130, 246, 0.5);
+    backdrop-filter: blur(25px);
+    border-radius: 20px;
+    box-shadow: 
+        0 20px 60px rgba(0, 0, 0, 0.9),
+        0 0 40px rgba(59, 130, 246, 0.3);
+    z-index: 3000;
+    opacity: 0;
+    transform: translateY(40px) scale(0.9);
+    pointer-events: none;
+    transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.info-card.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: all;
+}
+
+.card-header {
+    padding: 25px 30px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(37, 99, 235, 0.1));
+}
+
+.card-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.card-code {
+    font-size: 14px;
+    font-family: 'Courier New', monospace;
+    color: var(--accent-light);
+    letter-spacing: 1px;
+}
+
+.card-content {
+    padding: 30px;
+}
+
+.view-data-btn {
+    width: 100%;
+    padding: 18px;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    border: 2px solid rgba(59, 130, 246, 0.5);
+    border-radius: 12px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 700;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.view-data-btn:hover {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 35px rgba(59, 130, 246, 0.6);
+}
+
+/* ========== CLOSE BUTTON ========== */
+.close-map-btn {
+    position: fixed;
+    top: 30px;
+    right: 30px;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.2);
+    border: 2px solid rgba(239, 68, 68, 0.5);
+    color: #fff;
+    font-size: 24px;
+    cursor: pointer;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    opacity: 0;
+    transform: scale(0.8);
+    pointer-events: none;
+}
+
+.close-map-btn.visible {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: all;
+}
+
+.close-map-btn:hover {
+    background: rgba(239, 68, 68, 0.4);
+    border-color: rgba(239, 68, 68, 0.8);
+    transform: scale(1.1) rotate(90deg);
+}
+
+/* ========== ZOOM CONTROLS ========== */
+.zoom-controls {
+    position: fixed;
+    bottom: 40px;
+    left: 40px;
+    display: flex;
+    gap: 12px;
+    z-index: 3000;
+    opacity: 0;
+    transform: translateY(20px);
+    pointer-events: none;
+    transition: all 0.5s ease;
+}
+
+.zoom-controls.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: all;
+}
+
+.zoom-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 13px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(15, 15, 15, 0.8);
+    backdrop-filter: blur(20px);
+    color: #fff;
+    font-size: 23px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+}
+
+.zoom-btn:hover {
+    background: rgba(59, 130, 246, 0.3);
+    border-color: rgba(59, 130, 246, 0.6);
+    transform: scale(1.12);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
+}
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 768px) {
+    nav {
+        padding: 15px 30px;
+    }
+    
+    .hero {
+        padding: 100px 30px 40px;
+    }
+    
+    .hero-title-wrapper {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .hero-stats {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    .search-section {
+        padding: 60px 30px;
+    }
+    
+    .locations-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .info-card {
+        width: calc(100% - 40px);
+        left: 20px;
+        right: 20px;
+        bottom: 20px;
+    }
+    
+    .zoom-controls {
+        left: 20px;
+        bottom: 20px;
+    }
+    
+    .close-map-btn {
+        top: 20px;
+        right: 20px;
+    }
+}
+
+/* ========== SCROLLBAR ========== */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.3);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(59, 130, 246, 0.5);
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+    <div class="nav-logo">MULTIPLICA SAM</div>
+    <div class="nav-right">
+        <a href="#hero" class="nav-link">Início</a>
+        <a href="#search" class="nav-link">Localidades</a>
+        <div class="theme-toggle" id="themeToggle"></div>
+    </div>
+</nav>
+
+<!-- Hero Section -->
+<section class="hero" id="hero">
+    <div class="hero-content">
+        <div class="hero-title-wrapper">
+            <div class="multiplica-text">
+                <span id="typingText"></span><span class="typing-cursor"></span>
+            </div>
+            <div class="sam-text">SAM</div>
+        </div>
+        
+        <p class="hero-subtitle">
+            Sistema Avançado de Monitoramento educacional para Hortolândia, 
+            oferecendo insights em tempo real sobre 35 localidades estratégicas.
+        </p>
+        
+        <div class="hero-location">
+            <div class="location-item">
+                <span>📍</span>
+                <span>Hortolândia, SP</span>
+            </div>
+            <div class="location-item">
+                <span>📅</span>
+                <span>2026</span>
+            </div>
+        </div>
+        
+        <div class="hero-stats">
+            <div class="stat-mini">
+                <div class="stat-mini-value">87</div>
+                <div class="stat-mini-label">Turmas</div>
+            </div>
+            <div class="stat-mini">
+                <div class="stat-mini-value">478</div>
+                <div class="stat-mini-label">Matriculados</div>
+            </div>
+            <div class="stat-mini">
+                <div class="stat-mini-value">87/235</div>
+                <div class="stat-mini-label">Aulas</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Search Section -->
+<section class="search-section" id="search">
+    <div class="search-container">
+        <div class="search-header">
+            <h2 class="search-title">Explorar Localidades</h2>
+        </div>
+        
+        <div class="search-box">
+            <div class="search-input-wrapper">
+                <div class="search-icon">🔍</div>
+                <input 
+                    type="text" 
+                    class="search-input" 
+                    id="searchInput"
+                    autocomplete="off"
+                    oninput="handleSearch(this.value)"
+                />
+                <div class="search-placeholder" id="searchPlaceholder"></div>
+            </div>
+        </div>
+        
+        <div class="locations-grid" id="locationsGrid"></div>
+    </div>
+</section>
+
+<!-- Map Section -->
+<section class="map-section" id="mapSection">
+    <button class="close-map-btn" id="closeMapBtn" onclick="closeMap()">✕</button>
+    
+    <div class="map-viewer">
+        <div class="map-canvas">
+            <div id="map-wrapper">
+                <div id="svg-container-main"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="info-card" id="infoCard">
+        <div class="card-header">
+            <div class="card-title" id="cardTitle">Localidade</div>
+            <div class="card-code" id="cardCode">BR-22-XXXX</div>
+        </div>
+        <div class="card-content">
+            <button class="view-data-btn" onclick="viewData()">
+                📊 Ver Dados Completos
+            </button>
+        </div>
+    </div>
+    
+    <div class="zoom-controls" id="zoomControls">
+        <button class="zoom-btn" onclick="zoom(1.3)" title="Aumentar Zoom">+</button>
+        <button class="zoom-btn" onclick="zoom(0.77)" title="Diminuir Zoom">−</button>
+        <button class="zoom-btn" onclick="resetZoom()" title="Resetar Visualização">⟲</button>
+    </div>
+</section>
+
+<script>
+// ========== DATA ==========
+const localidades = [
+    {nome: "Jd. Santana - Central", nomeCompleto: "Jardim Santana - Central", codigo: "BR-22-1431", x: 600, y: 245, img: "jardim-santana"},
+    {nome: "Jd. Sta. Izabel", nomeCompleto: "Jardim Santa Izabel", codigo: "BR-22-1434", x: 809, y: 389, img: "jardim-santa-izabel"},
+    {nome: "Vila Real", nomeCompleto: "Vila Real", codigo: "BR-22-1997", x: 567, y: 129, img: "vila-real"},
+    {nome: "Jd. Amanda I", nomeCompleto: "Jardim Amanda I", codigo: "BR-22-2052", x: 480, y: 365, img: "amanda-1"},
+    {nome: "Jd. Aline", nomeCompleto: "Jardim Aline", codigo: "BR-22-2795", x: 877, y: 180, img: "jardim-aline"},
+    {nome: "Jd. das Colinas", nomeCompleto: "Jardim das Colinas", codigo: "BR-22-3238", x: 517, y: 136, img: "jardim-das-colinas"},
+    {nome: "Jd. Novo Horizonte", nomeCompleto: "Jardim Novo Horizonte", codigo: "BR-22-3493", x: 342, y: 279, img: "jardim-novo-horizonte"},
+    {nome: "Jd. Interlagos", nomeCompleto: "Jardim Interlagos", codigo: "BR-22-3833", x: 606, y: 350, img: "jardim-interlagos"},
+    {nome: "Jd. Amanda IV", nomeCompleto: "Jardim Amanda IV", codigo: "BR-22-5419", x: 447, y: 332, img: "amanda-4"},
+    {nome: "Residencial Bellaville", codigo: "BR-22-5420", x: 525, y: 35, imagem: "residencial-bellaville"}
+];
+
+let selectedLocation = null;
+let scale = 1;
+let translateX = 0;
+let translateY = 0;
+let isDragging = false;
+let startX, startY;
+
+// ========== THEME TOGGLE ==========
+const themeToggle = document.getElementById('themeToggle');
+let isDark = true;
+
+themeToggle.addEventListener('click', () => {
+    isDark = !isDark;
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    themeToggle.classList.toggle('active');
+});
+
+// ========== TYPING EFFECT ==========
+const text = "MULTIPLICA";
+let charIndex = 0;
+let isTypingForward = true;
+
+function typeText() {
+    const element = document.getElementById('typingText');
+    
+    if (isTypingForward) {
+        if (charIndex < text.length) {
+            element.textContent = text.substring(0, charIndex + 1);
+            charIndex++;
+            setTimeout(typeText, 150);
+        } else {
+            setTimeout(() => {
+                isTypingForward = false;
+                typeText();
+            }, 2000);
+        }
+    } else {
+        if (charIndex > 0) {
+            charIndex--;
+            element.textContent = text.substring(0, charIndex);
+            setTimeout(typeText, 100);
+        } else {
+            setTimeout(() => {
+                isTypingForward = true;
+                typeText();
+            }, 500);
+        }
+    }
+}
+
+setTimeout(typeText, 500);
+
+// ========== LOAD SVG ==========
+fetch('assets/hortolandia-roads.svg')
+    .then(response => response.text())
+    .then(svgText => {
+        document.getElementById('svg-container-main').innerHTML = svgText;
+        const svgElement = document.querySelector('#svg-container-main svg');
+        if (svgElement) {
+            svgElement.id = "city-map-main";
+            createMapMarkers();
+        }
+    })
+    .catch(() => {
+        document.getElementById('svg-container-main').innerHTML = '<div style="color: rgba(255,255,255,0.5); font-size: 14px;">Mapa não disponível</div>';
+    });
+
+// ========== CREATE MAP MARKERS ==========
+function createMapMarkers() {
+    let markersContainer = document.getElementById('markers-overlay');
+    if (!markersContainer) {
+        markersContainer = document.createElement('div');
+        markersContainer.id = 'markers-overlay';
+        markersContainer.className = 'map-markers';
+        markersContainer.style.position = 'absolute';
+        markersContainer.style.top = '0';
+        markersContainer.style.left = '0';
+        markersContainer.style.width = '100%';
+        markersContainer.style.height = '100%';
+        markersContainer.style.pointerEvents = 'none';
+        // Anexar ao map-wrapper para que sejam afetados pelo zoom junto com o SVG
+        document.getElementById('map-wrapper').appendChild(markersContainer);
+    }
+    
+    localidades.forEach((loc, index) => {
+        const marker = document.createElement("div");
+        marker.className = "marker";
+        marker.id = `marker-${index}`;
+        marker.style.position = 'absolute';
+        marker.style.left = `${loc.x}px`;
+        marker.style.top = `${loc.y}px`;
+        marker.setAttribute('data-codigo', loc.codigo);
+        
+        const imgDesenho = `assets/fotos/${loc.img}.png`;
+        const imgReal = `assets/fotosreal/${loc.img}.jpg`;
+        
+        const imagesContainer = document.createElement("div");
+        imagesContainer.className = "marker-images";
+        
+        const desenho = document.createElement("img");
+        desenho.src = imgDesenho;
+        desenho.alt = `${loc.nomeCompleto} - Desenho`;
+        desenho.className = "marker-image-desenho";
+        
+        const real = document.createElement("img");
+        real.src = imgReal;
+        real.alt = `${loc.nomeCompleto} - Real`;
+        real.className = "marker-image-real";
+        
+        imagesContainer.appendChild(real);
+        imagesContainer.appendChild(desenho);
+        marker.appendChild(imagesContainer);
+        
+        marker.onclick = (e) => {
+            e.stopPropagation();
+            selectLocationFromMap(loc, index);
+        };
+        
+        markersContainer.appendChild(marker);
+    });
+}
+
+// ========== PLACEHOLDER ANIMATION ==========
+const placeholders = [
+    "Digite o nome do bairro...",
+    "Ex: Jd. Santana",
+    "Ex: Vila Real"
+];
+let placeholderIndex = 0;
+let placeholderCharIndex = 0;
+let isDeleting = false;
+
+function animatePlaceholder() {
+    const element = document.getElementById('searchPlaceholder');
+    const currentText = placeholders[placeholderIndex];
+    
+    if (!isDeleting) {
+        element.textContent = currentText.substring(0, placeholderCharIndex + 1);
+        placeholderCharIndex++;
+        
+        if (placeholderCharIndex === currentText.length) {
+            setTimeout(() => isDeleting = true, 2000);
+        }
+    } else {
+        element.textContent = currentText.substring(0, placeholderCharIndex - 1);
+        placeholderCharIndex--;
+        
+        if (placeholderCharIndex === 0) {
+            isDeleting = false;
+            placeholderIndex = (placeholderIndex + 1) % placeholders.length;
+        }
+    }
+    
+    setTimeout(animatePlaceholder, isDeleting ? 30 : 80);
+}
+
+setTimeout(animatePlaceholder, 1000);
+
+// ========== SEARCH ==========
+function handleSearch(value) {
+    const input = value.toLowerCase().trim();
+    const placeholder = document.getElementById('searchPlaceholder');
+    
+    if (input) {
+        placeholder.style.opacity = '0';
+    } else {
+        placeholder.style.opacity = '1';
+        renderLocations(localidades);
+        return;
+    }
+    
+    const filtered = localidades.filter(loc => 
+        loc.nome.toLowerCase().includes(input) ||
+        loc.nomeCompleto.toLowerCase().includes(input) ||
+        loc.codigo.toLowerCase().includes(input)
+    );
+    
+    renderLocations(filtered);
+}
+
+function renderLocations(items) {
+    const grid = document.getElementById('locationsGrid');
+    
+    if (items.length === 0) {
+        grid.innerHTML = `
+            <div style="grid-column: 1/-1; text-align: center; padding: 60px; color: var(--text-secondary);">
+                <div style="font-size: 48px; margin-bottom: 20px;">🔍</div>
+                <div>Nenhuma localidade encontrada</div>
+            </div>
+        `;
+        return;
+    }
+    
+    grid.innerHTML = items.map(item => {
+        const index = localidades.findIndex(l => l.codigo === item.codigo);
+        return `
+        <div class="location-card ${selectedLocation?.codigo === item.codigo ? 'active' : ''}" onclick='selectLocation(${index})' title="${item.nomeCompleto}">
+            <div class="location-icon-wrapper">
+                <img src="assets/fotos/${item.img}.png" alt="${item.nomeCompleto}" class="location-icon" onerror="this.style.display='none'">
+            </div>
+            <div class="location-info">
+                <div class="location-name">${item.nome}</div>
+                <div class="location-code">${item.codigo}</div>
+            </div>
+        </div>
+    `}).join('');
+}
+
+// ========== ANIMATE ROADS ==========
+function animateRoads() {
+    const paths = document.querySelectorAll('#city-map-main path');
+    paths.forEach((path) => {
+        path.classList.add('drawing');
+    });
+}
+
+// ========== MAP FUNCTIONS ==========
+function selectLocation(index) {
+    const location = localidades[index];
+    selectedLocation = location;
+    
+    // Update active state in location cards
+    document.querySelectorAll('.location-card').forEach(card => {
+        card.classList.remove('active');
+    });
+    event.currentTarget.classList.add('active');
+    
+    // ETAPA 1: Abrir mapa em tela cheia - mapa completo centralizado
+    const mapSection = document.getElementById('mapSection');
+    mapSection.classList.add('active');
+    document.body.style.overflow = 'hidden';
+    
+    // Resetar para mostrar mapa completo
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform();
+    
+    // Show controls
+    setTimeout(() => {
+        document.getElementById('closeMapBtn').classList.add('visible');
+        document.getElementById('zoomControls').classList.add('visible');
+    }, 200);
+    
+    // ETAPA 2: Imediatamente começar a desenhar as ruas (leva 0.3s)
+    setTimeout(() => {
+        animateRoads();
+    }, 50);
+    
+    // ETAPA 3: Após 0.4s (ruas completas) + 2s = 2.4s, fazer aparecer TODOS os marcadores
+    setTimeout(() => {
+        const markers = document.querySelectorAll('.marker');
+        markers.forEach((marker, idx) => {
+            setTimeout(() => {
+                marker.classList.add('visible');
+            }, idx * 8);
+        });
+    }, 2400);
+    
+    // ETAPA 4: Após 2.7s, ativar o marcador selecionado
+    setTimeout(() => {
+        const marker = document.getElementById(`marker-${index}`);
+        if (marker) marker.classList.add('active');
+    }, 2700);
+    
+    // ETAPA 5: Após 2.9s, fazer o zoom gigante mantendo centralizado NO EMOJI
+    setTimeout(() => {
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        // ZOOM GIGANTE
+        scale = 3.5;
+        
+        // Obter posição atual do marcador ANTES do zoom
+        const markerElement = document.getElementById(`marker-${index}`);
+        if (markerElement) {
+            const rect = markerElement.getBoundingClientRect();
+            const markerCenterX = rect.left + rect.width / 2;
+            const markerCenterY = rect.top + rect.height / 2;
+            
+            // Calcular quanto precisamos mover para centralizar
+            // Posição desejada: centro da viewport
+            // Posição atual do marcador: markerCenterX, markerCenterY
+            // Após zoom, a distância é multiplicada por scale
+            
+            const currentTranslateX = translateX;
+            const currentTranslateY = translateY;
+            
+            // Calcular nova translação para manter marcador no centro após zoom
+            translateX = currentTranslateX * scale - (markerCenterX - viewportWidth / 2) * (scale - 1);
+            translateY = currentTranslateY * scale - (markerCenterY - viewportHeight / 2) * (scale - 1);
+        }
+        
+        updateTransform();
+        
+        // ETAPA 6: Mostrar card após zoom completar
+        setTimeout(() => {
+            document.getElementById('cardTitle').textContent = location.nomeCompleto;
+            document.getElementById('cardCode').textContent = location.codigo;
+            document.getElementById('infoCard').classList.add('visible');
+        }, 800);
+        
+    }, 2900);
+}
+
+function selectLocationFromMap(location, index) {
+    selectedLocation = location;
+    
+    // Update active state
+    document.querySelectorAll('.marker').forEach(marker => {
+        marker.classList.remove('active');
+    });
+    const marker = document.getElementById(`marker-${index}`);
+    if (marker) marker.classList.add('active');
+    
+    // Update card
+    document.getElementById('cardTitle').textContent = location.nomeCompleto;
+    document.getElementById('cardCode').textContent = location.codigo;
+    document.getElementById('infoCard').classList.add('visible');
+    
+    // Zoom to location
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    scale = 2.8;
+    translateX = (viewportWidth / 2) - (location.x * scale);
+    translateY = (viewportHeight / 2) - (location.y * scale);
+    updateTransform();
+}
+
+function viewData() {
+    if (selectedLocation) {
+        alert(`🚀 Redirecionando para dados detalhados...\n\n📍 Localidade: ${selectedLocation.nomeCompleto}\n🔢 Código: ${selectedLocation.codigo}\n\n✨ Em breve: Dashboard completo com estatísticas, gráficos e análises!`);
+    }
+}
+
+function closeMap() {
+    const mapSection = document.getElementById('mapSection');
+    mapSection.classList.remove('active');
+    document.body.style.overflow = '';
+    
+    // Hide controls
+    document.getElementById('closeMapBtn').classList.remove('visible');
+    document.getElementById('zoomControls').classList.remove('visible');
+    document.getElementById('infoCard').classList.remove('visible');
+    
+    // Clear selection and reset markers
+    selectedLocation = null;
+    document.querySelectorAll('.marker').forEach(marker => {
+        marker.classList.remove('active');
+        marker.classList.remove('visible');
+    });
+    document.querySelectorAll('.location-card').forEach(card => {
+        card.classList.remove('active');
+    });
+    
+    // Reset roads animation
+    const paths = document.querySelectorAll('#city-map-main path');
+    paths.forEach(path => {
+        path.classList.remove('drawing');
+    });
+    
+    // Reset zoom
+    setTimeout(() => {
+        resetZoom();
+    }, 500);
+}
+
+// ========== ZOOM ==========
+function zoom(factor) {
+    scale *= factor;
+    scale = Math.max(0.5, Math.min(scale, 6));
+    updateTransform();
+}
+
+function resetZoom() {
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform();
+}
+
+function updateTransform() {
+    const wrapper = document.getElementById("map-wrapper");
+    wrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+}
+
+// ========== PAN (DRAG) ==========
+const mapWrapper = document.getElementById("map-wrapper");
+
+if (mapWrapper) {
+    mapWrapper.addEventListener("mousedown", (e) => {
+        if (!e.target.closest('.marker')) {
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+            e.preventDefault();
+        }
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (isDragging) {
+            translateX = e.clientX - startX;
+            translateY = e.clientY - startY;
+            updateTransform();
+        }
+    });
+
+    document.addEventListener("mouseup", () => {
+        isDragging = false;
+    });
+}
+
+// ========== INITIALIZE ==========
+window.addEventListener('DOMContentLoaded', () => {
+    renderLocations(localidades);
+});
+</script>
+
+<script src="api_client.js"></script>
+</body>
+</html>
