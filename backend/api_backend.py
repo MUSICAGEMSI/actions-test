@@ -23,7 +23,7 @@ CORS(app)  # Permitir CORS para todas as rotas
 
 # Configuração Supabase
 SUPABASE_URL = "https://esrjodsxipjuiaiawddl.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVzcmpvZHN4aXBqdWlhaWF3ZGRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzczMjY5NTYsImV4cCI6MjA1MjkwMjk1Nn0.x-eN9CbC-6DgCDbiYeHRpg_Ysbt6M62"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVzcmpvZHN4aXBqdWlhaWF3ZGRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4NTA3MzQsImV4cCI6MjA4NDQyNjczNH0.UGuvDs94WUndPPhGtWE4EIz6g80o3CJ5JhQm6ac8n8M"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
