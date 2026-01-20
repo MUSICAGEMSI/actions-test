@@ -3,6 +3,7 @@ MULTIPLICA SAM - SCRAPING COM SUPABASE
 Script modernizado para coletar dados e armazenar no Supabase
 """
 
+
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="credencial.env")
 
