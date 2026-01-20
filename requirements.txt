@@ -4,6 +4,8 @@ h2==4.1.0
 requests==2.32.3
 urllib3==2.4.0
 brotli==1.1.0
+aiohttp==3.8.5
+
 
 # Scraping
 beautifulsoup4==4.13.4
