@@ -157,11 +157,25 @@ def inserir_batch_supabase(table_name: str, dados: List[Dict],
     if not dados:
         return 0
     
+    # ✨ NOVO: Converter datetime para string antes de enviar
+    def serialize_data(obj):
+        """Converte datetime para string ISO"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {k: serialize_data(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [serialize_data(item) for item in obj]
+        return obj
+    
+    # Serializar todos os dados
+    dados_serializados = [serialize_data(item) for item in dados]
+    
     total_inserido = 0
     
     # Processar em batches
-    for i in range(0, len(dados), BATCH_SIZE):
-        batch = dados[i:i+BATCH_SIZE]
+    for i in range(0, len(dados_serializados), BATCH_SIZE):
+        batch = dados_serializados[i:i+BATCH_SIZE]
         
         try:
             if on_conflict_column:
@@ -175,7 +189,7 @@ def inserir_batch_supabase(table_name: str, dados: List[Dict],
             
             total_inserido += len(batch)
             safe_print(f"   ✅ Inseridos {len(batch)} registros em {table_name} "
-                      f"(total: {total_inserido}/{len(dados)})")
+                      f"(total: {total_inserido}/{len(dados_serializados)})")
         
         except Exception as e:
             safe_print(f"   ❌ Erro ao inserir batch em {table_name}: {e}")
@@ -195,11 +209,10 @@ def inserir_batch_supabase(table_name: str, dados: List[Dict],
                     safe_print(f"      ⚠️ Erro ao inserir item individual: {e2}")
         
         # Pequena pausa entre batches
-        if i + BATCH_SIZE < len(dados):
+        if i + BATCH_SIZE < len(dados_serializados):
             time.sleep(0.5)
     
     return total_inserido
-
 # ==================== LOGIN ÚNICO ====================
 
 def fazer_login_unico():
